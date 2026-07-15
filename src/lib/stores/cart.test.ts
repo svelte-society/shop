@@ -23,6 +23,30 @@ class MemoryStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeItem
 	}
 }
 
+class ReadFaultStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
+	readonly #values = new Map<string, string>();
+
+	constructor(initial: Record<string, string>) {
+		for (const [key, value] of Object.entries(initial)) this.#values.set(key, value);
+	}
+
+	getItem(): string | null {
+		throw new Error('STORAGE_READ_FAILED');
+	}
+
+	setItem(key: string, value: string): void {
+		this.#values.set(key, value);
+	}
+
+	removeItem(key: string): void {
+		this.#values.delete(key);
+	}
+
+	peek(key: string): string | null {
+		return this.#values.get(key) ?? null;
+	}
+}
+
 describe('createCart', () => {
 	it('hydrates schema version 1 and normalizes duplicate Price IDs', () => {
 		const storage = new MemoryStorage({
@@ -67,6 +91,20 @@ describe('createCart', () => {
 		expect(cart.lines).toEqual([]);
 		expect(cart.totalUnits).toBe(0);
 		expect(storage.getItem(CART_STORAGE_KEY)).toBeNull();
+	});
+
+	it('preserves persisted data when storage cannot be read', () => {
+		const persisted = JSON.stringify({
+			version: 1,
+			lines: [{ priceId: 'price_tee_m', quantity: 2 }]
+		});
+		const storage = new ReadFaultStorage({ [CART_STORAGE_KEY]: persisted });
+
+		const cart = createCart(storage);
+
+		expect(cart.lines).toEqual([]);
+		expect(cart.totalUnits).toBe(0);
+		expect(storage.peek(CART_STORAGE_KEY)).toBe(persisted);
 	});
 
 	it('merges repeated additions and persists only versioned cart lines', () => {

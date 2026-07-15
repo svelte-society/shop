@@ -75,10 +75,17 @@ function parsePersistedCart(value: string): CartLine[] {
 function hydrateCart(storage: CartStorage | undefined): CartLine[] {
 	if (!storage) return [];
 
-	try {
-		const persisted = storage.getItem(CART_STORAGE_KEY);
-		if (persisted === null) return [];
+	let persisted: string | null;
 
+	try {
+		persisted = storage.getItem(CART_STORAGE_KEY);
+	} catch {
+		return [];
+	}
+
+	if (persisted === null) return [];
+
+	try {
 		const lines = parsePersistedCart(persisted);
 		persistCart(storage, lines);
 		return lines;
