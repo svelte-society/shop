@@ -133,7 +133,7 @@
 
 	.eyebrow {
 		margin: 0 0 0.5rem;
-		color: var(--color-svelte-900, oklch(65.43% 0.2341 34.2));
+		color: var(--color-svelte-text, oklch(54% 0.22 34.2));
 		font-size: 0.8rem;
 		font-weight: 800;
 		letter-spacing: 0.1em;
@@ -185,7 +185,7 @@
 		border-radius: 0.65rem;
 		padding: 0.65rem 1rem;
 		background: var(--color-svelte-900, oklch(65.43% 0.2341 34.2));
-		color: white;
+		color: var(--color-ink, oklch(24% 0.025 255));
 		font-weight: 800;
 		text-decoration: none;
 	}

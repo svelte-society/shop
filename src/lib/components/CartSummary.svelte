@@ -74,7 +74,7 @@
 		border-radius: 0.65rem;
 		padding: 0.75rem 1rem;
 		background: var(--color-svelte-900, oklch(65.43% 0.2341 34.2));
-		color: white;
+		color: var(--color-ink, oklch(24% 0.025 255));
 		font: inherit;
 		font-weight: 800;
 	}

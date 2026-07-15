@@ -102,7 +102,7 @@
 	}
 
 	.category {
-		color: var(--color-svelte-900);
+		color: var(--color-svelte-text);
 		font-size: 0.7rem;
 		font-weight: 800;
 		letter-spacing: 0.1em;

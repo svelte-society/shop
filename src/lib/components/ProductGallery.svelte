@@ -4,7 +4,18 @@
 	let { name, images }: Props = $props();
 	let selectedIndex = $state(0);
 	let imageReady = $state(false);
-	let selectedImage = $derived(images[selectedIndex]);
+	let activeGalleryIdentity = $state('');
+	let galleryIdentity = $derived(`${name}:${images.join('|')}`);
+	let selectedImage = $derived(images[selectedIndex] ?? images[0]);
+
+	$effect(() => {
+		const identity = galleryIdentity;
+		if (identity === activeGalleryIdentity) return;
+
+		activeGalleryIdentity = identity;
+		selectedIndex = 0;
+		imageReady = false;
+	});
 
 	function selectImage(index: number): void {
 		selectedIndex = index;

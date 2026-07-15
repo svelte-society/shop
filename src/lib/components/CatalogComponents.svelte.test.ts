@@ -5,6 +5,7 @@ import type { PublicCatalogProduct } from '$lib/domain/catalog';
 import CatalogUnavailable from './CatalogUnavailable.svelte';
 import ProductGallery from './ProductGallery.svelte';
 import ProductGrid from './ProductGrid.svelte';
+import ProductPage from '../../routes/products/[slug]/+page.svelte';
 
 const apparel: PublicCatalogProduct = {
 	slug: 'society-tee',
@@ -73,6 +74,26 @@ describe('catalog display components', () => {
 			.toBeVisible();
 	});
 
+	it('resets the gallery to the first image when reused for another product', async () => {
+		const view = render(ProductGallery, { name: apparel.name, images: apparel.images });
+		await page.getByRole('button', { name: 'Show Society Tee image 2' }).click();
+
+		await view.rerender({
+			name: 'Society Hoodie',
+			images: [
+				'https://cdn.example.com/society-hoodie-front.jpg',
+				'https://cdn.example.com/society-hoodie-back.jpg'
+			]
+		});
+
+		await expect
+			.element(page.getByRole('img', { name: 'Society Hoodie, image 1 of 2' }))
+			.toBeVisible();
+		await expect
+			.element(page.getByRole('button', { name: 'Show Society Hoodie image 1' }))
+			.toHaveAttribute('aria-pressed', 'true');
+	});
+
 	it('uses the approved temporary-unavailable message', async () => {
 		render(CatalogUnavailable);
 
@@ -80,5 +101,17 @@ describe('catalog display components', () => {
 			.element(page.getByRole('heading', { name: 'Collection temporarily unavailable.' }))
 			.toBeVisible();
 		await expect.element(page.getByText('Your cart is safe. Try again shortly.')).toBeVisible();
+	});
+
+	it('uses a page-level heading for an unavailable product page', async () => {
+		render(ProductPage, {
+			data: { product: null, catalogUnavailable: true },
+			params: { slug: 'society-tee' },
+			form: null
+		});
+
+		await expect
+			.element(page.getByRole('heading', { level: 1, name: 'Collection temporarily unavailable.' }))
+			.toBeVisible();
 	});
 });

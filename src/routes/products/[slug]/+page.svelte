@@ -19,7 +19,7 @@
 
 <main class="product-page">
 	{#if data.catalogUnavailable || !data.product}
-		<CatalogUnavailable />
+		<CatalogUnavailable headingLevel="h1" />
 	{:else}
 		<a class="back-link" href={resolve('/#collection')}>← Back to collection</a>
 
@@ -104,7 +104,7 @@
 
 	.eyebrow {
 		margin: 0 0 0.65rem;
-		color: var(--color-svelte-900);
+		color: var(--color-svelte-text);
 		font-size: 0.75rem;
 		font-weight: 800;
 		letter-spacing: 0.1em;

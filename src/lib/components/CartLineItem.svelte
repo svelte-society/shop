@@ -102,7 +102,7 @@
 	}
 
 	.category {
-		color: var(--color-svelte-900, oklch(65.43% 0.2341 34.2));
+		color: var(--color-svelte-text, oklch(54% 0.22 34.2));
 		font-size: 0.75rem;
 		font-weight: 800;
 		letter-spacing: 0.08em;

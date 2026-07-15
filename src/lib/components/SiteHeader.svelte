@@ -104,7 +104,7 @@
 		place-items: center;
 		border-radius: 999px;
 		background: var(--color-svelte-900);
-		color: var(--color-white);
+		color: var(--color-ink);
 		font-size: 0.75rem;
 		font-variant-numeric: tabular-nums;
 	}

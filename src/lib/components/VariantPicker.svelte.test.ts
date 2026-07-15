@@ -59,4 +59,24 @@ describe('VariantPicker', () => {
 		await expect.element(page.getByRole('status')).toHaveTextContent('M selected.');
 		expect(onSelectionChange).toHaveBeenLastCalledWith('price_medium');
 	});
+
+	it('clears checked state and announcement when the variant set changes', async () => {
+		const onSelectionChange = vi.fn();
+		const view = render(VariantPicker, { category: 'apparel', variants, onSelectionChange });
+		await page.getByText('M', { exact: true }).click();
+		await expect.element(page.getByRole('status')).toHaveTextContent('M selected.');
+
+		await view.rerender({
+			category: 'apparel',
+			variants: [
+				{ ...variants[0], priceId: 'price_xs', label: 'XS' },
+				{ ...variants[1], priceId: 'price_xl', label: 'XL' }
+			],
+			onSelectionChange
+		});
+
+		await expect.element(page.getByRole('radio', { name: 'XS' })).not.toBeChecked();
+		await expect.element(page.getByRole('radio', { name: 'XL' })).not.toBeChecked();
+		await expect.element(page.getByRole('status')).toHaveTextContent('Choose a size to continue.');
+	});
 });

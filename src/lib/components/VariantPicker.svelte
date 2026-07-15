@@ -10,17 +10,20 @@
 	let { category, variants, onSelectionChange }: Props = $props();
 	let selectedPriceId = $state<string | null>(null);
 	let announcement = $state('');
-	let autoSelectedPriceId = $state<string | null>(null);
+	let activeVariantIdentity = $state('');
+	let variantIdentity = $derived(JSON.stringify([category, variants]));
 	let selectionLabel = $derived(category === 'apparel' ? 'Choose a size' : 'Choose an option');
 
 	$effect(() => {
-		const onlyVariant = category === 'accessory' && variants.length === 1 ? variants[0] : null;
-		if (category === 'apparel' && selectedPriceId === null && announcement === '') {
-			announcement = 'Choose a size to continue.';
-		}
+		const identity = variantIdentity;
+		if (identity === activeVariantIdentity) return;
 
-		if (onlyVariant && autoSelectedPriceId !== onlyVariant.priceId) {
-			autoSelectedPriceId = onlyVariant.priceId;
+		activeVariantIdentity = identity;
+		selectedPriceId = null;
+		announcement = category === 'apparel' ? 'Choose a size to continue.' : '';
+
+		const onlyVariant = category === 'accessory' && variants.length === 1 ? variants[0] : null;
+		if (onlyVariant) {
 			selectedPriceId = onlyVariant.priceId;
 			announcement = `${onlyVariant.label} selected.`;
 			onSelectionChange(onlyVariant.priceId);

@@ -14,6 +14,7 @@
 	--color-svelte-300: oklch(86.8% 0.1825 38.6);
 	--color-svelte-100: oklch(92.72% 0.0386 39.91);
 	--color-svelte-50: oklch(97.02% 0.0151 37.88);
+	--color-svelte-text: oklch(54% 0.22 34.2);
 	--color-ink: oklch(24% 0.025 255);
 	--color-paper: oklch(99% 0.004 40);
 	--color-white: oklch(100% 0 0);
@@ -23,7 +24,8 @@
 	--color-surface: var(--color-svelte-50);
 	--color-text: var(--color-ink);
 	--color-text-muted: var(--color-slate-500);
-	--focus-ring: 0 0 0 3px var(--color-svelte-300);
+	--color-focus: var(--color-ink);
+	--focus-ring: 0 0 0 3px var(--color-paper), 0 0 0 6px var(--color-focus);
 	font-family: 'Manrope', system-ui, sans-serif;
 	font-synthesis: none;
 	color: var(--color-text);

@@ -13,9 +13,23 @@
 	let selectedPriceId = $state<string | null>(null);
 	let validationMessage = $state('');
 	let cartMessage = $state('');
+	let productIdentity = $derived(
+		JSON.stringify([product.slug, product.category, product.variants])
+	);
+	let activeProductIdentity = $state('');
 	let selectedVariant = $derived(
 		product.variants.find((variant) => variant.priceId === selectedPriceId) ?? product.variants[0]
 	);
+
+	$effect.pre(() => {
+		const identity = productIdentity;
+		if (identity === activeProductIdentity) return;
+
+		activeProductIdentity = identity;
+		selectedPriceId = null;
+		validationMessage = '';
+		cartMessage = '';
+	});
 
 	function handleSelection(priceId: string): void {
 		selectedPriceId = priceId;
@@ -25,7 +39,7 @@
 
 	function addToCart(): void {
 		if (!selectedPriceId) {
-			validationMessage = 'Choose a size before adding to cart.';
+			validationMessage = `Choose ${product.category === 'apparel' ? 'a size' : 'an option'} before adding to cart.`;
 			cartMessage = '';
 			return;
 		}
@@ -33,7 +47,24 @@
 		const variant = product.variants.find((candidate) => candidate.priceId === selectedPriceId);
 		if (!variant) return;
 
-		cartController.add(variant.priceId);
+		try {
+			cartController.add(variant.priceId);
+		} catch (error) {
+			cartMessage = '';
+
+			if (error instanceof Error && error.message === 'CART_TOO_MANY_UNITS') {
+				validationMessage = 'Your cart holds up to 20 items. Remove one before adding another.';
+				return;
+			}
+
+			if (error instanceof Error && error.message === 'CART_TOO_MANY_DISTINCT_PRICES') {
+				validationMessage = 'Your cart has 10 different options. Remove one before adding another.';
+				return;
+			}
+
+			throw error;
+		}
+
 		validationMessage = '';
 		cartMessage = `${product.name}, ${variant.label} added to cart.`;
 	}
@@ -45,11 +76,13 @@
 		<p>Reference price including 25% Swedish VAT.</p>
 	</div>
 
-	<VariantPicker
-		category={product.category}
-		variants={product.variants}
-		onSelectionChange={handleSelection}
-	/>
+	{#key productIdentity}
+		<VariantPicker
+			category={product.category}
+			variants={product.variants}
+			onSelectionChange={handleSelection}
+		/>
+	{/key}
 
 	{#if product.sizeGuideUrl}
 		<a class="size-guide" href={product.sizeGuideUrl} rel="external">Size guide</a>
@@ -113,7 +146,7 @@
 		border-radius: 0.65rem;
 		padding: 0.75rem 1rem;
 		background: var(--color-svelte-900);
-		color: var(--color-white);
+		color: var(--color-ink);
 		font: inherit;
 		font-weight: 800;
 		cursor: pointer;

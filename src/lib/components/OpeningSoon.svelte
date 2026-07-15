@@ -29,7 +29,7 @@
 
 	.eyebrow {
 		margin: 0 0 0.75rem;
-		color: var(--color-svelte-900);
+		color: var(--color-svelte-text);
 		font-size: 0.78rem;
 		font-weight: 800;
 		letter-spacing: 0.12em;
@@ -59,7 +59,7 @@
 		border-radius: 0.6rem;
 		padding: 0.7rem 1rem;
 		background: var(--color-svelte-900);
-		color: var(--color-white);
+		color: var(--color-ink);
 		font-weight: 800;
 		text-decoration: none;
 		transition: transform 160ms ease;
