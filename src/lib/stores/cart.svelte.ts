@@ -131,29 +131,40 @@ export function createCart(storage: CartStorage | undefined = browserStorage()):
 }
 
 let sharedCart: CartController | undefined;
+let sharedCartVersion = $state(0);
 
 function getSharedCart(): CartController {
 	sharedCart ??= createCart();
 	return sharedCart;
 }
 
+function trackSharedCart(): void {
+	void sharedCartVersion;
+}
+
 export const cart: CartController = {
 	get lines() {
+		trackSharedCart();
 		return getSharedCart().lines;
 	},
 	get totalUnits() {
+		trackSharedCart();
 		return getSharedCart().totalUnits;
 	},
 	add(priceId, quantity) {
 		getSharedCart().add(priceId, quantity);
+		sharedCartVersion += 1;
 	},
 	setQuantity(priceId, quantity) {
 		getSharedCart().setQuantity(priceId, quantity);
+		sharedCartVersion += 1;
 	},
 	remove(priceId) {
 		getSharedCart().remove(priceId);
+		sharedCartVersion += 1;
 	},
 	clear() {
 		getSharedCart().clear();
+		sharedCartVersion += 1;
 	}
 };

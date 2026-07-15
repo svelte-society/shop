@@ -12,7 +12,7 @@
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<a class="skip-link" href="#main-content">Skip to content</a>
+<a class="skip-link" href="#main-content" tabindex="0">Skip to content</a>
 <ShippingStrip />
 <SiteHeader />
 

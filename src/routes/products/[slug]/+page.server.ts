@@ -2,9 +2,9 @@ import { env } from '$env/dynamic/private';
 import { error } from '@sveltejs/kit';
 import { parsePrivateConfig } from '$lib/config/private.server';
 import type { CatalogGateway } from '$lib/server/catalog/gateway';
+import { createCatalogGateway } from '$lib/server/catalog/runtime-gateway.server';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import { createCatalogService } from '$lib/server/catalog/service.server';
-import { createStripeCatalogGateway } from '$lib/server/catalog/stripe-catalog.server';
 import { requireStorefront } from '$lib/server/storefront/guard.server';
 import type { PageServerLoad } from './$types';
 
@@ -16,7 +16,7 @@ function isCatalogUnavailable(cause: unknown): boolean {
 
 export function _createProductPageServerLoad(
 	runtimeEnv: Record<string, string | undefined>,
-	createGateway: CatalogGatewayFactory = createStripeCatalogGateway
+	createGateway: CatalogGatewayFactory = createCatalogGateway
 ): PageServerLoad {
 	let catalogService: CatalogService | undefined;
 
