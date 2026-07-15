@@ -3,6 +3,7 @@ import { parsePrivateConfig } from '$lib/config/private.server';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import { createCatalogService } from '$lib/server/catalog/service.server';
 import { createStripeCatalogGateway } from '$lib/server/catalog/stripe-catalog.server';
+import { requireStorefront } from '$lib/server/storefront/guard.server';
 import type { PageServerLoad } from './$types';
 
 let catalogService: CatalogService | undefined;
@@ -12,6 +13,7 @@ function isCatalogUnavailable(error: unknown): boolean {
 }
 
 export const load: PageServerLoad = async () => {
+	requireStorefront(env);
 	const config = parsePrivateConfig(env);
 	catalogService ??= createCatalogService(createStripeCatalogGateway(config.stripeSecretKey));
 
