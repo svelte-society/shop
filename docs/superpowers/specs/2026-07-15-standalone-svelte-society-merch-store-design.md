@@ -1,7 +1,7 @@
 # Standalone Svelte Society Merch Store Design
 
 **Date:** 2026-07-15
-**Status:** Approved design; written review pending
+**Status:** Approved design; written review complete
 **Target:** New standalone application at `shop.sveltesociety.dev`
 
 ## Summary
@@ -122,7 +122,7 @@ These decisions apply Jakob's Law to behavior, Choice Overload to the small cata
 
 - `POST /checkout` — validate cart and create Stripe Checkout Session
 - `POST /webhooks/stripe` — receive Stripe events using the raw body
-- `GET|POST /mcp` — TMCP Streamable HTTP transport
+- `GET|POST|DELETE /mcp` — TMCP Streamable HTTP transport and session cleanup
 - `GET /health/live` — process liveness
 - `GET /health/ready` — database, migration, volume, and required-configuration readiness
 
@@ -289,7 +289,11 @@ An active merch Product must have:
 - Unique metadata `slug`
 - Integer metadata `sort_order`
 - Metadata `category=apparel` or `category=accessory`
-- Standard design reference when Styria's product number does not fully identify the print
+- Metadata `materials`
+- Metadata `care`
+- Metadata `fit` for apparel
+- Immutable metadata `design_reference`
+- At least one immutable HTTPS design placement using `design_url_<position>`, such as `design_url_front`
 - Optional `size_guide_url`
 
 ### Price requirements
@@ -375,7 +379,7 @@ Migrations are committed SQL files applied transactionally at startup.
 - Stripe Product ID and Price ID
 - Product name and variant label
 - SKU and Styria product number
-- Design reference or hash
+- Design reference and canonical design-placement JSON
 - Quantity, unit amount, and currency
 
 ### `orders`
