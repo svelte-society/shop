@@ -220,36 +220,44 @@ function sortDiagnostics(diagnostics: CatalogDiagnostic[]): CatalogDiagnostic[] 
 	);
 }
 
+function duplicateSlugClaimants(sources: readonly Stripe.Product[]): Set<string> {
+	const claimsBySlug = new Map<string, string[]>();
+
+	for (const source of sources) {
+		if (source.metadata.product_type !== 'merch' || !source.active) continue;
+		const slug = nonEmpty(source.metadata.slug);
+		if (!slug || !SLUG_PATTERN.test(slug)) continue;
+		const claimants = claimsBySlug.get(slug) ?? [];
+		claimants.push(source.id);
+		claimsBySlug.set(slug, claimants);
+	}
+
+	return new Set(
+		Array.from(claimsBySlug.values())
+			.filter((claimants) => claimants.length > 1)
+			.flat()
+	);
+}
+
 export async function parseStripeCatalog(
 	sources: readonly Stripe.Product[],
 	loadPrices: (productId: string) => Promise<readonly Stripe.Price[]>,
 	loadedAt: Date
 ): Promise<CatalogSnapshot> {
 	const diagnostics: CatalogDiagnostic[] = [];
-	const parsedProducts = sources
-		.map(parseProduct)
-		.filter((result): result is ProductResult => result !== null);
+	const duplicateProviderIds = duplicateSlugClaimants(sources);
+	const uniqueProducts: ParsedProduct[] = [];
 
-	for (const result of parsedProducts) diagnostics.push(...result.diagnostics);
-
-	const candidates = parsedProducts
-		.map((result) => result.product)
-		.filter((product): product is ParsedProduct => product !== null);
-	const productsBySlug = new Map<string, ParsedProduct[]>();
-
-	for (const product of candidates) {
-		const matchingProducts = productsBySlug.get(product.slug) ?? [];
-		matchingProducts.push(product);
-		productsBySlug.set(product.slug, matchingProducts);
+	for (const source of sources) {
+		const result = parseProduct(source);
+		if (!result) continue;
+		diagnostics.push(...result.diagnostics);
+		if (duplicateProviderIds.has(source.id)) {
+			diagnostics.push(diagnostic(source.id, 'PRODUCT_SLUG_DUPLICATE'));
+			continue;
+		}
+		if (result.product) uniqueProducts.push(result.product);
 	}
-
-	const uniqueProducts = candidates.filter((product) => {
-		const duplicates = productsBySlug.get(product.slug) ?? [];
-		if (duplicates.length === 1) return true;
-
-		diagnostics.push(diagnostic(product.providerId, 'PRODUCT_SLUG_DUPLICATE'));
-		return false;
-	});
 
 	const products = (
 		await Promise.all(

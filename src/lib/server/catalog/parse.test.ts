@@ -144,6 +144,23 @@ describe('parseStripeCatalog', () => {
 		);
 	});
 
+	it('counts a valid slug claimed by a malformed active merch Product as a duplicate', async () => {
+		const malformedDuplicate = stripeAccessoryProduct({
+			id: 'prod_malformed_duplicate',
+			images: [],
+			metadata: { slug: 'community-tee' }
+		});
+
+		const snapshot = await parse([stripeProduct(), malformedDuplicate], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toEqual([
+			{ providerId: 'prod_apparel', code: 'PRODUCT_SLUG_DUPLICATE' },
+			{ providerId: 'prod_malformed_duplicate', code: 'PRODUCT_IMAGE_INVALID' },
+			{ providerId: 'prod_malformed_duplicate', code: 'PRODUCT_SLUG_DUPLICATE' }
+		]);
+	});
+
 	it.each([
 		['non-EUR currency', stripePrice({ currency: 'usd' }), 'PRICE_CURRENCY_INVALID'],
 		['inclusive tax behavior', stripePrice({ tax_behavior: 'inclusive' }), 'PRICE_TAX_INVALID']

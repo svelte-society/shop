@@ -14,6 +14,22 @@ import { parseStripeCatalog } from './parse';
 import { createCatalogService } from './service.server';
 import { createStripeCatalogGateway, type StripeCatalogClient } from './stripe-catalog.server';
 
+type Deferred<T> = {
+	promise: Promise<T>;
+	resolve(value: T): void;
+	reject(reason: unknown): void;
+};
+
+function deferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((promiseResolve, promiseReject) => {
+		resolve = promiseResolve;
+		reject = promiseReject;
+	});
+	return { promise, resolve, reject };
+}
+
 function page<T extends { id: string }>(
 	items: readonly T[],
 	startingAfter: string | undefined,
@@ -79,7 +95,11 @@ async function validSnapshot(loadedAt: Date, name = 'Society Mug'): Promise<Cata
 describe('createStripeCatalogGateway', () => {
 	it('paginates active Products and every active Price while parsing only accepted merch', async () => {
 		const apparel = stripeProduct();
-		const invalid = stripeProduct({ id: 'prod_invalid', images: [] });
+		const invalid = stripeProduct({
+			id: 'prod_invalid',
+			images: [],
+			metadata: { slug: 'invalid-product' }
+		});
 		const nonMerch = stripeProduct({
 			id: 'prod_non_merch',
 			metadata: { product_type: 'donation', slug: 'support' }
@@ -258,11 +278,167 @@ describe('createCatalogCache', () => {
 		expect(second.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(second.products[0].name).toBe('Society Mug');
 	});
+
+	it('shares one provider refresh across concurrent reads of an expired snapshot', async () => {
+		let now = new Date(STRIPE_CATALOG_LOADED_AT);
+		let loads = 0;
+		const refresh = deferred<CatalogSnapshot>();
+		const initial = await validSnapshot(now, 'Initial Mug');
+		const cache = createCatalogCache(
+			async () => {
+				loads += 1;
+				return loads === 1 ? initial : refresh.promise;
+			},
+			{ clock: () => new Date(now) }
+		);
+
+		await cache.get();
+		now = new Date(STRIPE_CATALOG_LOADED_AT.getTime() + 60_000);
+		const first = cache.get();
+		const second = cache.get();
+		refresh.resolve(await validSnapshot(now, 'Refreshed Mug'));
+		const results = await Promise.all([first, second]);
+
+		expect(results.map((snapshot) => snapshot.products[0].name)).toEqual([
+			'Refreshed Mug',
+			'Refreshed Mug'
+		]);
+		expect(results.map((snapshot) => snapshot.stale)).toEqual([false, false]);
+		expect(loads).toBe(2);
+	});
+
+	it('admits only one authoritative refresh so a late completion cannot overwrite cache state', async () => {
+		let now = new Date(STRIPE_CATALOG_LOADED_AT);
+		let loads = 0;
+		const olderRefresh = deferred<CatalogSnapshot>();
+		const overlappingNewerRefresh = deferred<CatalogSnapshot>();
+		const initial = await validSnapshot(now, 'Initial Mug');
+		const cache = createCatalogCache(
+			async () => {
+				loads += 1;
+				if (loads === 1) return initial;
+				return loads === 2 ? olderRefresh.promise : overlappingNewerRefresh.promise;
+			},
+			{ clock: () => new Date(now) }
+		);
+
+		await cache.get();
+		now = new Date(STRIPE_CATALOG_LOADED_AT.getTime() + 60_000);
+		const first = cache.get();
+		const second = cache.get();
+		overlappingNewerRefresh.resolve(await validSnapshot(now, 'Newer completion'));
+		await Promise.resolve();
+		await Promise.resolve();
+		olderRefresh.resolve(await validSnapshot(now, 'Authoritative completion'));
+		const results = await Promise.all([first, second]);
+		const retained = await cache.get();
+
+		expect(results.map((snapshot) => snapshot.products[0].name)).toEqual([
+			'Authoritative completion',
+			'Authoritative completion'
+		]);
+		expect(retained.products[0].name).toBe('Authoritative completion');
+		expect(loads).toBe(2);
+	});
+
+	it('re-evaluates stale age when an in-flight refresh fails after the 15-minute cutoff', async () => {
+		let now = new Date(STRIPE_CATALOG_LOADED_AT);
+		let loads = 0;
+		const refresh = deferred<CatalogSnapshot>();
+		const initial = await validSnapshot(now);
+		const cache = createCatalogCache(
+			async () => {
+				loads += 1;
+				return loads === 1 ? initial : refresh.promise;
+			},
+			{ clock: () => new Date(now) }
+		);
+
+		await cache.get();
+		now = new Date(STRIPE_CATALOG_LOADED_AT.getTime() + 60_000);
+		const pending = cache.get();
+		const unavailable = expect(pending).rejects.toThrowError('CATALOG_UNAVAILABLE');
+		now = new Date(STRIPE_CATALOG_LOADED_AT.getTime() + 15 * 60_000 + 1);
+		refresh.reject(new Error('STRIPE_UNAVAILABLE'));
+
+		await unavailable;
+		expect(loads).toBe(2);
+	});
+
+	it('does not mislabel a successful concurrent refresh as stale when another read would fail', async () => {
+		let now = new Date(STRIPE_CATALOG_LOADED_AT);
+		let loads = 0;
+		const success = deferred<CatalogSnapshot>();
+		const overlappingFailure = deferred<CatalogSnapshot>();
+		const initial = await validSnapshot(now, 'Initial Mug');
+		const cache = createCatalogCache(
+			async () => {
+				loads += 1;
+				if (loads === 1) return initial;
+				return loads === 2 ? success.promise : overlappingFailure.promise;
+			},
+			{ clock: () => new Date(now) }
+		);
+
+		await cache.get();
+		now = new Date(STRIPE_CATALOG_LOADED_AT.getTime() + 60_000);
+		const first = cache.get();
+		const second = cache.get();
+		const resultsPromise = Promise.all([first, second]);
+		success.resolve(await validSnapshot(now, 'Successful refresh'));
+		await Promise.resolve();
+		await Promise.resolve();
+		if (loads > 2) overlappingFailure.reject(new Error('STRIPE_UNAVAILABLE'));
+		const results = await resultsPromise;
+
+		expect(results.map((snapshot) => snapshot.products[0].name)).toEqual([
+			'Successful refresh',
+			'Successful refresh'
+		]);
+		expect(results.map((snapshot) => snapshot.stale)).toEqual([false, false]);
+		expect(loads).toBe(2);
+	});
+
+	it('clears a settled failed refresh so a later read can retry', async () => {
+		let loads = 0;
+		let failing = true;
+		const failure = deferred<CatalogSnapshot>();
+		const cache = createCatalogCache(
+			async () => {
+				loads += 1;
+				return failing ? failure.promise : validSnapshot(STRIPE_CATALOG_LOADED_AT, 'Recovered Mug');
+			},
+			{ clock: () => new Date(STRIPE_CATALOG_LOADED_AT) }
+		);
+
+		const first = cache.get();
+		const second = cache.get();
+		failure.reject(new Error('STRIPE_UNAVAILABLE'));
+		const failed = await Promise.allSettled([first, second]);
+		failing = false;
+		const recovered = await cache.get();
+
+		expect(failed.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+		expect(
+			failed.map((result) =>
+				result.status === 'rejected' && result.reason instanceof Error
+					? result.reason.message
+					: null
+			)
+		).toEqual(['CATALOG_UNAVAILABLE', 'CATALOG_UNAVAILABLE']);
+		expect(recovered.products[0].name).toBe('Recovered Mug');
+		expect(recovered.stale).toBe(false);
+		expect(loads).toBe(2);
+	});
 });
 
 describe('createCatalogService', () => {
 	it('returns a public projection without fulfillment or design secrets', async () => {
-		const invalid = stripeProduct({ id: 'prod_invalid', images: [] });
+		const invalid = stripeProduct({
+			id: 'prod_invalid',
+			images: [],
+			metadata: { slug: 'invalid-product' }
+		});
 		const { client } = providerClient([invalid, stripeProduct()], [stripePrice()]);
 		const gateway = createStripeCatalogGateway('sk_test_catalog', {
 			client,
