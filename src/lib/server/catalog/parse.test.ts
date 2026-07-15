@@ -1,0 +1,274 @@
+import { describe, expect, it } from 'vitest';
+import type Stripe from 'stripe';
+import {
+	STRIPE_CATALOG_LOADED_AT,
+	stripeAccessoryPrice,
+	stripeAccessoryProduct,
+	stripePrice,
+	stripeProduct
+} from '../../../../tests/fixtures/stripe-catalog';
+import { parseStripeCatalog } from './parse';
+
+function productIdFor(price: Stripe.Price): string {
+	return typeof price.product === 'string' ? price.product : price.product.id;
+}
+
+async function parse(products: readonly Stripe.Product[], prices: readonly Stripe.Price[]) {
+	return parseStripeCatalog(
+		products,
+		async (productId) => prices.filter((price) => productIdFor(price) === productId),
+		STRIPE_CATALOG_LOADED_AT
+	);
+}
+
+function withoutMetadata(product: Stripe.Product, key: string): Stripe.Product {
+	const metadata = { ...product.metadata };
+	delete metadata[key];
+	return { ...product, metadata };
+}
+
+describe('parseStripeCatalog', () => {
+	it('parses valid apparel and derives the Swedish reference gross price', async () => {
+		const product = stripeProduct({
+			metadata: {
+				design_url_back: 'https://cdn.example.com/designs/community-back.svg',
+				design_url_front: 'https://cdn.example.com/designs/community-front.svg'
+			}
+		});
+		const small = stripePrice({
+			id: 'price_apparel_small',
+			metadata: { label: 'S', sort_order: '10', sku: 'SS-TEE-S', styria_pn: 'STYRIA-TEE-S' }
+		});
+
+		const snapshot = await parse([product], [stripePrice(), small]);
+
+		expect(snapshot.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
+		expect(snapshot.stale).toBe(false);
+		expect(snapshot.diagnostics).toEqual([]);
+		expect(snapshot.products).toHaveLength(1);
+		expect(snapshot.products[0]).toMatchObject({
+			providerId: 'prod_apparel',
+			slug: 'community-tee',
+			name: 'Community Tee',
+			category: 'apparel',
+			materials: '100% organic cotton',
+			care: 'Wash at 30°C',
+			fit: 'Regular fit',
+			designReference: 'society-community-v1',
+			designPlacements: {
+				back: 'https://cdn.example.com/designs/community-back.svg',
+				front: 'https://cdn.example.com/designs/community-front.svg'
+			}
+		});
+		expect(snapshot.products[0].variants).toEqual([
+			{
+				priceId: 'price_apparel_small',
+				productId: 'prod_apparel',
+				label: 'S',
+				sortOrder: 10,
+				currency: 'eur',
+				unitAmountCents: 2_000,
+				referenceGrossCents: 2_500,
+				sku: 'SS-TEE-S',
+				styriaProductNumber: 'STYRIA-TEE-S'
+			},
+			{
+				priceId: 'price_apparel_medium',
+				productId: 'prod_apparel',
+				label: 'M',
+				sortOrder: 20,
+				currency: 'eur',
+				unitAmountCents: 2_000,
+				referenceGrossCents: 2_500,
+				sku: 'SS-TEE-M',
+				styriaProductNumber: 'STYRIA-TEE-M'
+			}
+		]);
+		expect(Object.keys(snapshot.products[0].designPlacements)).toEqual(['back', 'front']);
+	});
+
+	it('parses a valid single-variant accessory without apparel fit', async () => {
+		const snapshot = await parse([stripeAccessoryProduct()], [stripeAccessoryPrice()]);
+
+		expect(snapshot.diagnostics).toEqual([]);
+		expect(snapshot.products).toHaveLength(1);
+		expect(snapshot.products[0]).toMatchObject({
+			providerId: 'prod_accessory',
+			slug: 'society-mug',
+			category: 'accessory',
+			fit: null,
+			sizeGuideUrl: null
+		});
+		expect(snapshot.products[0].variants).toHaveLength(1);
+	});
+
+	it('excludes a merch Product without an HTTPS image', async () => {
+		const snapshot = await parse(
+			[stripeProduct({ images: ['http://cdn.example.com/community-tee.png'] })],
+			[stripePrice()]
+		);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({
+			providerId: 'prod_apparel',
+			code: 'PRODUCT_IMAGE_INVALID'
+		});
+	});
+
+	it('excludes a Product with a missing slug', async () => {
+		const snapshot = await parse([withoutMetadata(stripeProduct(), 'slug')], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({
+			providerId: 'prod_apparel',
+			code: 'PRODUCT_SLUG_INVALID'
+		});
+	});
+
+	it('excludes every Product sharing a duplicate slug', async () => {
+		const duplicate = stripeAccessoryProduct({
+			metadata: { slug: 'community-tee' }
+		});
+
+		const snapshot = await parse(
+			[stripeProduct(), duplicate],
+			[stripePrice(), stripeAccessoryPrice()]
+		);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toEqual(
+			expect.arrayContaining([
+				{ providerId: 'prod_apparel', code: 'PRODUCT_SLUG_DUPLICATE' },
+				{ providerId: 'prod_accessory', code: 'PRODUCT_SLUG_DUPLICATE' }
+			])
+		);
+	});
+
+	it.each([
+		['non-EUR currency', stripePrice({ currency: 'usd' }), 'PRICE_CURRENCY_INVALID'],
+		['inclusive tax behavior', stripePrice({ tax_behavior: 'inclusive' }), 'PRICE_TAX_INVALID']
+	])('excludes a Price with %s', async (_name, price, code) => {
+		const snapshot = await parse([stripeProduct()], [price]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({ providerId: price.id, code });
+	});
+
+	it.each([
+		['sku', 'PRICE_SKU_INVALID'],
+		['styria_pn', 'PRICE_STYRIA_PN_INVALID']
+	])('excludes a Price without %s', async (metadataKey, code) => {
+		const price = stripePrice({ metadata: { [metadataKey]: '' } });
+		const snapshot = await parse([stripeProduct()], [price]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({ providerId: price.id, code });
+	});
+
+	it.each([
+		['materials', 'PRODUCT_MATERIALS_INVALID'],
+		['care', 'PRODUCT_CARE_INVALID'],
+		['fit', 'PRODUCT_FIT_INVALID']
+	])('excludes apparel without %s', async (metadataKey, code) => {
+		const product = withoutMetadata(stripeProduct(), metadataKey);
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({ providerId: product.id, code });
+	});
+
+	it('does not require fit for an accessory', async () => {
+		const product = withoutMetadata(stripeAccessoryProduct(), 'fit');
+		const snapshot = await parse([product], [stripeAccessoryPrice()]);
+
+		expect(snapshot.products).toHaveLength(1);
+		expect(snapshot.diagnostics).toEqual([]);
+	});
+
+	it.each([
+		['design reference', 'design_reference', 'PRODUCT_DESIGN_REFERENCE_INVALID'],
+		['design placement', 'design_url_front', 'PRODUCT_DESIGN_PLACEMENT_MISSING']
+	])('excludes a Product without %s', async (_name, metadataKey, code) => {
+		const product = withoutMetadata(stripeProduct(), metadataKey);
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({ providerId: product.id, code });
+	});
+
+	it('excludes a Product with a non-HTTPS design placement URL', async () => {
+		const product = stripeProduct({
+			metadata: { design_url_front: 'http://cdn.example.com/designs/community-front.svg' }
+		});
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({
+			providerId: product.id,
+			code: 'PRODUCT_DESIGN_PLACEMENT_INVALID'
+		});
+	});
+
+	it('excludes inactive Products and Prices even if the provider returns them', async () => {
+		const inactiveProduct = stripeProduct({ id: 'prod_inactive', active: false });
+		const inactivePrice = stripePrice({ id: 'price_inactive', active: false });
+		const snapshot = await parse([inactiveProduct, stripeProduct()], [inactivePrice]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toEqual(
+			expect.arrayContaining([
+				{ providerId: 'prod_inactive', code: 'PRODUCT_INACTIVE' },
+				{ providerId: 'price_inactive', code: 'PRICE_INACTIVE' }
+			])
+		);
+	});
+
+	it('sorts Products and Prices deterministically when configured orders tie', async () => {
+		const beta = stripeProduct({
+			id: 'prod_beta',
+			name: 'Beta Tee',
+			metadata: { slug: 'beta-tee', sort_order: '10' }
+		});
+		const alpha = stripeProduct({
+			id: 'prod_alpha',
+			name: 'Alpha Tee',
+			metadata: { slug: 'alpha-tee', sort_order: '10' }
+		});
+		const accessory = stripeAccessoryProduct({ metadata: { sort_order: '5' } });
+		const betaLarge = stripePrice({
+			id: 'price_beta_large',
+			product: 'prod_beta',
+			metadata: { label: 'L', sort_order: '10', sku: 'B-L', styria_pn: 'BETA-L' }
+		});
+		const betaSmall = stripePrice({
+			id: 'price_beta_small',
+			product: 'prod_beta',
+			metadata: { label: 'S', sort_order: '10', sku: 'B-S', styria_pn: 'BETA-S' }
+		});
+		const alphaPrice = stripePrice({ id: 'price_alpha', product: 'prod_alpha' });
+
+		const snapshot = await parse(
+			[beta, accessory, alpha],
+			[betaSmall, stripeAccessoryPrice(), alphaPrice, betaLarge]
+		);
+
+		expect(snapshot.products.map((product) => product.slug)).toEqual([
+			'society-mug',
+			'alpha-tee',
+			'beta-tee'
+		]);
+		expect(snapshot.products[2].variants.map((variant) => variant.label)).toEqual(['L', 'S']);
+	});
+
+	it('keeps Product descriptions out of operator diagnostics', async () => {
+		const sensitiveDescription = 'Never include this Product description in diagnostics';
+		const product = stripeProduct({ description: sensitiveDescription, images: [] });
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.diagnostics).toEqual([
+			{ providerId: 'prod_apparel', code: 'PRODUCT_IMAGE_INVALID' }
+		]);
+		expect(JSON.stringify(snapshot.diagnostics)).not.toContain(sensitiveDescription);
+		expect(Object.keys(snapshot.diagnostics[0]).sort()).toEqual(['code', 'providerId']);
+	});
+});
