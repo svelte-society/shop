@@ -28,6 +28,18 @@ describe('formatEur', () => {
 		expect(formatEur(9_000_000_000_000_001, 'en-IE')).toBe('€90,000,000,000,000.01');
 	});
 
+	it('localizes fractional digits for a non-Latin numbering system', () => {
+		const expected = new Intl.NumberFormat('ar-EG', {
+			style: 'currency',
+			currency: 'EUR',
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2
+		}).format(12.34);
+
+		expect(expected).toContain('٣٤');
+		expect(formatEur(1_234, 'ar-EG')).toBe(expected);
+	});
+
 	it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid integer cents %s', (cents) => {
 		expect(() => formatEur(cents, 'en-IE')).toThrowError('INVALID_CENTS');
 	});

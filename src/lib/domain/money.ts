@@ -11,7 +11,11 @@ export function formatEur(cents: number, locale?: string): string {
 	if (!Number.isSafeInteger(cents) || cents < 0) throw new Error('INVALID_CENTS');
 
 	const centsValue = BigInt(cents);
-	const fractionalCents = (centsValue % 100n).toString().padStart(2, '0');
+	const fractionalCents = new Intl.NumberFormat(locale, {
+		useGrouping: false,
+		minimumIntegerDigits: 2,
+		maximumFractionDigits: 0
+	}).format(Number(centsValue % 100n));
 	const formatter = new Intl.NumberFormat(locale, {
 		style: 'currency',
 		currency: 'EUR',
