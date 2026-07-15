@@ -46,6 +46,12 @@ describe('parseCart', () => {
 			'CART_TOO_MANY_UNITS'
 		);
 	});
+
+	it('accepts exactly 20 total units', () => {
+		expect(parseCart([{ priceId: 'price_tee_m', quantity: 20 }])).toEqual([
+			{ priceId: 'price_tee_m', quantity: 20 }
+		]);
+	});
 });
 
 describe('cart totals and shipping', () => {
