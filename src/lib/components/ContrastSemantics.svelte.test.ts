@@ -6,6 +6,7 @@ import type { PublicCatalogProduct } from '$lib/domain/catalog';
 import { createCart } from '$lib/stores/cart.svelte';
 import ProductCard from './ProductCard.svelte';
 import ProductPurchase from './ProductPurchase.svelte';
+import VariantPicker from './VariantPicker.svelte';
 
 const product: PublicCatalogProduct = {
 	slug: 'society-mug',
@@ -97,5 +98,24 @@ describe('storefront contrast semantics', () => {
 		expect(focusRing.split(',')).toHaveLength(2);
 		expect(focusRing).toContain('3px');
 		expect(focusRing).toContain('6px');
+	});
+
+	it('keeps unselected variant boundaries at 3:1 against white and paper', () => {
+		render(VariantPicker, {
+			category: 'apparel',
+			variants: product.variants,
+			onSelectionChange: () => undefined
+		});
+
+		const rootStyle = getComputedStyle(document.documentElement);
+		const controlBorder = rootStyle.getPropertyValue('--color-control-border').trim();
+		const white = rootStyle.getPropertyValue('--color-white').trim();
+		const paper = rootStyle.getPropertyValue('--color-paper').trim();
+		const optionStyle = getComputedStyle(page.getByText('One size', { exact: true }).element());
+
+		expect(contrast(optionStyle.borderTopColor, white)).toBeGreaterThanOrEqual(3);
+		expect(contrast(optionStyle.borderTopColor, paper)).toBeGreaterThanOrEqual(3);
+		expect(controlBorder).not.toBe('');
+		expect(rgb(optionStyle.borderTopColor)).toEqual(rgb(controlBorder));
 	});
 });

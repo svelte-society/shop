@@ -74,6 +74,28 @@ describe('catalog display components', () => {
 			.toBeVisible();
 	});
 
+	it('renders and selects duplicate image URLs by their position', async () => {
+		const duplicateUrl = 'https://cdn.example.com/society-tee-detail.jpg';
+		render(ProductGallery, {
+			name: apparel.name,
+			images: [duplicateUrl, duplicateUrl]
+		});
+
+		await expect
+			.element(page.getByRole('img', { name: 'Society Tee, image 1 of 2' }))
+			.toBeVisible();
+		await page.getByRole('button', { name: 'Show Society Tee image 2' }).click();
+		await expect
+			.element(page.getByRole('img', { name: 'Society Tee, image 2 of 2' }))
+			.toBeVisible();
+		await expect
+			.element(page.getByRole('button', { name: 'Show Society Tee image 1' }))
+			.toHaveAttribute('aria-pressed', 'false');
+		await expect
+			.element(page.getByRole('button', { name: 'Show Society Tee image 2' }))
+			.toHaveAttribute('aria-pressed', 'true');
+	});
+
 	it('resets the gallery to the first image when reused for another product', async () => {
 		const view = render(ProductGallery, { name: apparel.name, images: apparel.images });
 		await page.getByRole('button', { name: 'Show Society Tee image 2' }).click();

@@ -21,6 +21,7 @@
 	--color-slate-700: oklch(36% 0.028 255);
 	--color-slate-500: oklch(51% 0.024 255);
 	--color-border: oklch(88% 0.018 255);
+	--color-control-border: var(--color-slate-500);
 	--color-surface: var(--color-svelte-50);
 	--color-text: var(--color-ink);
 	--color-text-muted: var(--color-slate-500);

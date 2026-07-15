@@ -36,7 +36,7 @@
 
 	{#if images.length > 1}
 		<div class="thumbnails" aria-label={`${name} gallery`}>
-			{#each images as image, index (image)}
+			{#each images as image, index (index)}
 				<button
 					type="button"
 					aria-label={`Show ${name} image ${index + 1}`}

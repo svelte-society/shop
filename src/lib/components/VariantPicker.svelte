@@ -109,7 +109,7 @@
 		width: 100%;
 		min-height: 2.75rem;
 		place-items: center;
-		border: 1px solid var(--color-border);
+		border: 1px solid var(--color-control-border);
 		border-radius: 0.55rem;
 		padding-inline: 0.85rem;
 		background: var(--color-white);
