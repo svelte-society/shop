@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { RouteId } from '$app/types';
 </script>
 
 <footer>
@@ -11,11 +10,11 @@
 		</div>
 
 		<nav aria-label="Policies">
-			<a href={resolve('/shipping' as RouteId)}>Shipping</a>
-			<a href={resolve('/returns' as RouteId)}>Returns</a>
-			<a href={resolve('/privacy' as RouteId)}>Privacy</a>
-			<a href={resolve('/terms' as RouteId)}>Terms</a>
-			<a href={resolve('/about' as RouteId)}>About</a>
+			<a href={resolve('/shipping' as '/')}>Shipping</a>
+			<a href={resolve('/returns' as '/')}>Returns</a>
+			<a href={resolve('/privacy' as '/')}>Privacy</a>
+			<a href={resolve('/terms' as '/')}>Terms</a>
+			<a href={resolve('/about' as '/')}>About</a>
 		</nav>
 
 		<a class="support-link" href="mailto:merch@sveltesociety.dev">merch@sveltesociety.dev</a>
