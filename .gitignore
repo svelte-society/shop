@@ -24,5 +24,10 @@ vite.config.ts.timestamp-*
 # Playwright
 test-results
 
+# SQLite
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
 # Worktrees
 .worktrees/
