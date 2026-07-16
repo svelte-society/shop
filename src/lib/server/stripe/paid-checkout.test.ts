@@ -157,7 +157,14 @@ describe('Stripe paid Checkout normalization', () => {
 			{
 				id: 'cs_test_paid',
 				params: {
-					expand: ['customer', 'customer.tax_ids', 'payment_intent', 'payment_intent.latest_charge']
+					expand: [
+						'customer',
+						'customer.tax_ids',
+						'payment_intent',
+						'payment_intent.latest_charge',
+						'shipping_cost.shipping_rate',
+						'shipping_cost.taxes'
+					]
 				}
 			}
 		]);
@@ -179,6 +186,21 @@ describe('Stripe paid Checkout normalization', () => {
 		).resolves.toMatchObject({
 			destinationCountry: 'US',
 			amounts: { subtotal: 2_000, shipping: 1_000, tax: 0, total: 3_000 }
+		});
+	});
+
+	it('accepts an omitted shipping-tax breakdown when the US shipping tax is zero', async () => {
+		const fixture = paidCheckoutProviderFixture({ country: 'US' });
+		if (!fixture.session.shipping_cost) throw new Error();
+		delete fixture.session.shipping_cost.taxes;
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			destinationCountry: 'US',
+			amounts: { shipping: 1_000, tax: 0, total: 3_000 }
 		});
 	});
 
@@ -584,11 +606,8 @@ describe('Stripe paid Checkout normalization', () => {
 		);
 	});
 
-	it('normalizes the charged shipping total when shipping tax is itemized separately', async () => {
+	it('normalizes inclusive shipping tax inside the charged EUR 10 gross', async () => {
 		const fixture = paidCheckoutProviderFixture();
-		if (!fixture.session.shipping_cost || !fixture.session.total_details) throw new Error();
-		fixture.session.shipping_cost.amount_subtotal = 800;
-		fixture.session.total_details.amount_shipping = 800;
 
 		await expect(
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
@@ -599,19 +618,74 @@ describe('Stripe paid Checkout normalization', () => {
 		});
 	});
 
-	it('rejects a reconciled shipping total that omits part of its shipping tax', async () => {
+	it.each([
+		[
+			'missing expanded ShippingRate',
+			(fixture: PaidCheckoutProviderFixture) => {
+				if (!fixture.session.shipping_cost) throw new Error();
+				fixture.session.shipping_cost.shipping_rate = null;
+			}
+		],
+		[
+			'unexpanded ShippingRate',
+			(fixture: PaidCheckoutProviderFixture) => {
+				if (!fixture.session.shipping_cost) throw new Error();
+				fixture.session.shipping_cost.shipping_rate = 'shr_paid_10_eur';
+			}
+		],
+		[
+			'exclusive ShippingRate',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const rate = fixture.session.shipping_cost?.shipping_rate;
+				if (!rate || typeof rate === 'string') throw new Error();
+				rate.tax_behavior = 'exclusive';
+			}
+		],
+		[
+			'missing shipping tax breakdown',
+			(fixture: PaidCheckoutProviderFixture) => {
+				if (!fixture.session.shipping_cost) throw new Error();
+				delete fixture.session.shipping_cost.taxes;
+			}
+		],
+		[
+			'exclusive shipping tax rate',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const tax = fixture.session.shipping_cost?.taxes?.[0];
+				if (!tax) throw new Error();
+				tax.rate.inclusive = false;
+			}
+		],
+		[
+			'mixed inclusive and exclusive shipping tax rates',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const taxes = fixture.session.shipping_cost?.taxes;
+				if (!taxes?.[0]) throw new Error();
+				taxes[0].amount = 100;
+				taxes.push({
+					...structuredClone(taxes[0]),
+					amount: 100,
+					rate: { ...taxes[0].rate, id: 'txr_shipping_exclusive', inclusive: false }
+				});
+			}
+		],
+		[
+			'shipping tax breakdown sum mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const tax = fixture.session.shipping_cost?.taxes?.[0];
+				if (!tax) throw new Error();
+				tax.amount -= 1;
+			}
+		]
+	])('rejects %s for tax-inclusive paid shipping', async (_label, mutate) => {
 		const fixture = paidCheckoutProviderFixture();
-		if (!fixture.session.shipping_cost || !fixture.session.total_details) throw new Error();
-		fixture.session.shipping_cost.amount_subtotal = 800;
-		fixture.session.shipping_cost.amount_total = 999;
-		fixture.session.total_details.amount_shipping = 999;
-		reconcilePaidCheckoutProviderTotals(fixture);
+		mutate(fixture);
 
 		await expectStableCode(
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
 			),
-			'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
+			'STRIPE_PAID_CHECKOUT_TAX_INVALID'
 		);
 	});
 
@@ -819,6 +893,12 @@ describe('Stripe paid Checkout normalization', () => {
 });
 
 describe('paid Checkout comparison', () => {
+	it('accepts an end-to-end normalized EU checkout with tax-inclusive paid shipping', async () => {
+		const { snapshot } = await normalizedSnapshot();
+
+		expect(() => comparePaidCheckout(checkoutDraft(), snapshot)).not.toThrow();
+	});
+
 	it('accepts reordered exact lines and a destination-specific final tax', async () => {
 		const fixture = paidCheckoutProviderFixture({
 			shippingAmount: 0,
@@ -1004,9 +1084,30 @@ describe('paid Checkout comparison', () => {
 		);
 	});
 
-	it('rejects a normalized total that does not close over subtotal, shipping, and tax', async () => {
+	it('accepts a one-cent tax redistribution that the public snapshot cannot disambiguate', async () => {
 		const { snapshot } = await normalizedSnapshot();
 		snapshot.amounts.total += 1;
+
+		expect(() => comparePaidCheckout(checkoutDraft(), snapshot)).not.toThrow();
+	});
+
+	it.each([
+		[
+			'a total below merchandise subtotal plus gross shipping',
+			(snapshot: PaidCheckoutSnapshot) => {
+				snapshot.amounts.total = snapshot.amounts.subtotal + snapshot.amounts.shipping - 1;
+			}
+		],
+		[
+			'a merchandise-tax remainder greater than total tax',
+			(snapshot: PaidCheckoutSnapshot) => {
+				snapshot.amounts.total =
+					snapshot.amounts.subtotal + snapshot.amounts.shipping + snapshot.amounts.tax + 1;
+			}
+		]
+	])('rejects %s', async (_label, mutate) => {
+		const { snapshot } = await normalizedSnapshot();
+		mutate(snapshot);
 
 		expectComparisonCode(
 			() => comparePaidCheckout(checkoutDraft(), snapshot),

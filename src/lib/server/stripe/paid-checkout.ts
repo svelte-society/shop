@@ -13,6 +13,8 @@ const CUSTOMER_ID_PATTERN = /^cus_[A-Za-z0-9_]+$/;
 const CHARGE_ID_PATTERN = /^ch_[A-Za-z0-9_]+$/;
 const LINE_ITEM_ID_PATTERN = /^li_[A-Za-z0-9_]+$/;
 const PRICE_ID_PATTERN = /^price_[A-Za-z0-9_]+$/;
+const SHIPPING_RATE_ID_PATTERN = /^shr_[A-Za-z0-9_]+$/;
+const TAX_RATE_ID_PATTERN = /^txr_[A-Za-z0-9_]+$/;
 const PAID_SHIPPING_AMOUNT = 1_000;
 const LINE_PAGE_LIMIT = 100;
 const MAX_CHECKOUT_LINES = 20;
@@ -21,7 +23,9 @@ const SESSION_EXPANSIONS = [
 	'customer',
 	'customer.tax_ids',
 	'payment_intent',
-	'payment_intent.latest_charge'
+	'payment_intent.latest_charge',
+	'shipping_cost.shipping_rate',
+	'shipping_cost.taxes'
 ] as const;
 const LINE_ITEM_EXPANSIONS = ['data.price'] as const;
 const PAYMENT_INTENT_EXPANSIONS = ['latest_charge'] as const;
@@ -521,6 +525,47 @@ function validatePaymentIntent(
 	return { paymentIntentId: value.id, charge };
 }
 
+function validateInclusiveShipping(value: UnknownRecord): void {
+	const rate = value.shipping_rate;
+	if (
+		!isRecord(rate) ||
+		rate.object !== 'shipping_rate' ||
+		!isProviderId(rate.id, SHIPPING_RATE_ID_PATTERN) ||
+		rate.type !== 'fixed_amount' ||
+		rate.tax_behavior !== 'inclusive' ||
+		!isRecord(rate.fixed_amount) ||
+		!isSafeNonNegativeInteger(rate.fixed_amount.amount) ||
+		rate.fixed_amount.currency !== 'eur'
+	) {
+		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+	}
+	const taxes = value.taxes === undefined && value.amount_tax === 0 ? [] : value.taxes;
+	if (!Array.isArray(taxes)) fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+	const shippingTax = safeSum(
+		taxes.map((tax) => {
+			if (
+				!isRecord(tax) ||
+				!isSafeNonNegativeInteger(tax.amount) ||
+				!isRecord(tax.rate) ||
+				tax.rate.object !== 'tax_rate' ||
+				!isProviderId(tax.rate.id, TAX_RATE_ID_PATTERN) ||
+				tax.rate.inclusive !== true
+			) {
+				fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+			}
+			return tax.amount;
+		}),
+		'STRIPE_PAID_CHECKOUT_TAX_INVALID'
+	);
+	if (
+		shippingTax !== value.amount_tax ||
+		(value.amount_tax as number) > (value.amount_total as number) ||
+		rate.fixed_amount.amount !== value.amount_total
+	) {
+		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+	}
+}
+
 function normalizePaidCheckout(
 	requestedSessionId: string,
 	session: unknown,
@@ -559,8 +604,7 @@ function normalizePaidCheckout(
 		!isSafeNonNegativeInteger(session.total_details.amount_shipping) ||
 		!isRecord(session.shipping_cost) ||
 		!isSafeNonNegativeInteger(session.shipping_cost.amount_subtotal) ||
-		!isSafeNonNegativeInteger(session.shipping_cost.amount_total) ||
-		!isExactNonEmptyString(session.shipping_cost.shipping_rate)
+		!isSafeNonNegativeInteger(session.shipping_cost.amount_total)
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TOTALS_INVALID');
 	}
@@ -570,10 +614,11 @@ function normalizePaidCheckout(
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
+	validateInclusiveShipping(session.shipping_cost);
 
-	// Stripe 2026-06-24.dahlia reconciliation:
-	// line total = subtotal - discount + tax; shipping total = shipping subtotal + shipping tax;
-	// Session total = line totals + shipping total = subtotal - discount + shipping subtotal + all tax.
+	// Stripe 2026-06-24.dahlia inclusive-shipping reconciliation:
+	// merchandise line total = subtotal - discount + tax; shipping tax is contained in shipping gross;
+	// Session total = merchandise line totals + shipping gross, without adding shipping tax twice.
 	const lineSubtotal = safeSum(
 		lines.map((line) => line.subtotal),
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -590,12 +635,12 @@ function normalizePaidCheckout(
 		[lineTax, session.shipping_cost.amount_tax],
 		'STRIPE_PAID_CHECKOUT_TAX_INVALID'
 	);
-	const providerTotal = safeSum(
-		[...lines.map((line) => line.total), session.shipping_cost.amount_total],
+	const merchandiseTotal = safeSum(
+		lines.map((line) => line.total),
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 	);
-	const shippingTotal = safeSum(
-		[session.shipping_cost.amount_subtotal, session.shipping_cost.amount_tax],
+	const providerTotal = safeSum(
+		[merchandiseTotal, session.shipping_cost.amount_total],
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 	);
 	const sessionTotal = safeSum(
@@ -605,8 +650,8 @@ function normalizePaidCheckout(
 				session.total_details.amount_discount,
 				'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 			),
-			session.total_details.amount_shipping,
-			session.total_details.amount_tax
+			lineTax,
+			session.total_details.amount_shipping
 		],
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 	);
@@ -617,7 +662,7 @@ function normalizePaidCheckout(
 		lineSubtotal !== session.amount_subtotal ||
 		lineDiscount !== session.total_details.amount_discount ||
 		session.shipping_cost.amount_subtotal !== session.total_details.amount_shipping ||
-		shippingTotal !== session.shipping_cost.amount_total ||
+		session.shipping_cost.amount_total !== session.total_details.amount_shipping ||
 		providerTotal !== session.amount_total ||
 		sessionTotal !== session.amount_total
 	) {
@@ -757,14 +802,20 @@ function isComparableLine(value: unknown): value is ComparableLine {
 	);
 }
 
-function hasClosedPaidAmounts(amounts: PaidCheckoutSnapshot['amounts']): boolean {
+function hasValidPaidAmountBounds(amounts: PaidCheckoutSnapshot['amounts']): boolean {
 	if (!Object.values(amounts).every(isSafeNonNegativeInteger)) return false;
 	const netSubtotal = amounts.subtotal - amounts.discount;
 	if (!Number.isSafeInteger(netSubtotal) || netSubtotal < 0) return false;
-	const withShipping = netSubtotal + amounts.shipping;
-	if (!Number.isSafeInteger(withShipping)) return false;
-	const expectedTotal = withShipping + amounts.tax;
-	return Number.isSafeInteger(expectedTotal) && amounts.total === expectedTotal;
+	const beforeMerchandiseTax = netSubtotal + amounts.shipping;
+	if (!Number.isSafeInteger(beforeMerchandiseTax)) return false;
+	const merchandiseTax = amounts.total - beforeMerchandiseTax;
+	if (!Number.isSafeInteger(merchandiseTax) || merchandiseTax < 0) return false;
+	const inclusiveShippingTax = amounts.tax - merchandiseTax;
+	return (
+		Number.isSafeInteger(inclusiveShippingTax) &&
+		inclusiveShippingTax >= 0 &&
+		inclusiveShippingTax <= amounts.shipping
+	);
 }
 
 export function comparePaidCheckout(
@@ -829,7 +880,7 @@ export function comparePaidCheckout(
 		!ALLOWED_DESTINATION_SET.has(paid.destinationCountry) ||
 		!isProviderId(paid.paymentIntentId, PAYMENT_INTENT_ID_PATTERN) ||
 		!isProviderId(paid.customerId, CUSTOMER_ID_PATTERN) ||
-		!hasClosedPaidAmounts(paid.amounts)
+		!hasValidPaidAmountBounds(paid.amounts)
 	) {
 		comparisonFail('PAID_CHECKOUT_TOTALS_MISMATCH');
 	}

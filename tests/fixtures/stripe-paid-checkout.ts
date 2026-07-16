@@ -102,6 +102,21 @@ type StripeFixtureCustomerDetails = Omit<
 > & { tax_ids: StripeFixtureTaxId[] | null };
 
 type StripeFixtureShippingDetails = Stripe.Checkout.Session.CollectedInformation.ShippingDetails;
+type StripeFixtureShippingRate = Omit<
+	Pick<Stripe.ShippingRate, 'id' | 'object' | 'fixed_amount' | 'tax_behavior' | 'type'>,
+	'fixed_amount'
+> & {
+	fixed_amount: Pick<Stripe.ShippingRate.FixedAmount, 'amount' | 'currency'>;
+};
+type StripeFixtureShippingTax = Omit<
+	Pick<
+		Stripe.Checkout.Session.ShippingCost.Tax,
+		'amount' | 'rate' | 'taxability_reason' | 'taxable_amount'
+	>,
+	'rate'
+> & {
+	rate: Pick<Stripe.TaxRate, 'id' | 'object' | 'inclusive'>;
+};
 type StripeFixtureSessionCore = Pick<
 	Stripe.Checkout.Session,
 	| 'id'
@@ -136,10 +151,18 @@ export type StripeFixtureCheckoutSession = Omit<
 	customer: StripeFixtureCustomer | string | null;
 	customer_details: StripeFixtureCustomerDetails | null;
 	payment_intent: StripeFixturePaymentIntent | string | null;
-	shipping_cost: Pick<
-		Stripe.Checkout.Session.ShippingCost,
-		'amount_subtotal' | 'amount_tax' | 'amount_total' | 'shipping_rate'
-	> | null;
+	shipping_cost:
+		| (Omit<
+				Pick<
+					Stripe.Checkout.Session.ShippingCost,
+					'amount_subtotal' | 'amount_tax' | 'amount_total' | 'shipping_rate' | 'taxes'
+				>,
+				'shipping_rate' | 'taxes'
+		  > & {
+				shipping_rate: StripeFixtureShippingRate | string | null;
+				taxes?: StripeFixtureShippingTax[];
+		  })
+		| null;
 	total_details: Pick<
 		Stripe.Checkout.Session.TotalDetails,
 		'amount_discount' | 'amount_shipping' | 'amount_tax'
@@ -257,7 +280,6 @@ export function paidCheckoutProviderFixture(
 	const shippingAmount = options.shippingAmount ?? 1_000;
 	const shippingTaxAmount =
 		options.shippingTaxAmount ?? (country === 'US' || shippingAmount === 0 ? 0 : 200);
-	const shippingSubtotal = shippingAmount - shippingTaxAmount;
 	const lines = options.lines ?? [
 		{
 			id: 'li_tee_medium',
@@ -359,15 +381,36 @@ export function paidCheckoutProviderFixture(
 			payment_intent: paymentIntent,
 			payment_status: 'paid',
 			shipping_cost: {
-				amount_subtotal: shippingSubtotal,
+				amount_subtotal: shippingAmount,
 				amount_tax: shippingTaxAmount,
 				amount_total: shippingAmount,
-				shipping_rate: shippingAmount === 0 ? 'shr_free' : 'shr_paid_10_eur'
+				shipping_rate: {
+					id: shippingAmount === 0 ? 'shr_free' : 'shr_paid_10_eur',
+					object: 'shipping_rate',
+					fixed_amount: { amount: shippingAmount, currency: 'eur' },
+					tax_behavior: 'inclusive',
+					type: 'fixed_amount'
+				},
+				taxes:
+					shippingTaxAmount === 0
+						? []
+						: [
+								{
+									amount: shippingTaxAmount,
+									rate: {
+										id: 'txr_shipping_inclusive',
+										object: 'tax_rate',
+										inclusive: true
+									},
+									taxability_reason: 'standard_rated',
+									taxable_amount: shippingAmount - shippingTaxAmount
+								}
+							]
 			},
 			status: 'complete',
 			total_details: {
 				amount_discount: amountDiscount,
-				amount_shipping: shippingSubtotal,
+				amount_shipping: shippingAmount,
 				amount_tax: amountTax
 			}
 		},
