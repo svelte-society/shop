@@ -6,6 +6,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { fileURLToPath } from 'node:url';
 
 const CATALOG_GATEWAY_MODULE_ID = '$lib/server/catalog/runtime-gateway.server';
+const STRIPE_CLIENT_MODULE_ID = '$lib/server/stripe/client.server';
 
 type FixtureEnvironment = Record<string, string | undefined>;
 
@@ -28,6 +29,9 @@ export default defineConfig(() => {
 	const runtimeGatewayModulePath = fileURLToPath(
 		new URL('./src/lib/server/catalog/runtime-gateway.server.ts', import.meta.url)
 	);
+	const runtimeStripeClientModulePath = fileURLToPath(
+		new URL('./src/lib/server/stripe/client.server.ts', import.meta.url)
+	);
 	const catalogFixtureAlias = resolveCatalogFixtureAlias(process.env, fixtureModulePath);
 
 	return {
@@ -40,7 +44,10 @@ export default defineConfig(() => {
 							resolveId(source: string) {
 								return source === CATALOG_GATEWAY_MODULE_ID ||
 									source === runtimeGatewayModulePath ||
-									source === runtimeGatewayModulePath.slice(0, -3)
+									source === runtimeGatewayModulePath.slice(0, -3) ||
+									source === STRIPE_CLIENT_MODULE_ID ||
+									source === runtimeStripeClientModulePath ||
+									source === runtimeStripeClientModulePath.slice(0, -3)
 									? catalogFixtureAlias
 									: null;
 							}

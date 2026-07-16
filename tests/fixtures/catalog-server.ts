@@ -1,6 +1,8 @@
 import type { CatalogVariant } from '$lib/domain/catalog';
 import type { CatalogGateway } from '$lib/server/catalog/gateway';
 import { parseStripeCatalog } from '$lib/server/catalog/parse';
+import type { StripeCheckoutClient } from '$lib/server/stripe/checkout.server';
+import type { StripeOrderClient } from '$lib/server/stripe/paid-checkout';
 import {
 	STRIPE_CATALOG_LOADED_AT,
 	stripeAccessoryPrice,
@@ -8,6 +10,10 @@ import {
 	stripePrice,
 	stripeProduct
 } from './stripe-catalog';
+import {
+	paidCheckoutProviderFixture,
+	type PaidCheckoutProviderFixture
+} from './stripe-paid-checkout';
 
 type CatalogScenario = 'available' | 'unavailable' | 'guard-proof';
 
@@ -48,6 +54,74 @@ const PRICES_BY_PRODUCT = new Map([
 	],
 	['prod_accessory', [stripeAccessoryPrice()]]
 ]);
+
+export function createStripeFixtureClient(fixture: PaidCheckoutProviderFixture): StripeOrderClient {
+	return {
+		checkout: {
+			sessions: {
+				async retrieve() {
+					return structuredClone(fixture.session);
+				},
+				async listLineItems(_sessionId, parameters) {
+					const cursor = parameters?.starting_after;
+					const pageIndex = cursor
+						? fixture.linePages.findIndex((page) => page.data.at(-1)?.id === cursor) + 1
+						: 0;
+					return structuredClone(fixture.linePages[pageIndex]);
+				}
+			}
+		},
+		paymentIntents: {
+			async retrieve() {
+				return structuredClone(fixture.refundPaymentIntent);
+			}
+		}
+	};
+}
+
+export function createStripeClient(
+	stripeSecretKey: string
+): StripeCheckoutClient & StripeOrderClient {
+	void stripeSecretKey;
+	const fixture = paidCheckoutProviderFixture({
+		sessionId: 'cs_test_browser_verified',
+		draftId: 'draft-test-browser-verified',
+		shippingAmount: 1_000,
+		lines: [
+			{
+				id: 'li_browser_mug',
+				priceId: 'price_accessory_one',
+				quantity: 1,
+				unitAmount: 1_600,
+				taxAmount: 400
+			}
+		]
+	});
+	const orderClient = createStripeFixtureClient(fixture);
+	const verified = process.env.TEST_STRIPE_SCENARIO === 'verified';
+	const unavailable = async (): Promise<never> => {
+		throw new Error('STRIPE_FIXTURE_UNAVAILABLE');
+	};
+
+	return {
+		checkout: {
+			sessions: {
+				create: verified
+					? async () => ({
+							id: fixture.session.id,
+							url: `https://checkout.stripe.com/c/pay/${fixture.session.id}`
+						})
+					: unavailable,
+				expire: verified ? async (sessionId) => ({ id: sessionId }) : unavailable,
+				retrieve: verified ? orderClient.checkout.sessions.retrieve : unavailable,
+				listLineItems: verified ? orderClient.checkout.sessions.listLineItems : unavailable
+			}
+		},
+		paymentIntents: {
+			retrieve: verified ? orderClient.paymentIntents.retrieve : unavailable
+		}
+	};
+}
 
 async function parsedFixtureCatalog() {
 	return parseStripeCatalog(

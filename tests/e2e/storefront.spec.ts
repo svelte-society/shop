@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-const CATALOG_UNAVAILABLE_ORIGIN = 'http://127.0.0.1:4174';
-const STOREFRONT_DISABLED_ORIGIN = 'http://127.0.0.1:4175';
+const CATALOG_UNAVAILABLE_ORIGIN = 'http://127.0.0.1:4274';
+const STOREFRONT_DISABLED_ORIGIN = 'http://127.0.0.1:4275';
 
 test('homepage presents the approved responsive collection journey', async ({ page }) => {
 	await page.goto('/');

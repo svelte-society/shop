@@ -15,14 +15,18 @@ const SHARED_FIXTURE_ENV = {
 function fixtureServer(
 	port: number,
 	storefrontEnabled: boolean,
-	scenario: 'available' | 'unavailable' | 'guard-proof'
+	scenario: 'available' | 'unavailable' | 'guard-proof',
+	checkoutEnabled = false,
+	stripeScenario?: 'verified'
 ) {
 	return {
 		command: `pnpm exec vite dev --host 127.0.0.1 --port ${port} --strictPort`,
 		env: {
 			...SHARED_FIXTURE_ENV,
 			STOREFRONT_ENABLED: storefrontEnabled ? 'true' : 'false',
-			TEST_CATALOG_SCENARIO: scenario
+			CHECKOUT_ENABLED: checkoutEnabled ? 'true' : 'false',
+			TEST_CATALOG_SCENARIO: scenario,
+			...(stripeScenario ? { TEST_STRIPE_SCENARIO: stripeScenario } : {})
 		},
 		port,
 		reuseExistingServer: false,
@@ -38,13 +42,14 @@ export default defineConfig({
 	retries: 0,
 	reporter: 'list',
 	use: {
-		baseURL: 'http://127.0.0.1:4173',
+		baseURL: 'http://127.0.0.1:4273',
 		trace: 'retain-on-failure'
 	},
 	webServer: [
-		fixtureServer(4173, true, 'available'),
-		fixtureServer(4174, true, 'unavailable'),
-		fixtureServer(4175, false, 'guard-proof')
+		fixtureServer(4273, true, 'available'),
+		fixtureServer(4274, true, 'unavailable'),
+		fixtureServer(4275, false, 'guard-proof'),
+		fixtureServer(4276, true, 'available', true, 'verified')
 	],
 	projects: [
 		{

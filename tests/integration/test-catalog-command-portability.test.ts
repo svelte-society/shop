@@ -34,12 +34,19 @@ describe('test catalog command portability', () => {
 		const configuredServers = playwrightConfig.webServer;
 		const webServers = Array.isArray(configuredServers) ? configuredServers : [configuredServers];
 		const scenarios = [
-			{ port: 4173, storefront: 'true', scenario: 'available' },
-			{ port: 4174, storefront: 'true', scenario: 'unavailable' },
-			{ port: 4175, storefront: 'false', scenario: 'guard-proof' }
+			{ port: 4273, storefront: 'true', checkout: 'false', scenario: 'available' },
+			{ port: 4274, storefront: 'true', checkout: 'false', scenario: 'unavailable' },
+			{ port: 4275, storefront: 'false', checkout: 'false', scenario: 'guard-proof' },
+			{
+				port: 4276,
+				storefront: 'true',
+				checkout: 'true',
+				scenario: 'available',
+				stripeScenario: 'verified'
+			}
 		] as const;
 
-		expect(webServers).toHaveLength(3);
+		expect(webServers).toHaveLength(4);
 		for (const [index, server] of webServers.entries()) {
 			const expected = scenarios[index];
 			expect(server?.command).toBe(
@@ -48,8 +55,10 @@ describe('test catalog command portability', () => {
 			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 			expect(server?.env).toEqual({
 				...SHARED_FIXTURE_ENV,
+				CHECKOUT_ENABLED: expected.checkout,
 				STOREFRONT_ENABLED: expected.storefront,
-				TEST_CATALOG_SCENARIO: expected.scenario
+				TEST_CATALOG_SCENARIO: expected.scenario,
+				...('stripeScenario' in expected ? { TEST_STRIPE_SCENARIO: expected.stripeScenario } : {})
 			});
 		}
 	});

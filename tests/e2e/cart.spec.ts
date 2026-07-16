@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const CART_STORAGE_KEY = 'svelte-society-shop:cart:v1';
-const CATALOG_UNAVAILABLE_ORIGIN = 'http://127.0.0.1:4174';
+const CATALOG_UNAVAILABLE_ORIGIN = 'http://127.0.0.1:4274';
 
 async function addMug(page: Page): Promise<void> {
 	await page.goto('/products/society-mug');
