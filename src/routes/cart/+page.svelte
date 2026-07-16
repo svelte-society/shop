@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
+	import { beginCheckout } from '$lib/client/checkout';
 	import CartLineItem from '$lib/components/CartLineItem.svelte';
 	import CartSummary from '$lib/components/CartSummary.svelte';
 	import type { CartLine } from '$lib/domain/cart';
@@ -17,6 +18,8 @@
 
 	let { data }: PageProps = $props();
 	let ready = $state(false);
+	let checkoutPending = $state(false);
+	let checkoutError = $state<string | null>(null);
 
 	let catalogByPriceId = $derived.by(() => {
 		const catalog = new SvelteMap<
@@ -51,6 +54,20 @@
 			0
 		)
 	);
+
+	async function startCheckout(): Promise<void> {
+		if (!data.checkoutEnabled || checkoutPending) return;
+
+		checkoutPending = true;
+		checkoutError = null;
+		try {
+			await beginCheckout(cart.lines);
+		} catch {
+			checkoutError = 'Checkout is temporarily unavailable. Your cart is safe. Try again shortly.';
+		} finally {
+			checkoutPending = false;
+		}
+	}
 
 	onMount(() => {
 		ready = true;
@@ -112,6 +129,9 @@
 				totalUnits={cart.totalUnits}
 				{subtotalCents}
 				checkoutEnabled={data.checkoutEnabled}
+				{checkoutPending}
+				{checkoutError}
+				onCheckout={startCheckout}
 			/>
 		</div>
 	{/if}

@@ -5,9 +5,19 @@
 		totalUnits: number;
 		subtotalCents: number;
 		checkoutEnabled: boolean;
+		checkoutPending?: boolean;
+		checkoutError?: string | null;
+		onCheckout?: () => void | Promise<void>;
 	};
 
-	let { totalUnits, subtotalCents, checkoutEnabled }: Props = $props();
+	let {
+		totalUnits,
+		subtotalCents,
+		checkoutEnabled,
+		checkoutPending = false,
+		checkoutError = null,
+		onCheckout = () => undefined
+	}: Props = $props();
 	let shippingMessage = $derived(
 		totalUnits >= 2 ? 'Free shipping unlocked.' : 'Add one more item for free shipping.'
 	);
@@ -27,9 +37,16 @@
 	</p>
 	<p>Shipping to the EU, except Slovenia, and the United States.</p>
 
-	<button type="button" disabled={!checkoutEnabled}>
-		{checkoutEnabled ? 'Continue to secure checkout' : 'Checkout opens soon'}
+	<button type="button" disabled={!checkoutEnabled || checkoutPending} onclick={onCheckout}>
+		{checkoutPending
+			? 'Opening secure checkout…'
+			: checkoutEnabled
+				? 'Continue to secure checkout'
+				: 'Checkout opens soon'}
 	</button>
+	{#if checkoutError}
+		<p class="checkout-error" role="alert">{checkoutError}</p>
+	{/if}
 </aside>
 
 <style>
@@ -82,6 +99,12 @@
 	button:disabled {
 		background: oklch(56% 0.02 255);
 		cursor: not-allowed;
+	}
+
+	.checkout-error {
+		margin-block: 0.75rem 0;
+		color: oklch(45% 0.18 25);
+		font-weight: 700;
 	}
 
 	@media (max-width: 52rem) {
