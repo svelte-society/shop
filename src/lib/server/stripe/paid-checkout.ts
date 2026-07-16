@@ -27,6 +27,21 @@ const LINE_ITEM_EXPANSIONS = ['data.price'] as const;
 const PAYMENT_INTENT_EXPANSIONS = ['latest_charge'] as const;
 const TAX_EXEMPT_VALUES = new Set(['none', 'exempt', 'reverse']);
 const ALLOWED_DESTINATION_SET = new Set(ALLOWED_DESTINATIONS);
+const SUPPORTED_TAX_ID_TYPES = [
+	'bg_uic',
+	'de_stn',
+	'es_cif',
+	'eu_oss_vat',
+	'eu_vat',
+	'hr_oib',
+	'hu_tin',
+	'it_cf',
+	'pl_nip',
+	'ro_tin',
+	'si_tin',
+	'us_ein'
+] as const satisfies readonly Stripe.Checkout.Session.CustomerDetails.TaxId.Type[];
+const SUPPORTED_TAX_ID_TYPE_SET: ReadonlySet<string> = new Set(SUPPORTED_TAX_ID_TYPES);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -111,6 +126,12 @@ function safeProduct(left: number, right: number, code: string): number {
 	return product;
 }
 
+function safeDifference(left: number, right: number, code: string): number {
+	const difference = left - right;
+	if (!Number.isSafeInteger(difference) || difference < 0) fail(code);
+	return difference;
+}
+
 function referenceId(value: unknown, pattern: RegExp): string | null {
 	if (isProviderId(value, pattern)) return value;
 	if (!isRecord(value) || !isProviderId(value.id, pattern)) return null;
@@ -135,38 +156,121 @@ function validateMetadata(value: unknown, expectedDraftId?: string): string {
 	return draftId;
 }
 
-function validateAddress(value: unknown): UnknownRecord {
-	if (!isRecord(value) || !isExactNonEmptyString(value.country)) {
-		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
-	}
+type NormalizedAddress = {
+	city: string;
+	country: string;
+	line1: string;
+	line2: string | null;
+	postalCode: string;
+	state: string | null;
+};
+
+function optionalExactString(value: unknown): string | null {
+	if (value === null) return null;
+	if (!isExactNonEmptyString(value)) fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	return value;
 }
 
-function shippingAddress(session: UnknownRecord): UnknownRecord {
+function validateTaxAddress(value: unknown): void {
+	if (!isRecord(value) || !isExactNonEmptyString(value.country)) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+}
+
+function normalizeShippingAddress(value: unknown): NormalizedAddress {
+	if (
+		!isRecord(value) ||
+		!isExactNonEmptyString(value.city) ||
+		!isExactNonEmptyString(value.country) ||
+		!isExactNonEmptyString(value.line1) ||
+		!isExactNonEmptyString(value.postal_code)
+	) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	const line2 = optionalExactString(value.line2);
+	const state = optionalExactString(value.state);
+	if (value.country === 'US' && state === null) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	return {
+		city: value.city,
+		country: value.country,
+		line1: value.line1,
+		line2,
+		postalCode: value.postal_code,
+		state
+	};
+}
+
+function shippingIdentity(session: UnknownRecord): { name: string; address: NormalizedAddress } {
 	const collected = session.collected_information;
 	if (isRecord(collected)) {
 		const currentShipping = collected.shipping_details;
-		if (isRecord(currentShipping)) return validateAddress(currentShipping.address);
+		if (isRecord(currentShipping) && isExactNonEmptyString(currentShipping.name)) {
+			return {
+				name: currentShipping.name,
+				address: normalizeShippingAddress(currentShipping.address)
+			};
+		}
 	}
 
 	const legacyShipping = session.shipping_details;
-	if (isRecord(legacyShipping)) return validateAddress(legacyShipping.address);
+	if (isRecord(legacyShipping) && isExactNonEmptyString(legacyShipping.name)) {
+		return { name: legacyShipping.name, address: normalizeShippingAddress(legacyShipping.address) };
+	}
 	fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 }
 
-function validateTaxIds(value: unknown): Array<{ type: string; value: string }> {
+function addressesEqual(left: NormalizedAddress, right: NormalizedAddress): boolean {
+	return (
+		left.city === right.city &&
+		left.country === right.country &&
+		left.line1 === right.line1 &&
+		left.line2 === right.line2 &&
+		left.postalCode === right.postalCode &&
+		left.state === right.state
+	);
+}
+
+type NormalizedTaxId = {
+	type: Stripe.Checkout.Session.CustomerDetails.TaxId.Type;
+	value: string;
+};
+
+function normalizeTaxId(type: unknown, value: unknown): NormalizedTaxId {
+	if (
+		!isExactNonEmptyString(type) ||
+		!SUPPORTED_TAX_ID_TYPE_SET.has(type) ||
+		!isExactNonEmptyString(value)
+	) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	return {
+		type: type as Stripe.Checkout.Session.CustomerDetails.TaxId.Type,
+		value
+	};
+}
+
+function rejectDuplicateTaxIds(taxIds: NormalizedTaxId[]): void {
+	const keys = new Set<string>();
+	for (const taxId of taxIds) {
+		const key = taxIdKey(taxId);
+		if (keys.has(key)) fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+		keys.add(key);
+	}
+}
+
+function validateTaxIds(value: unknown): NormalizedTaxId[] {
 	if (value === null) return [];
 	if (!Array.isArray(value)) fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
-	return value.map((taxId) => {
-		if (
-			!isRecord(taxId) ||
-			!isExactNonEmptyString(taxId.type) ||
-			!isExactNonEmptyString(taxId.value)
-		) {
+	const taxIds = value.map((taxId) => {
+		if (!isRecord(taxId)) {
 			fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 		}
-		return { type: taxId.type, value: taxId.value };
+		return normalizeTaxId(taxId.type, taxId.value);
 	});
+	rejectDuplicateTaxIds(taxIds);
+	return taxIds;
 }
 
 function taxIdKey(taxId: { type: string; value: string }): string {
@@ -183,7 +287,12 @@ function validateCustomer(session: UnknownRecord): {
 		customer.object !== 'customer' ||
 		customer.deleted === true ||
 		!isProviderId(customer.id, CUSTOMER_ID_PATTERN) ||
+		!isExactNonEmptyString(customer.email) ||
+		!isExactNonEmptyString(customer.name) ||
 		!isExactNonEmptyString(customer.phone) ||
+		!isRecord(customer.shipping) ||
+		!isExactNonEmptyString(customer.shipping.name) ||
+		!isExactNonEmptyString(customer.shipping.phone) ||
 		!TAX_EXEMPT_VALUES.has(customer.tax_exempt as string)
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
@@ -192,13 +301,18 @@ function validateCustomer(session: UnknownRecord): {
 	const customerDetails = session.customer_details;
 	if (
 		!isRecord(customerDetails) ||
+		!isExactNonEmptyString(customerDetails.email) ||
+		!isExactNonEmptyString(customerDetails.name) ||
 		!isExactNonEmptyString(customerDetails.phone) ||
 		!TAX_EXEMPT_VALUES.has(customerDetails.tax_exempt as string) ||
-		customerDetails.tax_exempt !== customer.tax_exempt
+		customerDetails.tax_exempt !== customer.tax_exempt ||
+		customerDetails.email !== customer.email ||
+		customerDetails.name !== customer.name ||
+		customerDetails.phone !== customer.phone
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
-	validateAddress(customerDetails.address);
+	validateTaxAddress(customerDetails.address);
 
 	const sessionTaxIds = validateTaxIds(customerDetails.tax_ids);
 	const customerTaxIds = customer.tax_ids;
@@ -211,28 +325,40 @@ function validateCustomer(session: UnknownRecord): {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
 	const expandedTaxIds = customerTaxIds.data.map((taxId) => {
-		if (
-			!isRecord(taxId) ||
-			taxId.object !== 'tax_id' ||
-			!isExactNonEmptyString(taxId.id) ||
-			!isExactNonEmptyString(taxId.type) ||
-			!isExactNonEmptyString(taxId.value)
-		) {
+		if (!isRecord(taxId) || taxId.object !== 'tax_id' || !isExactNonEmptyString(taxId.id)) {
 			fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 		}
-		return { type: taxId.type, value: taxId.value };
+		return normalizeTaxId(taxId.type, taxId.value);
 	});
+	rejectDuplicateTaxIds(expandedTaxIds);
 	if (
 		JSON.stringify(sessionTaxIds.map(taxIdKey).sort()) !==
 		JSON.stringify(expandedTaxIds.map(taxIdKey).sort())
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
+	if (
+		customer.tax_exempt === 'reverse' &&
+		!sessionTaxIds.some((taxId) => taxId.type === 'eu_vat')
+	) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
 
-	const address = shippingAddress(session);
-	const destinationCountry = address.country as string;
+	const sessionShipping = shippingIdentity(session);
+	const customerShippingAddress = normalizeShippingAddress(customer.shipping.address);
+	if (
+		customer.shipping.name !== sessionShipping.name ||
+		customer.shipping.phone !== customerDetails.phone ||
+		!addressesEqual(customerShippingAddress, sessionShipping.address)
+	) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	const destinationCountry = sessionShipping.address.country;
 	if (!ALLOWED_DESTINATION_SET.has(destinationCountry)) {
 		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
+	}
+	if (customer.tax_exempt === 'reverse' && destinationCountry === 'US') {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
 	return { customerId: customer.id, destinationCountry };
 }
@@ -271,6 +397,17 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 	if (
 		value.amount_subtotal !==
 		safeProduct(value.price.unit_amount, value.quantity, 'STRIPE_PAID_CHECKOUT_LINES_INVALID')
+	) {
+		fail('STRIPE_PAID_CHECKOUT_LINES_INVALID');
+	}
+	const amountAfterDiscount = safeDifference(
+		value.amount_subtotal,
+		value.amount_discount,
+		'STRIPE_PAID_CHECKOUT_LINES_INVALID'
+	);
+	if (
+		value.amount_total !==
+		safeSum([amountAfterDiscount, value.amount_tax], 'STRIPE_PAID_CHECKOUT_LINES_INVALID')
 	) {
 		fail('STRIPE_PAID_CHECKOUT_LINES_INVALID');
 	}
@@ -434,6 +571,9 @@ function normalizePaidCheckout(
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
 
+	// Stripe 2026-06-24.dahlia reconciliation:
+	// line total = subtotal - discount + tax; shipping total = shipping subtotal + shipping tax;
+	// Session total = line totals + shipping total = subtotal - discount + shipping subtotal + all tax.
 	const lineSubtotal = safeSum(
 		lines.map((line) => line.subtotal),
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -454,14 +594,32 @@ function normalizePaidCheckout(
 		[...lines.map((line) => line.total), session.shipping_cost.amount_total],
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 	);
+	const shippingTotal = safeSum(
+		[session.shipping_cost.amount_subtotal, session.shipping_cost.amount_tax],
+		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
+	);
+	const sessionTotal = safeSum(
+		[
+			safeDifference(
+				session.amount_subtotal,
+				session.total_details.amount_discount,
+				'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
+			),
+			session.total_details.amount_shipping,
+			session.total_details.amount_tax
+		],
+		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
+	);
 	if (providerTax !== session.total_details.amount_tax) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
 	if (
 		lineSubtotal !== session.amount_subtotal ||
 		lineDiscount !== session.total_details.amount_discount ||
-		session.shipping_cost.amount_total !== session.total_details.amount_shipping ||
-		providerTotal !== session.amount_total
+		session.shipping_cost.amount_subtotal !== session.total_details.amount_shipping ||
+		shippingTotal !== session.shipping_cost.amount_total ||
+		providerTotal !== session.amount_total ||
+		sessionTotal !== session.amount_total
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TOTALS_INVALID');
 	}
@@ -482,7 +640,7 @@ function normalizePaidCheckout(
 		amounts: {
 			subtotal: session.amount_subtotal,
 			discount: session.total_details.amount_discount,
-			shipping: session.total_details.amount_shipping,
+			shipping: session.shipping_cost.amount_total,
 			tax: session.total_details.amount_tax,
 			total: session.amount_total
 		},
@@ -599,6 +757,16 @@ function isComparableLine(value: unknown): value is ComparableLine {
 	);
 }
 
+function hasClosedPaidAmounts(amounts: PaidCheckoutSnapshot['amounts']): boolean {
+	if (!Object.values(amounts).every(isSafeNonNegativeInteger)) return false;
+	const netSubtotal = amounts.subtotal - amounts.discount;
+	if (!Number.isSafeInteger(netSubtotal) || netSubtotal < 0) return false;
+	const withShipping = netSubtotal + amounts.shipping;
+	if (!Number.isSafeInteger(withShipping)) return false;
+	const expectedTotal = withShipping + amounts.tax;
+	return Number.isSafeInteger(expectedTotal) && amounts.total === expectedTotal;
+}
+
 export function comparePaidCheckout(
 	draft: CheckoutDraftWithLines,
 	paid: PaidCheckoutSnapshot
@@ -661,8 +829,7 @@ export function comparePaidCheckout(
 		!ALLOWED_DESTINATION_SET.has(paid.destinationCountry) ||
 		!isProviderId(paid.paymentIntentId, PAYMENT_INTENT_ID_PATTERN) ||
 		!isProviderId(paid.customerId, CUSTOMER_ID_PATTERN) ||
-		!Object.values(paid.amounts).every(isSafeNonNegativeInteger) ||
-		paid.amounts.total < paid.amounts.subtotal + paid.amounts.shipping
+		!hasClosedPaidAmounts(paid.amounts)
 	) {
 		comparisonFail('PAID_CHECKOUT_TOTALS_MISMATCH');
 	}

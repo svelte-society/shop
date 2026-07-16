@@ -8,9 +8,11 @@ import {
 } from './paid-checkout';
 import {
 	paidCheckoutProviderFixture,
+	reconcilePaidCheckoutProviderTotals,
 	stripeLinePage,
 	type PaidCheckoutProviderFixture,
 	type StripeFixtureCheckoutSession,
+	type StripeFixtureCustomer,
 	type StripeFixturePaymentIntent
 } from '../../../../tests/fixtures/stripe-paid-checkout';
 
@@ -120,6 +122,13 @@ async function normalizedSnapshot(
 	return { snapshot, client };
 }
 
+function expandedCustomer(fixture: PaidCheckoutProviderFixture): StripeFixtureCustomer {
+	const customer = fixture.session.customer;
+	if (typeof customer !== 'object' || !customer)
+		throw new Error('Expected expanded fixture Customer');
+	return customer;
+}
+
 describe('Stripe paid Checkout normalization', () => {
 	it('normalizes a complete paid EU Checkout without retaining customer data', async () => {
 		const { snapshot, client } = await normalizedSnapshot();
@@ -194,6 +203,76 @@ describe('Stripe paid Checkout normalization', () => {
 				fixture.session.id
 			)
 		).resolves.toMatchObject({ amounts: { tax: 0, total: 3_000 } });
+	});
+
+	it.each([
+		[
+			'an invented tax-ID type',
+			{
+				taxExempt: 'none' as const,
+				taxIds: [{ type: 'invented_tax_id', value: 'NOT-A-REAL-TYPE' }]
+			}
+		],
+		[
+			'an empty tax-ID value',
+			{ taxExempt: 'none' as const, taxIds: [{ type: 'eu_vat', value: '' }] }
+		],
+		[
+			'a duplicate tax-ID entry',
+			{
+				taxExempt: 'none' as const,
+				taxIds: [
+					{ type: 'eu_vat', value: 'SE123456789001' },
+					{ type: 'eu_vat', value: 'SE123456789001' }
+				]
+			}
+		],
+		['reverse charge without a tax ID', { taxExempt: 'reverse' as const, taxIds: [] }],
+		[
+			'reverse charge without an EU VAT ID',
+			{
+				taxExempt: 'reverse' as const,
+				taxIds: [{ type: 'us_ein', value: '12-3456789' }]
+			}
+		]
+	])('rejects %s', async (_label, options) => {
+		// This table deliberately includes one provider value outside Stripe's installed type union.
+		const fixture = paidCheckoutProviderFixture(
+			options as Parameters<typeof paidCheckoutProviderFixture>[0]
+		);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
+	it('rejects mismatched normal and reverse tax-exemption semantics', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		expandedCustomer(fixture).tax_exempt = 'reverse';
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
+	it('rejects conflicting Session and expanded Customer tax-ID lists', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			taxIds: [{ type: 'eu_vat', value: 'SE123456789001' }]
+		});
+		expandedCustomer(fixture).tax_ids.data = [];
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
 	});
 
 	it('normalizes the legacy shipping_details field only at the provider boundary', async () => {
@@ -372,6 +451,128 @@ describe('Stripe paid Checkout normalization', () => {
 		);
 	});
 
+	it.each([
+		[
+			'missing recipient name',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const customer = expandedCustomer(fixture);
+				if (!customer.shipping || !fixture.session.customer_details) throw new Error();
+				const shipping = fixture.session.collected_information?.shipping_details;
+				if (!shipping) throw new Error();
+				shipping.name = '';
+				customer.shipping.name = '';
+				customer.name = '';
+				fixture.session.customer_details.name = '';
+			}
+		],
+		[
+			'missing recipient address line 1',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const shipping = fixture.session.collected_information?.shipping_details;
+				if (!shipping) throw new Error();
+				shipping.address.line1 = null;
+			}
+		],
+		[
+			'missing recipient city',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const shipping = fixture.session.collected_information?.shipping_details;
+				if (!shipping) throw new Error();
+				shipping.address.city = null;
+			}
+		],
+		[
+			'missing recipient postal code',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const shipping = fixture.session.collected_information?.shipping_details;
+				if (!shipping) throw new Error();
+				shipping.address.postal_code = null;
+			}
+		],
+		[
+			'missing US recipient state',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const shipping = fixture.session.collected_information?.shipping_details;
+				if (!shipping) throw new Error();
+				shipping.address.state = null;
+			}
+		]
+	])('rejects %s even when provider identity copies agree', async (label, mutate) => {
+		const fixture = paidCheckoutProviderFixture({ country: label.includes('US') ? 'US' : 'SE' });
+		mutate(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
+	it.each([
+		[
+			'missing expanded Customer shipping details',
+			(fixture: PaidCheckoutProviderFixture) => {
+				expandedCustomer(fixture).shipping = null;
+			}
+		],
+		[
+			'Customer shipping address mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const customer = expandedCustomer(fixture);
+				if (!customer.shipping) throw new Error();
+				customer.shipping = {
+					...customer.shipping,
+					address: { ...customer.shipping.address, line1: '456 Different Street' }
+				};
+			}
+		],
+		[
+			'Customer shipping name mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const customer = expandedCustomer(fixture);
+				if (!customer.shipping) throw new Error();
+				customer.shipping.name = 'Different Recipient';
+			}
+		],
+		[
+			'Customer email mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				expandedCustomer(fixture).email = 'different@example.test';
+			}
+		],
+		[
+			'Customer name mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				expandedCustomer(fixture).name = 'Different Customer';
+			}
+		],
+		[
+			'Customer phone mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				expandedCustomer(fixture).phone = '+46709999999';
+			}
+		],
+		[
+			'Customer shipping phone mismatch',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const customer = expandedCustomer(fixture);
+				if (!customer.shipping) throw new Error();
+				customer.shipping.phone = '+46708888888';
+			}
+		]
+	])('rejects a %s', async (_label, mutate) => {
+		const fixture = paidCheckoutProviderFixture();
+		mutate(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
 	it('rejects an unsupported shipping destination', async () => {
 		const fixture = paidCheckoutProviderFixture({ country: 'SI' });
 
@@ -380,6 +581,37 @@ describe('Stripe paid Checkout normalization', () => {
 				fixture.session.id
 			),
 			'STRIPE_PAID_CHECKOUT_DESTINATION_INVALID'
+		);
+	});
+
+	it('normalizes the charged shipping total when shipping tax is itemized separately', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		if (!fixture.session.shipping_cost || !fixture.session.total_details) throw new Error();
+		fixture.session.shipping_cost.amount_subtotal = 800;
+		fixture.session.total_details.amount_shipping = 800;
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			amounts: { shipping: 1_000, tax: 700, total: 3_500 }
+		});
+	});
+
+	it('rejects a reconciled shipping total that omits part of its shipping tax', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		if (!fixture.session.shipping_cost || !fixture.session.total_details) throw new Error();
+		fixture.session.shipping_cost.amount_subtotal = 800;
+		fixture.session.shipping_cost.amount_total = 999;
+		fixture.session.total_details.amount_shipping = 999;
+		reconcilePaidCheckoutProviderTotals(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 		);
 	});
 
@@ -449,6 +681,34 @@ describe('Stripe paid Checkout normalization', () => {
 		);
 	});
 
+	it('rejects a line total that disagrees with its reconciled subtotal, discount, and tax', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		fixture.linePages[0].data[0].amount_total += 1;
+		reconcilePaidCheckoutProviderTotals(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_LINES_INVALID'
+		);
+	});
+
+	it('rejects a line discount greater than its reconciled subtotal', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		const line = fixture.linePages[0].data[0];
+		line.amount_discount = line.amount_subtotal + 1;
+		line.amount_total = line.amount_tax;
+		reconcilePaidCheckoutProviderTotals(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_LINES_INVALID'
+		);
+	});
+
 	it('rejects a paginated response that cannot advance its cursor', async () => {
 		const fixture = paidCheckoutProviderFixture();
 		fixture.linePages = [stripeLinePage([], true)];
@@ -478,9 +738,11 @@ describe('Stripe paid Checkout normalization', () => {
 			}
 		],
 		[
-			'inconsistent tax cents',
+			'hidden shipping tax cents',
 			(session: StripeFixtureCheckoutSession) => {
-				if (session.total_details) session.total_details.amount_tax += 1;
+				if (session.total_details && session.shipping_cost) {
+					session.total_details.amount_tax -= session.shipping_cost.amount_tax;
+				}
 			}
 		]
 	])('rejects %s', async (_label, mutate) => {
@@ -739,6 +1001,16 @@ describe('paid Checkout comparison', () => {
 		expectComparisonCode(
 			() => comparePaidCheckout(checkoutDraft(), snapshot),
 			'PAID_CHECKOUT_DISCOUNT_MISMATCH'
+		);
+	});
+
+	it('rejects a normalized total that does not close over subtotal, shipping, and tax', async () => {
+		const { snapshot } = await normalizedSnapshot();
+		snapshot.amounts.total += 1;
+
+		expectComparisonCode(
+			() => comparePaidCheckout(checkoutDraft(), snapshot),
+			'PAID_CHECKOUT_TOTALS_MISMATCH'
 		);
 	});
 });

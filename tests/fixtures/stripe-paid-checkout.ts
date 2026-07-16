@@ -1,144 +1,150 @@
-export type StripeFixtureAddress = {
-	city: string | null;
-	country: string | null;
-	line1: string | null;
-	line2: string | null;
-	postal_code: string | null;
-	state: string | null;
+import type Stripe from 'stripe';
+
+export type StripeFixtureAddress = Stripe.Address;
+
+export type StripeFixtureTaxId = Omit<
+	Pick<Stripe.Checkout.Session.CustomerDetails.TaxId, 'type' | 'value'>,
+	'value'
+> & { value: string };
+
+type StripeFixtureExpandedTaxId = Pick<Stripe.TaxId, 'id' | 'object' | 'type' | 'value'>;
+type StripeFixtureCustomerShipping = Required<
+	Pick<Stripe.Customer.Shipping, 'address' | 'name' | 'phone'>
+>;
+
+export type StripeFixtureListPage<T> = Pick<
+	Stripe.ApiList<T>,
+	'object' | 'data' | 'has_more' | 'url'
+>;
+
+export type StripeFixtureCustomer = Omit<
+	Required<
+		Pick<Stripe.Customer, 'id' | 'object' | 'email' | 'name' | 'phone' | 'shipping' | 'tax_exempt'>
+	>,
+	'shipping'
+> & {
+	shipping: StripeFixtureCustomerShipping | null;
+	tax_ids: StripeFixtureListPage<StripeFixtureExpandedTaxId>;
 };
 
-export type StripeFixtureTaxId = {
-	type: string;
-	value: string;
-};
-
-export type StripeFixtureCustomer = {
-	id: string;
-	object: 'customer';
-	deleted?: true;
-	phone: string | null;
-	shipping: {
-		address: StripeFixtureAddress;
-		name: string;
-		phone: string | null;
-	} | null;
-	tax_exempt: 'none' | 'exempt' | 'reverse' | null;
-	tax_ids: {
-		object: 'list';
-		data: Array<{ id: string; object: 'tax_id'; type: string; value: string }>;
-		has_more: boolean;
-		url: string;
-	};
-};
-
-export type StripeFixtureCharge = {
-	id: string;
-	object: 'charge';
-	amount: number;
-	amount_captured: number;
-	amount_refunded: number;
-	captured: boolean;
-	currency: string;
+export type StripeFixtureCharge = Omit<
+	Pick<
+		Stripe.Charge,
+		| 'id'
+		| 'object'
+		| 'amount'
+		| 'amount_captured'
+		| 'amount_refunded'
+		| 'captured'
+		| 'currency'
+		| 'customer'
+		| 'paid'
+		| 'payment_intent'
+		| 'refunded'
+		| 'status'
+	>,
+	'customer' | 'payment_intent'
+> & {
 	customer: string | null;
-	paid: boolean;
 	payment_intent: string | null;
-	refunded: boolean;
-	status: 'failed' | 'pending' | 'succeeded';
 };
 
-export type StripeFixturePaymentIntent = {
-	id: string;
-	object: 'payment_intent';
-	amount: number;
-	amount_received: number;
-	currency: string;
+export type StripeFixturePaymentIntent = Omit<
+	Pick<
+		Stripe.PaymentIntent,
+		| 'id'
+		| 'object'
+		| 'amount'
+		| 'amount_received'
+		| 'currency'
+		| 'customer'
+		| 'latest_charge'
+		| 'metadata'
+		| 'status'
+	>,
+	'customer' | 'latest_charge'
+> & {
 	customer: string | null;
 	latest_charge: StripeFixtureCharge | string | null;
-	metadata: Record<string, string>;
-	status:
-		| 'canceled'
-		| 'processing'
-		| 'requires_action'
-		| 'requires_capture'
-		| 'requires_confirmation'
-		| 'requires_payment_method'
-		| 'succeeded';
 };
 
-export type StripeFixtureLineItem = {
-	id: string;
-	object: 'item';
-	amount_discount: number;
-	amount_subtotal: number;
-	amount_tax: number;
-	amount_total: number;
-	currency: string;
-	price: {
-		id: string;
-		object: 'price';
-		currency: string;
-		unit_amount: number | null;
-	} | null;
-	quantity: number | null;
-};
+type StripeFixturePrice = Pick<Stripe.Price, 'id' | 'object' | 'currency' | 'unit_amount'>;
 
-export type StripeFixtureListPage<T> = {
-	object: 'list';
-	data: T[];
-	has_more: boolean;
-	url: string;
-};
+export type StripeFixtureLineItem = Omit<
+	Pick<
+		Stripe.LineItem,
+		| 'id'
+		| 'object'
+		| 'amount_discount'
+		| 'amount_subtotal'
+		| 'amount_tax'
+		| 'amount_total'
+		| 'currency'
+		| 'price'
+		| 'quantity'
+	>,
+	'price'
+> & { price: StripeFixturePrice | null };
 
-export type StripeFixtureCheckoutSession = {
-	id: string;
-	object: 'checkout.session';
-	amount_subtotal: number | null;
-	amount_total: number | null;
-	automatic_tax: {
-		enabled: boolean;
-		status: 'complete' | 'failed' | 'requires_location_inputs' | null;
-	};
-	client_reference_id: string | null;
-	collected_information: {
-		business_name: string | null;
-		individual_name: string | null;
-		shipping_details: {
-			address: StripeFixtureAddress;
-			name: string;
-		} | null;
-	} | null;
-	currency: string | null;
+type StripeFixtureCustomerDetails = Omit<
+	Pick<
+		Stripe.Checkout.Session.CustomerDetails,
+		| 'address'
+		| 'business_name'
+		| 'email'
+		| 'individual_name'
+		| 'name'
+		| 'phone'
+		| 'tax_exempt'
+		| 'tax_ids'
+	>,
+	'tax_ids'
+> & { tax_ids: StripeFixtureTaxId[] | null };
+
+type StripeFixtureShippingDetails = Stripe.Checkout.Session.CollectedInformation.ShippingDetails;
+type StripeFixtureSessionCore = Pick<
+	Stripe.Checkout.Session,
+	| 'id'
+	| 'object'
+	| 'amount_subtotal'
+	| 'amount_total'
+	| 'automatic_tax'
+	| 'client_reference_id'
+	| 'collected_information'
+	| 'currency'
+	| 'customer'
+	| 'customer_details'
+	| 'metadata'
+	| 'mode'
+	| 'payment_intent'
+	| 'payment_status'
+	| 'shipping_cost'
+	| 'status'
+	| 'total_details'
+>;
+
+export type StripeFixtureCheckoutSession = Omit<
+	StripeFixtureSessionCore,
+	| 'automatic_tax'
+	| 'customer'
+	| 'customer_details'
+	| 'payment_intent'
+	| 'shipping_cost'
+	| 'total_details'
+> & {
+	automatic_tax: Pick<Stripe.Checkout.Session.AutomaticTax, 'enabled' | 'status'>;
 	customer: StripeFixtureCustomer | string | null;
-	customer_details: {
-		address: StripeFixtureAddress | null;
-		business_name: string | null;
-		email: string | null;
-		individual_name: string | null;
-		name: string | null;
-		phone: string | null;
-		tax_exempt: 'none' | 'exempt' | 'reverse' | null;
-		tax_ids: StripeFixtureTaxId[] | null;
-	} | null;
-	metadata: Record<string, string> | null;
-	mode: 'payment' | 'setup' | 'subscription';
+	customer_details: StripeFixtureCustomerDetails | null;
 	payment_intent: StripeFixturePaymentIntent | string | null;
-	payment_status: 'no_payment_required' | 'paid' | 'unpaid';
-	shipping_cost: {
-		amount_subtotal: number;
-		amount_tax: number;
-		amount_total: number;
-		shipping_rate: string | null;
-	} | null;
-	status: 'complete' | 'expired' | 'open' | null;
-	total_details: {
-		amount_discount: number;
-		amount_shipping: number | null;
-		amount_tax: number;
-	} | null;
-	shipping_details?: {
-		address: StripeFixtureAddress;
-		name: string;
-	} | null;
+	shipping_cost: Pick<
+		Stripe.Checkout.Session.ShippingCost,
+		'amount_subtotal' | 'amount_tax' | 'amount_total' | 'shipping_rate'
+	> | null;
+	total_details: Pick<
+		Stripe.Checkout.Session.TotalDetails,
+		'amount_discount' | 'amount_shipping' | 'amount_tax'
+	> | null;
+	shipping_details?: StripeFixtureShippingDetails | null;
 };
 
 export type PaidCheckoutFixtureLine = {
@@ -147,6 +153,7 @@ export type PaidCheckoutFixtureLine = {
 	quantity: number;
 	unitAmount: number;
 	taxAmount: number;
+	discountAmount?: number;
 };
 
 export type PaidCheckoutProviderFixture = {
@@ -182,13 +189,14 @@ export function stripeLineItem(
 	currency = 'eur'
 ): StripeFixtureLineItem {
 	const amountSubtotal = line.unitAmount * line.quantity;
+	const amountDiscount = line.discountAmount ?? 0;
 	return {
 		id: line.id,
 		object: 'item',
-		amount_discount: 0,
+		amount_discount: amountDiscount,
 		amount_subtotal: amountSubtotal,
 		amount_tax: line.taxAmount,
-		amount_total: amountSubtotal + line.taxAmount,
+		amount_total: amountSubtotal - amountDiscount + line.taxAmount,
 		currency,
 		price: {
 			id: line.priceId,
@@ -198,6 +206,32 @@ export function stripeLineItem(
 		},
 		quantity: line.quantity
 	};
+}
+
+export function reconcilePaidCheckoutProviderTotals(fixture: PaidCheckoutProviderFixture): void {
+	const lines = fixture.linePages.flatMap((page) => page.data);
+	const shipping = fixture.session.shipping_cost;
+	const details = fixture.session.total_details;
+	const paymentIntent = fixture.session.payment_intent;
+	if (!shipping || !details || typeof paymentIntent !== 'object' || !paymentIntent) {
+		throw new Error('Fixture cannot be reconciled without expanded totals');
+	}
+
+	fixture.session.amount_subtotal = lines.reduce((total, line) => total + line.amount_subtotal, 0);
+	details.amount_discount = lines.reduce((total, line) => total + line.amount_discount, 0);
+	details.amount_shipping = shipping.amount_subtotal;
+	details.amount_tax =
+		lines.reduce((total, line) => total + line.amount_tax, 0) + shipping.amount_tax;
+	fixture.session.amount_total =
+		lines.reduce((total, line) => total + line.amount_total, 0) + shipping.amount_total;
+	paymentIntent.amount = fixture.session.amount_total;
+	paymentIntent.amount_received = fixture.session.amount_total;
+	const charge = paymentIntent.latest_charge;
+	if (typeof charge !== 'object' || !charge) {
+		throw new Error('Fixture cannot be reconciled without an expanded Charge');
+	}
+	charge.amount = fixture.session.amount_total;
+	charge.amount_captured = fixture.session.amount_total;
 }
 
 export function stripeLinePage(
@@ -223,6 +257,7 @@ export function paidCheckoutProviderFixture(
 	const shippingAmount = options.shippingAmount ?? 1_000;
 	const shippingTaxAmount =
 		options.shippingTaxAmount ?? (country === 'US' || shippingAmount === 0 ? 0 : 200);
+	const shippingSubtotal = shippingAmount - shippingTaxAmount;
 	const lines = options.lines ?? [
 		{
 			id: 'li_tee_medium',
@@ -281,6 +316,8 @@ export function paidCheckoutProviderFixture(
 	const customer: StripeFixtureCustomer = {
 		id: customerId,
 		object: 'customer',
+		email: 'fixture.customer@example.test',
+		name: 'Fixture Customer',
 		phone: '+46701234567',
 		shipping: { address, name: 'Fixture Customer', phone: '+46701234567' },
 		tax_exempt: taxExempt,
@@ -322,7 +359,7 @@ export function paidCheckoutProviderFixture(
 			payment_intent: paymentIntent,
 			payment_status: 'paid',
 			shipping_cost: {
-				amount_subtotal: shippingAmount,
+				amount_subtotal: shippingSubtotal,
 				amount_tax: shippingTaxAmount,
 				amount_total: shippingAmount,
 				shipping_rate: shippingAmount === 0 ? 'shr_free' : 'shr_paid_10_eur'
@@ -330,7 +367,7 @@ export function paidCheckoutProviderFixture(
 			status: 'complete',
 			total_details: {
 				amount_discount: amountDiscount,
-				amount_shipping: shippingAmount,
+				amount_shipping: shippingSubtotal,
 				amount_tax: amountTax
 			}
 		},
