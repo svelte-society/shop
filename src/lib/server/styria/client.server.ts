@@ -1,0 +1,310 @@
+import type { StyriaGateway } from './gateway';
+import { StyriaError } from './gateway';
+import { signGet, signPost } from './signing';
+import type { StyriaOrder, StyriaOrderPayload } from './types';
+
+export { StyriaError } from './gateway';
+
+export const STYRIA_DEFAULT_BASE_URL = 'https://styriashirts.eu';
+export const STYRIA_DEFAULT_TIMEOUT_MS = 10_000;
+
+export type StyriaClientOptions = {
+	appId: string;
+	secretKey: string;
+	baseUrl?: string;
+	timeoutMs?: number;
+	fetch?: typeof globalThis.fetch;
+};
+
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isExactString(value: unknown, maxLength = 2_000): value is string {
+	return (
+		typeof value === 'string' &&
+		value.length > 0 &&
+		value.length <= maxLength &&
+		value === value.trim() &&
+		!/\r|\n/.test(value)
+	);
+}
+
+function normalizedId(value: unknown): string | null {
+	if (isExactString(value, 200)) return value;
+	if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+	return null;
+}
+
+function normalizedPositiveInteger(value: unknown): number | null {
+	if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
+	if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) {
+		const parsed = Number(value);
+		if (Number.isSafeInteger(parsed)) return parsed;
+	}
+	return null;
+}
+
+function normalizedMoney(value: unknown): number | null {
+	if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+	if (typeof value === 'string' && /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value)) {
+		const parsed = Number(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return null;
+}
+
+function normalizedBoolean(value: unknown): boolean | null {
+	if (typeof value === 'boolean') return value;
+	if (value === 'true') return true;
+	if (value === 'false') return false;
+	return null;
+}
+
+function optionalString(value: unknown, maxLength = 2_000): string | null | undefined {
+	if (value === undefined || value === null || value === '') return null;
+	if (isExactString(value, maxLength)) return value;
+	return undefined;
+}
+
+function isTimestamp(value: unknown): value is string {
+	return isExactString(value, 100) && Number.isFinite(new Date(value).getTime());
+}
+
+function normalizeDesigns(value: unknown): Record<string, string> | null {
+	if (!isRecord(value)) return null;
+	const entries = Object.entries(value).sort(([left], [right]) =>
+		left < right ? -1 : left > right ? 1 : 0
+	);
+	if (
+		entries.length === 0 ||
+		entries.some(([position, url]) => !isExactString(position, 100) || !isExactString(url, 2_000))
+	) {
+		return null;
+	}
+	return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function normalizeOrder(value: unknown): StyriaOrder | null {
+	if (!isRecord(value)) return null;
+	const id = normalizedId(value.id);
+	const externalId = optionalString(value.external_id, 200);
+	const deleted = normalizedBoolean(value.deleted);
+	if (
+		id === null ||
+		externalId === undefined ||
+		!isTimestamp(value.created_at) ||
+		!isExactString(value.status, 100) ||
+		deleted === null ||
+		!isRecord(value.shipping_address) ||
+		!isExactString(value.shipping_address.country, 200) ||
+		!isRecord(value.shipping) ||
+		!isExactString(value.shipping.shippingMethod, 100) ||
+		!Array.isArray(value.items) ||
+		value.items.length === 0
+	) {
+		return null;
+	}
+
+	const trackingNumber = optionalString(value.shipping.trackingNumber, 500);
+	const shippedAt = optionalString(value.shipping.shiped_at, 100);
+	if (trackingNumber === undefined || shippedAt === undefined) return null;
+	if (shippedAt !== null && !isTimestamp(shippedAt)) return null;
+
+	const items: StyriaOrder['items'] = [];
+	for (const item of value.items) {
+		if (!isRecord(item)) return null;
+		const quantity = normalizedPositiveInteger(item.quantity);
+		const retailPrice = normalizedMoney(item.retailPrice);
+		const designs = normalizeDesigns(item.designs);
+		if (
+			!isExactString(item.pn, 200) ||
+			quantity === null ||
+			retailPrice === null ||
+			typeof item.description !== 'string' ||
+			item.description.length > 2_000 ||
+			designs === null
+		) {
+			return null;
+		}
+		items.push({
+			pn: item.pn,
+			quantity,
+			retailPrice,
+			description: item.description,
+			designs
+		});
+	}
+
+	return {
+		id,
+		external_id: externalId,
+		created_at: value.created_at,
+		status: value.status,
+		deleted,
+		shipping_address: { country: value.shipping_address.country },
+		shipping: {
+			shippingMethod: value.shipping.shippingMethod,
+			trackingNumber,
+			shiped_at: shippedAt
+		},
+		items
+	};
+}
+
+function normalizeOrderList(value: unknown): StyriaOrder[] | null {
+	if (!Array.isArray(value)) return null;
+	const orders: StyriaOrder[] = [];
+	for (const candidate of value) {
+		const order = normalizeOrder(candidate);
+		if (order === null) return null;
+		orders.push(order);
+	}
+	return orders;
+}
+
+function httpError(status: number): StyriaError {
+	if (status === 429) return new StyriaError('STYRIA_RATE_LIMITED');
+	if (status >= 500) return new StyriaError('STYRIA_UNAVAILABLE');
+	return new StyriaError('STYRIA_REQUEST_REJECTED');
+}
+
+function invalidRequest(): never {
+	throw new StyriaError('STYRIA_REQUEST_REJECTED');
+}
+
+class HttpStyriaClient implements StyriaGateway {
+	private readonly baseUrl: string;
+	private readonly fetch: typeof globalThis.fetch;
+	private readonly timeoutMs: number;
+
+	constructor(private readonly options: StyriaClientOptions) {
+		if (
+			!isExactString(options.appId, 200) ||
+			!isExactString(options.secretKey, 500) ||
+			(options.timeoutMs !== undefined &&
+				(!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1))
+		) {
+			invalidRequest();
+		}
+		const baseUrl = (options.baseUrl ?? STYRIA_DEFAULT_BASE_URL).replace(/\/+$/, '');
+		try {
+			new URL(baseUrl);
+		} catch {
+			invalidRequest();
+		}
+		this.baseUrl = baseUrl;
+		this.fetch = options.fetch ?? globalThis.fetch;
+		this.timeoutMs = options.timeoutMs ?? STYRIA_DEFAULT_TIMEOUT_MS;
+	}
+
+	private async requestJson(url: string, init: RequestInit): Promise<unknown> {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+		timeout.unref?.();
+
+		try {
+			let response: Response;
+			try {
+				response = await this.fetch(url, { ...init, signal: controller.signal });
+			} catch {
+				throw new StyriaError(controller.signal.aborted ? 'STYRIA_TIMEOUT' : 'STYRIA_UNAVAILABLE');
+			}
+			if (!response.ok) throw httpError(response.status);
+
+			try {
+				return await response.json();
+			} catch {
+				throw new StyriaError(
+					controller.signal.aborted ? 'STYRIA_TIMEOUT' : 'STYRIA_RESPONSE_INVALID'
+				);
+			}
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
+	private signedGetUrl(path: string, parameters: Record<string, string>): string {
+		const unsignedParameters = new URLSearchParams();
+		for (const [key, value] of Object.entries({ AppId: this.options.appId, ...parameters }).sort(
+			([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)
+		)) {
+			unsignedParameters.append(key, value);
+		}
+		const unsignedQuery = unsignedParameters.toString();
+		return `${this.baseUrl}${path}?${unsignedQuery}&Signature=${signGet(
+			unsignedQuery,
+			this.options.secretKey
+		)}`;
+	}
+
+	async searchByExternalId(externalId: string, createdAfter: Date): Promise<StyriaOrder[]> {
+		if (
+			!isExactString(externalId, 200) ||
+			!(createdAfter instanceof Date) ||
+			!Number.isFinite(createdAfter.getTime())
+		) {
+			invalidRequest();
+		}
+		const matches: StyriaOrder[] = [];
+		let page = 1;
+		while (Number.isSafeInteger(page)) {
+			const payload = await this.requestJson(
+				this.signedGetUrl('/api/orders.php', {
+					created_at_min: createdAfter.toISOString(),
+					format: 'json',
+					limit: '250',
+					page: String(page)
+				}),
+				{ method: 'GET' }
+			);
+			const orders = normalizeOrderList(payload);
+			if (orders === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
+			matches.push(...orders.filter((order) => order.external_id === externalId));
+			if (orders.length < 250) return matches;
+			page += 1;
+		}
+		throw new StyriaError('STYRIA_RESPONSE_INVALID');
+	}
+
+	async create(payload: StyriaOrderPayload): Promise<StyriaOrder> {
+		let body: string;
+		try {
+			body = JSON.stringify(payload);
+		} catch {
+			invalidRequest();
+		}
+		const appIdQuery = new URLSearchParams({ AppId: this.options.appId }).toString();
+		const response = await this.requestJson(
+			`${this.baseUrl}/api/orders.php?${appIdQuery}&Signature=${signPost(
+				body,
+				this.options.secretKey
+			)}`,
+			{
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body
+			}
+		);
+		const order = normalizeOrder(response);
+		if (order === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
+		return order;
+	}
+
+	async get(orderId: string): Promise<StyriaOrder> {
+		if (!isExactString(orderId, 200)) invalidRequest();
+		const response = await this.requestJson(
+			this.signedGetUrl('/api/order.php', { format: 'json', id: orderId }),
+			{ method: 'GET' }
+		);
+		const order = normalizeOrder(response);
+		if (order === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
+		return order;
+	}
+}
+
+export function createStyriaClient(options: StyriaClientOptions): StyriaGateway {
+	return new HttpStyriaClient(options);
+}
