@@ -326,26 +326,35 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 		if (!isNonEmptyString(draftId) || !isNonEmptyString(sessionId)) {
 			fail('CHECKOUT_DRAFT_SESSION_INVALID');
 		}
-		const find = this.database.prepare(
-			'SELECT stripe_checkout_session_id FROM checkout_drafts WHERE id = ?'
-		);
-		const update = this.database.prepare(`
-			UPDATE checkout_drafts
-			SET stripe_checkout_session_id = ?
-			WHERE id = ? AND stripe_checkout_session_id IS NULL
-		`);
-		const attach = this.database.transaction(() => {
-			const row = find.get(draftId) as { stripe_checkout_session_id: unknown } | undefined;
-			if (!row) fail('CHECKOUT_DRAFT_NOT_FOUND');
-			if (row.stripe_checkout_session_id === sessionId) return;
-			if (row.stripe_checkout_session_id !== null) fail('CHECKOUT_DRAFT_SESSION_CONFLICT');
-			try {
+		try {
+			const find = this.database.prepare(
+				'SELECT stripe_checkout_session_id FROM checkout_drafts WHERE id = ?'
+			);
+			const update = this.database.prepare(`
+				UPDATE checkout_drafts
+				SET stripe_checkout_session_id = ?
+				WHERE id = ? AND stripe_checkout_session_id IS NULL
+			`);
+			const attach = this.database.transaction(() => {
+				const row = find.get(draftId) as { stripe_checkout_session_id: unknown } | undefined;
+				if (!row) fail('CHECKOUT_DRAFT_NOT_FOUND');
+				if (row.stripe_checkout_session_id === sessionId) return;
+				if (row.stripe_checkout_session_id !== null) fail('CHECKOUT_DRAFT_SESSION_CONFLICT');
 				update.run(sessionId, draftId);
-			} catch {
+			});
+			attach.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			if (
+				typeof error === 'object' &&
+				error !== null &&
+				'code' in error &&
+				error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+			) {
 				fail('CHECKOUT_SESSION_CONFLICT');
 			}
-		});
-		attach.immediate();
+			fail('CHECKOUT_DRAFT_SESSION_ATTACH_FAILED');
+		}
 	}
 
 	findById(draftId: string): CheckoutDraftWithLines | null {
@@ -365,21 +374,26 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 	markCompleted(draftId: string, completedAt: Date): void {
 		if (!isNonEmptyString(draftId)) fail('CHECKOUT_DRAFT_ID_INVALID');
 		const timestamp = isoTimestamp(completedAt, 'CHECKOUT_DRAFT_COMPLETION_INVALID');
-		const find = this.database.prepare(
-			'SELECT created_at, completed_at FROM checkout_drafts WHERE id = ?'
-		);
-		const update = this.database.prepare(`
-			UPDATE checkout_drafts SET completed_at = ? WHERE id = ? AND completed_at IS NULL
-		`);
-		const complete = this.database.transaction(() => {
-			const row = find.get(draftId) as { created_at: unknown; completed_at: unknown } | undefined;
-			if (!row) fail('CHECKOUT_DRAFT_NOT_FOUND');
-			const createdAt = dateFromIso(row.created_at, 'CHECKOUT_DRAFT_ROW_INVALID');
-			if (completedAt < createdAt) fail('CHECKOUT_DRAFT_COMPLETION_INVALID');
-			if (row.completed_at === timestamp) return;
-			if (row.completed_at !== null) fail('CHECKOUT_DRAFT_COMPLETION_CONFLICT');
-			update.run(timestamp, draftId);
-		});
-		complete.immediate();
+		try {
+			const find = this.database.prepare(
+				'SELECT created_at, completed_at FROM checkout_drafts WHERE id = ?'
+			);
+			const update = this.database.prepare(`
+				UPDATE checkout_drafts SET completed_at = ? WHERE id = ? AND completed_at IS NULL
+			`);
+			const complete = this.database.transaction(() => {
+				const row = find.get(draftId) as { created_at: unknown; completed_at: unknown } | undefined;
+				if (!row) fail('CHECKOUT_DRAFT_NOT_FOUND');
+				const createdAt = dateFromIso(row.created_at, 'CHECKOUT_DRAFT_ROW_INVALID');
+				if (completedAt < createdAt) fail('CHECKOUT_DRAFT_COMPLETION_INVALID');
+				if (row.completed_at === timestamp) return;
+				if (row.completed_at !== null) fail('CHECKOUT_DRAFT_COMPLETION_CONFLICT');
+				update.run(timestamp, draftId);
+			});
+			complete.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('CHECKOUT_DRAFT_COMPLETION_FAILED');
+		}
 	}
 }

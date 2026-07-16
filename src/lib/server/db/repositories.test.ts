@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
@@ -20,7 +22,66 @@ import { SqliteStripeEventRepository } from './stripe-events.server';
 import type { ShopDatabase } from './types';
 
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
+const claimContenderPath = fileURLToPath(
+	new URL('./repositories.claim-contender.mjs', import.meta.url)
+);
 const now = new Date('2026-07-16T08:30:00.000Z');
+
+type ClaimContender = {
+	child: ChildProcessWithoutNullStreams;
+	completion: Promise<string[]>;
+};
+
+async function waitForFiles(paths: readonly string[]): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (!paths.every(existsSync)) {
+		if (Date.now() >= deadline) throw new Error('CLAIM_TEST_BARRIER_TIMEOUT');
+		await delay(2);
+	}
+}
+
+function spawnClaimContender(
+	databasePath: string,
+	paths: { ready: string; start: string; attempt: string; result: string }
+): ClaimContender {
+	const child = spawn(process.execPath, [claimContenderPath], {
+		cwd: process.cwd(),
+		env: {
+			...process.env,
+			SHOP_DB_PATH: databasePath,
+			CLAIM_READY_PATH: paths.ready,
+			CLAIM_START_PATH: paths.start,
+			CLAIM_ATTEMPT_PATH: paths.attempt,
+			CLAIM_RESULT_PATH: paths.result,
+			CLAIM_NOW: now.toISOString()
+		}
+	});
+	let stderr = '';
+	child.stderr.setEncoding('utf8');
+	child.stderr.on('data', (chunk: string) => {
+		stderr += chunk;
+	});
+	const completion = new Promise<string[]>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			child.kill();
+			reject(new Error('CLAIM_CONTENDER_TIMEOUT'));
+		}, 10_000);
+		child.once('error', (error) => {
+			clearTimeout(timeout);
+			reject(error);
+		});
+		child.once('exit', (code) => {
+			clearTimeout(timeout);
+			if (code !== 0) {
+				reject(new Error(`CLAIM_CONTENDER_FAILED:${code}:${stderr.trim()}`));
+				return;
+			}
+			resolve(JSON.parse(readFileSync(paths.result, 'utf8')) as string[]);
+		});
+	});
+	void completion.catch(() => undefined);
+	return { child, completion };
+}
 
 function draftInput(overrides: Partial<NewCheckoutDraft> = {}): NewCheckoutDraft {
 	return {
@@ -182,6 +243,22 @@ describe('SqliteCheckoutDraftRepository', () => {
 		);
 	});
 
+	it('translates an unexpected SQLite attach failure to a stable repository error', () => {
+		const draft = drafts.create(draftInput());
+		database.exec(`
+			CREATE TRIGGER reject_session_attach BEFORE UPDATE OF stripe_checkout_session_id
+			ON checkout_drafts
+			BEGIN
+				SELECT RAISE(ABORT, 'raw attach failure');
+			END
+		`);
+
+		expect(() => drafts.attachSession(draft.id, 'cs_failed')).toThrowError(
+			'CHECKOUT_DRAFT_SESSION_ATTACH_FAILED'
+		);
+		expect(drafts.findById(draft.id)?.checkoutSessionId).toBeNull();
+	});
+
 	it('marks completion once without allowing completion time to regress or change', () => {
 		const draft = drafts.create(draftInput());
 		expect(() => drafts.markCompleted(draft.id, new Date('2026-07-16T07:59:59.999Z'))).toThrowError(
@@ -198,6 +275,22 @@ describe('SqliteCheckoutDraftRepository', () => {
 		);
 	});
 
+	it('translates an unexpected SQLite completion failure to a stable repository error', () => {
+		const draft = drafts.create(draftInput());
+		database.exec(`
+			CREATE TRIGGER reject_draft_completion BEFORE UPDATE OF completed_at
+			ON checkout_drafts
+			BEGIN
+				SELECT RAISE(ABORT, 'raw completion failure');
+			END
+		`);
+
+		expect(() => drafts.markCompleted(draft.id, now)).toThrowError(
+			'CHECKOUT_DRAFT_COMPLETION_FAILED'
+		);
+		expect(drafts.findById(draft.id)?.completedAt).toBeNull();
+	});
+
 	it('rejects non-canonical or malformed stored design JSON at the row boundary', () => {
 		const draft = drafts.create(draftInput());
 		database
@@ -208,11 +301,9 @@ describe('SqliteCheckoutDraftRepository', () => {
 });
 
 describe('SqliteStripeEventRepository', () => {
-	it('claims new events, excludes an in-flight duplicate, retries failures, and converges completion', () => {
+	it('claims new events, recovers an immediate duplicate, retries failures, and converges completion', () => {
 		expect(stripeEvents.begin('evt_one', 'checkout.session.completed', now)).toBe('new');
-		expect(() => stripeEvents.begin('evt_one', 'checkout.session.completed', now)).toThrowError(
-			'STRIPE_EVENT_IN_PROGRESS'
-		);
+		expect(stripeEvents.begin('evt_one', 'checkout.session.completed', now)).toBe('retry');
 
 		stripeEvents.fail('evt_one', 'STRIPE_RETRIEVE_FAILED');
 		expect(
@@ -246,6 +337,55 @@ describe('SqliteStripeEventRepository', () => {
 			first_seen_at: '2026-07-16T08:30:00.000Z',
 			completed_at: '2026-07-16T08:32:00.000Z'
 		});
+	});
+
+	it('recovers an abandoned processing event after a repository reconnect', () => {
+		closeDatabase();
+		const directory = mkdtempSync(join(tmpdir(), 'shop-stripe-event-'));
+		const path = join(directory, 'shop.sqlite');
+		const firstDatabase = new Database(path);
+		try {
+			firstDatabase.pragma('journal_mode = WAL');
+			firstDatabase.pragma('foreign_keys = ON');
+			firstDatabase.pragma('busy_timeout = 5000');
+			migrate(firstDatabase, migrationsDirectory);
+			expect(
+				new SqliteStripeEventRepository(firstDatabase).begin(
+					'evt_abandoned',
+					'checkout.session.completed',
+					now
+				)
+			).toBe('new');
+		} finally {
+			firstDatabase.close();
+		}
+
+		const restartedDatabase = new Database(path);
+		try {
+			restartedDatabase.pragma('foreign_keys = ON');
+			restartedDatabase.pragma('busy_timeout = 5000');
+			expect(
+				new SqliteStripeEventRepository(restartedDatabase).begin(
+					'evt_abandoned',
+					'checkout.session.completed',
+					new Date('2026-07-16T08:35:00.000Z')
+				)
+			).toBe('retry');
+			expect(
+				restartedDatabase
+					.prepare(
+						'SELECT processing_status, first_seen_at, completed_at FROM stripe_events WHERE stripe_event_id = ?'
+					)
+					.get('evt_abandoned')
+			).toEqual({
+				processing_status: 'processing',
+				first_seen_at: '2026-07-16T08:30:00.000Z',
+				completed_at: null
+			});
+		} finally {
+			restartedDatabase.close();
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	it('never changes an event type or regresses a completed event', () => {
@@ -395,7 +535,10 @@ describe('SqlitePaidOrderUnitOfWork', () => {
 	it('atomically creates or converges the order, lines, draft, audit, outbox, and Stripe event', () => {
 		const draft = drafts.create(draftInput());
 		drafts.attachSession(draft.id, 'cs_paid');
-		stripeEvents.begin('evt_paid', 'checkout.session.completed', now);
+		expect(stripeEvents.begin('evt_paid', 'checkout.session.completed', now)).toBe('new');
+		expect(
+			new SqliteStripeEventRepository(database).begin('evt_paid', 'checkout.session.completed', now)
+		).toBe('retry');
 		const unitOfWork = new SqlitePaidOrderUnitOfWork(database);
 		const input = paidOrderInput(draft.id);
 		const event = stripeEventInput();
@@ -586,31 +729,45 @@ describe('SqliteOutboxRepository', () => {
 		expect(outbox.claimDue(now, 2)).toEqual([]);
 	});
 
-	it('serializes claims across independent SQLite connections', () => {
+	it('serializes overlapping claims across barrier-synchronized Node processes', async () => {
 		closeDatabase();
 		const directory = mkdtempSync(join(tmpdir(), 'shop-outbox-'));
 		const path = join(directory, 'shop.sqlite');
-		const firstDatabase = new Database(path);
-		const secondDatabase = new Database(path);
+		const lockDatabase = new Database(path);
+		const startPath = join(directory, 'start');
+		const contenderPaths = [0, 1].map((index) => ({
+			ready: join(directory, `ready-${index}`),
+			start: startPath,
+			attempt: join(directory, `attempt-${index}`),
+			result: join(directory, `result-${index}.json`)
+		}));
+		let contenders: ClaimContender[] = [];
 		try {
-			for (const connection of [firstDatabase, secondDatabase]) {
-				connection.pragma('journal_mode = WAL');
-				connection.pragma('foreign_keys = ON');
-				connection.pragma('busy_timeout = 5000');
-			}
-			migrate(firstDatabase, migrationsDirectory);
-			const first = new SqliteOutboxRepository(firstDatabase);
-			const second = new SqliteOutboxRepository(secondDatabase);
-			first.enqueue(outboxInput({ idempotencyKey: 'shared-due-id' }));
+			lockDatabase.pragma('journal_mode = WAL');
+			lockDatabase.pragma('foreign_keys = ON');
+			lockDatabase.pragma('busy_timeout = 5000');
+			migrate(lockDatabase, migrationsDirectory);
+			new SqliteOutboxRepository(lockDatabase).enqueue(
+				outboxInput({ idempotencyKey: 'shared-due-id' })
+			);
+			lockDatabase.exec('BEGIN IMMEDIATE');
+			contenders = contenderPaths.map((paths) => spawnClaimContender(path, paths));
+			await waitForFiles(contenderPaths.map((paths) => paths.ready));
+			writeFileSync(startPath, 'start', { flag: 'wx' });
+			await waitForFiles(contenderPaths.map((paths) => paths.attempt));
+			lockDatabase.exec('COMMIT');
 
-			expect(first.claimDue(now, 1)).toHaveLength(1);
-			expect(second.claimDue(now, 1)).toEqual([]);
+			const results = await Promise.all(contenders.map((contender) => contender.completion));
+			expect(results.map((result) => result.length).sort()).toEqual([0, 1]);
+			expect(results.flat()).toEqual(['shared-due-id']);
 		} finally {
-			firstDatabase.close();
-			secondDatabase.close();
+			if (lockDatabase.inTransaction) lockDatabase.exec('ROLLBACK');
+			for (const contender of contenders) contender.child.kill();
+			await Promise.allSettled(contenders.map((contender) => contender.completion));
+			lockDatabase.close();
 			rmSync(directory, { recursive: true, force: true });
 		}
-	});
+	}, 15_000);
 
 	it('reschedules monotonically and completes without resurrecting a job', () => {
 		outbox.enqueue(outboxInput());

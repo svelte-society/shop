@@ -79,9 +79,9 @@ export class SqliteStripeEventRepository implements StripeEventRepository {
 			}
 			if (row.event_type !== eventType) fail('STRIPE_EVENT_TYPE_CONFLICT');
 			if (row.processing_status === 'completed') return 'completed';
-			if (row.processing_status === 'processing') fail('STRIPE_EVENT_IN_PROGRESS');
+			if (row.processing_status === 'processing') return 'retry';
 			if (row.processing_status !== 'failed') fail('STRIPE_EVENT_ROW_INVALID');
-			if (retry.run(eventId).changes !== 1) fail('STRIPE_EVENT_IN_PROGRESS');
+			if (retry.run(eventId).changes !== 1) fail('STRIPE_EVENT_BEGIN_CONFLICT');
 			return 'retry';
 		});
 
