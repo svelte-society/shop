@@ -38,3 +38,20 @@ export interface StripeOrderGateway {
 	retrievePaidCheckout(sessionId: string): Promise<PaidCheckoutSnapshot>;
 	retrieveRefundStatus(paymentIntentId: string): Promise<PaymentStatus>;
 }
+
+export type FulfillmentDetails = {
+	recipient: { firstName: string; lastName: string; company: string; phone: string };
+	address: {
+		line1: string;
+		line2: string;
+		city: string;
+		state: string;
+		postalCode: string;
+		countryCode: string;
+	};
+	email: string;
+};
+
+export interface StripeFulfillmentGateway {
+	retrieveFulfillmentDetails(checkoutSessionId: string): Promise<FulfillmentDetails>;
+}
