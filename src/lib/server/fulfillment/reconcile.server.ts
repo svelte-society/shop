@@ -8,6 +8,7 @@ import { canonicalJson, styriaCountryName } from '$lib/server/styria/payload';
 import type { StyriaOrder } from '$lib/server/styria/types';
 
 const AMBIGUOUS_ERROR_CODE = 'STYRIA_CREATE_AMBIGUOUS';
+const RECORD_ERROR_CODE = 'STYRIA_RECONCILIATION_RECORD_FAILED';
 
 export interface ReconciliationService {
 	reconcile(
@@ -82,14 +83,17 @@ function hasSearchableOrderShape(value: unknown): value is StyriaOrder {
 }
 
 function submissionEvidenceTimestamp(order: OrderWithLinesAndEvents): Date {
-	const paidEvents = order.events
-		.filter(
-			(event) => event.action === 'paid_order_recorded' || event.action === 'paid_order_converged'
-		)
-		.map((event) => event.createdAt)
-		.filter(validDate)
-		.sort((left, right) => left.getTime() - right.getTime());
-	return new Date(paidEvents[0] ?? order.updatedAt);
+	const paidEvents = order.events.filter(
+		(event) => event.action === 'paid_order_recorded' || event.action === 'paid_order_converged'
+	);
+	if (paidEvents.length === 0 || paidEvents.some((event) => !validDate(event.createdAt))) {
+		throw new Error('paid-order audit invalid');
+	}
+	return new Date(
+		paidEvents
+			.map((event) => event.createdAt)
+			.sort((left, right) => left.getTime() - right.getTime())[0]
+	);
 }
 
 function itemSummary(item: StyriaOrder['items'][number]): string {
@@ -155,9 +159,9 @@ export function isConsistentStyriaOrder(
 export class StyriaReconciliationService implements ReconciliationService {
 	constructor(private readonly dependencies: ReconciliationDependencies) {}
 
-	private requireReview(orderId: string, now: Date): void {
+	private requireReview(orderId: string, now: Date, errorCode = AMBIGUOUS_ERROR_CODE): void {
 		try {
-			this.dependencies.fulfillment.requireReview(orderId, AMBIGUOUS_ERROR_CODE, now);
+			this.dependencies.fulfillment.requireReview(orderId, errorCode, now);
 		} catch {
 			fail('STYRIA_RECONCILIATION_STATE_FAILED');
 		}
@@ -207,7 +211,10 @@ export class StyriaReconciliationService implements ReconciliationService {
 					now
 				);
 			} catch {
-				fail('STYRIA_RECONCILIATION_RECORD_FAILED');
+				if (order.fulfillmentStatus === 'submitting') {
+					this.requireReview(orderId, now, RECORD_ERROR_CODE);
+				}
+				fail(RECORD_ERROR_CODE);
 			}
 			return {
 				outcome: 'reconciled',

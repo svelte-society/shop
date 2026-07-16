@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { OrderEvent, OrderWithLines } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
 import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
+import {
+	createStripeFulfillmentGateway,
+	type StripeFulfillmentClient
+} from '$lib/server/stripe/client.server';
 import type { FulfillmentDetails, StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { StyriaError, type StyriaGateway } from '$lib/server/styria/gateway';
 import { buildStyriaPayload, hashStyriaPayload } from '$lib/server/styria/payload';
@@ -238,18 +242,19 @@ function setup(
 		details?: FulfillmentDetails;
 		approvedHash?: string;
 		fulfillment?: MemoryFulfillment;
+		stripe?: StripeFulfillmentGateway;
 		styria?: FakeStyria;
 	} = {}
 ): {
 	service: FulfillmentSubmissionService;
 	fulfillment: MemoryFulfillment;
-	stripe: CurrentStripe;
+	stripe: StripeFulfillmentGateway;
 	styria: FakeStyria;
 } {
 	const fulfillment =
 		overrides.fulfillment ??
 		new MemoryFulfillment(overrides.order ?? orderFixture(), overrides.approvedHash);
-	const stripe = new CurrentStripe(overrides.details);
+	const stripe = overrides.stripe ?? new CurrentStripe(overrides.details);
 	const styria = overrides.styria ?? new FakeStyria();
 	styria.assertNoTransaction = () => fulfillment.transactionOpen;
 	const dependencies: SubmissionDependencies = {
@@ -272,6 +277,54 @@ function submit(service: FulfillmentSubmissionService, approvalId = 'approval_va
 }
 
 describe('fulfillment submission approval binding', () => {
+	it('invalidates approval after the current Customer company changes while Session snapshot stays stale', async () => {
+		const session = {
+			id: 'cs_test_submit',
+			object: 'checkout.session',
+			customer_details: { business_name: 'Analytical Engines AB' },
+			customer: {
+				id: 'cus_test_submit',
+				object: 'customer',
+				business_name: 'Analytical Engines AB',
+				email: 'ada@example.test',
+				shipping: {
+					name: 'Ada Lovelace',
+					phone: '+46 70 123 45 67',
+					address: {
+						line1: 'Sveltegatan 5',
+						line2: 'Suite 3',
+						city: 'Stockholm',
+						state: 'Stockholm',
+						postal_code: '111 22',
+						country: 'SE'
+					}
+				}
+			}
+		};
+		const calls: string[] = [];
+		const client: StripeFulfillmentClient = {
+			checkout: {
+				sessions: {
+					async retrieve(checkoutSessionId) {
+						calls.push(checkoutSessionId);
+						return structuredClone(session);
+					}
+				}
+			}
+		};
+		const state = setup({ stripe: createStripeFulfillmentGateway(client) });
+		session.customer.business_name = 'Updated Current Company AB';
+
+		await expect(submit(state.service)).rejects.toMatchObject({
+			code: 'SUBMISSION_APPROVAL_HASH_MISMATCH'
+		});
+
+		expect(session.customer_details.business_name).toBe('Analytical Engines AB');
+		expect(calls).toEqual(['cs_test_submit']);
+		expect(state.fulfillment.order.fulfillmentStatus).toBe('pending_review');
+		expect(state.styria.calls).toEqual([]);
+	});
+
 	it.each([
 		['expired', 'approval_expired', 'SUBMISSION_APPROVAL_EXPIRED'],
 		['wrong order', 'approval_wrong', 'SUBMISSION_APPROVAL_ORDER_MISMATCH']

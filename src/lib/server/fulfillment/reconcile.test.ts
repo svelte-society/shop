@@ -96,7 +96,9 @@ type Inspected = NonNullable<ReturnType<FulfillmentRepository['inspect']>>;
 
 class MemoryFulfillment {
 	readonly calls: string[] = [];
+	events: OrderEvent[] = [paidEvent()];
 	recordFailures = 0;
+	reviewFailures = 0;
 
 	constructor(readonly order = orderFixture()) {}
 
@@ -105,7 +107,7 @@ class MemoryFulfillment {
 		if (orderId !== this.order.id) return null;
 		return {
 			...structuredClone(this.order),
-			events: [paidEvent()],
+			events: structuredClone(this.events),
 			supportNotes: []
 		};
 	}
@@ -124,6 +126,9 @@ class MemoryFulfillment {
 
 	requireReview(orderId: string, errorCode: string, at: Date): void {
 		this.calls.push('requireReview');
+		if (this.reviewFailures-- > 0) {
+			throw new Error('raw database failure with Ada provider data');
+		}
 		if (orderId !== this.order.id) throw new RepositoryError('ORDER_NOT_FOUND');
 		this.order.fulfillmentStatus = 'review_required';
 		this.order.lastErrorCode = errorCode;
@@ -163,6 +168,26 @@ function setup(status: FulfillmentStatus = 'review_required') {
 }
 
 describe('Styria submission reconciliation', () => {
+	it.each([
+		['missing', []],
+		['malformed', [{ ...paidEvent(), createdAt: new Date(Number.NaN) }]]
+	] as const)(
+		'fails closed before Styria search when paid-order audit is %s',
+		async (_label, events) => {
+			const state = setup();
+			state.fulfillment.events = [...events];
+
+			await expect(state.service.reconcile('order_reconcile', now)).rejects.toMatchObject({
+				name: 'ReconciliationError',
+				code: 'STYRIA_RECONCILIATION_EVIDENCE_INVALID',
+				message: 'STYRIA_RECONCILIATION_EVIDENCE_INVALID'
+			});
+
+			expect(state.fulfillment.calls).toEqual(['inspect']);
+			expect(state.styria.calls).toEqual([]);
+		}
+	);
+
 	it('returns not_found for zero exact matches and retains review state', async () => {
 		const state = setup();
 
@@ -195,6 +220,41 @@ describe('Styria submission reconciliation', () => {
 				lastErrorCode: null
 			})
 		);
+	});
+
+	it('moves submitting to review when recording one consistent match fails', async () => {
+		const state = setup('submitting');
+		state.styria.matches = [remoteOrder()];
+		state.fulfillment.recordFailures = 1;
+
+		await expect(state.service.reconcile('order_reconcile', now)).rejects.toMatchObject({
+			name: 'ReconciliationError',
+			code: 'STYRIA_RECONCILIATION_RECORD_FAILED',
+			message: 'STYRIA_RECONCILIATION_RECORD_FAILED'
+		});
+
+		expect(state.fulfillment.calls).toEqual(['inspect', 'recordSubmitted', 'requireReview']);
+		expect(state.fulfillment.order.fulfillmentStatus).toBe('review_required');
+		expect(state.fulfillment.order.lastErrorCode).toBe('STYRIA_RECONCILIATION_RECORD_FAILED');
+	});
+
+	it('returns a stable state failure when record and review writes both fail', async () => {
+		const state = setup('submitting');
+		state.styria.matches = [remoteOrder()];
+		state.fulfillment.recordFailures = 1;
+		state.fulfillment.reviewFailures = 1;
+
+		const operation = state.service.reconcile('order_reconcile', now);
+		await expect(operation).rejects.toMatchObject({
+			name: 'ReconciliationError',
+			code: 'STYRIA_RECONCILIATION_STATE_FAILED',
+			message: 'STYRIA_RECONCILIATION_STATE_FAILED'
+		});
+		await expect(operation).rejects.not.toThrow(/Ada|provider|database failure/);
+
+		expect(state.fulfillment.calls).toEqual(['inspect', 'recordSubmitted', 'requireReview']);
+		expect(state.fulfillment.order.fulfillmentStatus).toBe('submitting');
+		expect(state.fulfillment.order.styriaOrderId).toBeNull();
 	});
 
 	it.each([
