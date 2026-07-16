@@ -12,6 +12,7 @@ function sessionFixture() {
 		customer: {
 			id: 'cus_test_fulfillment',
 			object: 'customer',
+			business_name: 'Analytical Engines AB',
 			email: 'ada@example.test',
 			name: 'Ada Lovelace',
 			phone: '+46 70 123 45 67',
@@ -84,7 +85,7 @@ describe('Stripe fulfillment details', () => {
 
 	it('normalizes absent optional company, address line two, and non-US state', async () => {
 		const session = sessionFixture();
-		session.customer_details.business_name = null as unknown as string;
+		session.customer.business_name = null as unknown as string;
 		session.customer.shipping.address.line2 = null as unknown as string;
 		session.customer.shipping.address.state = null as unknown as string;
 
@@ -100,7 +101,7 @@ describe('Stripe fulfillment details', () => {
 
 	it('normalizes empty optional company, address line two, and non-US state', async () => {
 		const session = sessionFixture();
-		session.customer_details.business_name = '';
+		session.customer.business_name = '';
 		session.customer.shipping.address.line2 = '';
 		session.customer.shipping.address.state = '';
 
@@ -196,6 +197,32 @@ describe('Stripe fulfillment details', () => {
 			consoleError.mockRestore();
 			consoleLog.mockRestore();
 		}
+	});
+
+	it('rejects an invalid current Customer business name with a stable redacted error', async () => {
+		const session = sessionFixture();
+		session.customer.business_name = 'Private Company AB\nraw Stripe field';
+		const operation = createStripeFulfillmentGateway(
+			new ContractStripeClient(session)
+		).retrieveFulfillmentDetails('cs_test_fulfillment');
+
+		await expectStableCode(operation, 'STRIPE_FULFILLMENT_DETAILS_INVALID');
+		await expect(operation).rejects.not.toThrow(/Private Company|raw Stripe/);
+	});
+
+	it('re-reads current Customer business name while the Session snapshot remains stale', async () => {
+		const session = sessionFixture();
+		const client = new ContractStripeClient(session);
+		const gateway = createStripeFulfillmentGateway(client);
+
+		const first = await gateway.retrieveFulfillmentDetails('cs_test_fulfillment');
+		session.customer.business_name = 'Current Engines AB';
+		const second = await gateway.retrieveFulfillmentDetails('cs_test_fulfillment');
+
+		expect(session.customer_details.business_name).toBe('Analytical Engines AB');
+		expect(first.recipient.company).toBe('Analytical Engines AB');
+		expect(second.recipient.company).toBe('Current Engines AB');
+		expect(client.calls).toHaveLength(2);
 	});
 
 	it('retrieves Stripe again for every action and retains no cached fulfillment response', async () => {

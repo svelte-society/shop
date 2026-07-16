@@ -102,7 +102,7 @@ function normalizeFulfillmentDetails(
 
 	const customerDetails = value.customer_details;
 	if (!isRecord(customerDetails)) fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
-	const company = optionalString(customerDetails.business_name, 200);
+	const company = optionalString(value.customer.business_name, 200);
 
 	return {
 		recipient: {

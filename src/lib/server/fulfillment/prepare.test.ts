@@ -6,6 +6,10 @@ import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
 import type { FulfillmentDetails, StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
+import {
+	createStripeFulfillmentGateway,
+	type StripeFulfillmentClient
+} from '$lib/server/stripe/client.server';
 import type { StyriaOrderPayload } from '$lib/server/styria/types';
 import {
 	SqliteApprovalRepository,
@@ -188,6 +192,68 @@ function expectBlocked(result: PreparationResult, code: string): void {
 }
 
 describe('fulfillment preparation', () => {
+	it('binds approvals to the current Customer business name instead of the stale Session snapshot', async () => {
+		const session = {
+			id: 'cs_test_prepare',
+			object: 'checkout.session',
+			customer_details: { business_name: 'Stale Snapshot Company AB' },
+			customer: {
+				id: 'cus_test_prepare',
+				object: 'customer',
+				business_name: 'Current Company AB',
+				email: 'ada@example.test',
+				shipping: {
+					name: 'Ada Lovelace',
+					phone: '+46 70 123 45 67',
+					address: {
+						line1: 'Sveltegatan 5',
+						line2: 'Suite 3',
+						city: 'Stockholm',
+						state: 'Stockholm',
+						postal_code: '111 22',
+						country: 'SE'
+					}
+				}
+			}
+		};
+		const calls: string[] = [];
+		const client: StripeFulfillmentClient = {
+			checkout: {
+				sessions: {
+					async retrieve(checkoutSessionId) {
+						calls.push(checkoutSessionId);
+						return structuredClone(session);
+					}
+				}
+			}
+		};
+		const approvals = new CapturingApprovals();
+		const preparation = new FulfillmentPreparationService({
+			fulfillment: new StaticOrderReader(orderFixture()),
+			stripe: createStripeFulfillmentGateway(client),
+			approvals,
+			brandName: 'Svelte Society',
+			comment: 'Approved Svelte Society fulfillment'
+		});
+
+		const first = await preparation.prepare('order_prepare', now);
+		session.customer.business_name = 'Updated Current Company AB';
+		const second = await preparation.prepare('order_prepare', now);
+
+		expect(session.customer_details.business_name).toBe('Stale Snapshot Company AB');
+		expect(first.status).toBe('ready');
+		expect(second.status).toBe('ready');
+		if (first.status !== 'ready' || second.status !== 'ready') throw new Error('Expected ready');
+		expect(first.payload.shipping_address.company).toBe('Current Company AB');
+		expect(second.payload.shipping_address.company).toBe('Updated Current Company AB');
+		expect(second.payloadHash).not.toBe(first.payloadHash);
+		expect(approvals.creates.map((approval) => approval.payloadHash)).toEqual([
+			first.payloadHash,
+			second.payloadHash
+		]);
+		expect(calls).toEqual(['cs_test_prepare', 'cs_test_prepare']);
+	});
+
 	it('prepares the exact Styria payload and a random ten-minute one-use approval', async () => {
 		const setup = service();
 
