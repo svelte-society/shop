@@ -80,7 +80,7 @@ function isHttpsUrl(value: string): boolean {
 	}
 }
 
-function countryName(code: string): string {
+export function styriaCountryName(code: string): string {
 	if (!Object.hasOwn(COUNTRY_NAMES, code)) fail('STYRIA_COUNTRY_UNSUPPORTED');
 	return COUNTRY_NAMES[code as keyof typeof COUNTRY_NAMES];
 }
@@ -109,7 +109,7 @@ export function buildStyriaPayload(input: {
 		fail('STYRIA_FULFILLMENT_INVALID');
 	}
 	if (order.destinationCountry !== address.countryCode) fail('STYRIA_FULFILLMENT_INVALID');
-	const fullCountryName = countryName(address.countryCode);
+	const fullCountryName = styriaCountryName(address.countryCode);
 
 	if (
 		!isExactString(order.checkoutSessionId, 200) ||
