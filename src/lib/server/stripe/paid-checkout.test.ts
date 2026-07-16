@@ -358,11 +358,24 @@ describe('Stripe paid Checkout normalization', () => {
 
 	it.each([
 		[
-			'unpaid Session',
-			(session: StripeFixtureCheckoutSession) => (session.payment_status = 'unpaid')
+			'complete unpaid Session',
+			(session: StripeFixtureCheckoutSession) => (session.payment_status = 'unpaid'),
+			'STRIPE_PAID_CHECKOUT_SESSION_UNPAID'
 		],
-		['open Session', (session: StripeFixtureCheckoutSession) => (session.status = 'open')]
-	])('classifies an %s separately from stale settlement state', async (_label, mutate) => {
+		[
+			'open paid Session',
+			(session: StripeFixtureCheckoutSession) => (session.status = 'open'),
+			'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED'
+		],
+		[
+			'open unpaid Session',
+			(session: StripeFixtureCheckoutSession) => {
+				session.status = 'open';
+				session.payment_status = 'unpaid';
+			},
+			'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED'
+		]
+	])('classifies a %s with status precedence', async (_label, mutate, code) => {
 		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture.session);
 
@@ -370,7 +383,7 @@ describe('Stripe paid Checkout normalization', () => {
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
 			),
-			'STRIPE_PAID_CHECKOUT_SESSION_UNPAID'
+			code
 		);
 	});
 

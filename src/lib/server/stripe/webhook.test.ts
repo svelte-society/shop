@@ -21,13 +21,21 @@ import {
 	type RefundOrderUnitOfWork
 } from '$lib/server/orders/intake.server';
 import type { PaidCheckoutSnapshot, StripeOrderGateway } from './gateway';
-import { PaidCheckoutError } from './paid-checkout';
+import {
+	createStripeOrderGateway,
+	PaidCheckoutError,
+	type StripeOrderClient
+} from './paid-checkout';
 import {
 	createStripeWebhookService,
 	createStripeWebhookVerifier,
 	StripeWebhookError,
 	type StripeWebhookVerifier
 } from './webhook.server';
+import {
+	paidCheckoutProviderFixture,
+	type PaidCheckoutProviderFixture
+} from '../../../../tests/fixtures/stripe-paid-checkout';
 
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
 const RAW_BODY = '{\n  "id": "evt_paid",\n  "email": "private@example.test"\n}\n';
@@ -133,6 +141,21 @@ function deferred<T>() {
 		reject = rejectPromise;
 	});
 	return { promise, resolve, reject };
+}
+
+function providerGateway(provider: PaidCheckoutProviderFixture): StripeOrderGateway {
+	const client: StripeOrderClient = {
+		checkout: {
+			sessions: {
+				retrieve: async () => structuredClone(provider.session),
+				listLineItems: async () => structuredClone(provider.linePages[0])
+			}
+		},
+		paymentIntents: {
+			retrieve: async () => structuredClone(provider.refundPaymentIntent)
+		}
+	};
+	return createStripeOrderGateway(client);
 }
 
 describe('Stripe webhook service', () => {
@@ -456,10 +479,16 @@ describe('Stripe webhook service', () => {
 	});
 
 	it('acknowledges an unpaid completion and completes its event without an order', async () => {
+		const provider = paidCheckoutProviderFixture({
+			sessionId: 'cs_paid',
+			paymentIntentId: 'pi_paid',
+			customerId: 'cus_paid',
+			draftId
+		});
+		provider.session.payment_status = 'unpaid';
+		const gateway = providerGateway(provider);
 		const route = fixture({
-			retrievePaidCheckout: async () => {
-				throw new PaidCheckoutError('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
-			}
+			retrievePaidCheckout: gateway.retrievePaidCheckout
 		});
 
 		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
@@ -475,6 +504,40 @@ describe('Stripe webhook service', () => {
 			stripe_checkout_session_id: 'cs_paid',
 			stripe_payment_intent_id: null
 		});
+	});
+
+	it('retries an open paid Session and converges when the same Session becomes complete', async () => {
+		const provider = paidCheckoutProviderFixture({
+			sessionId: 'cs_paid',
+			paymentIntentId: 'pi_paid',
+			customerId: 'cus_paid',
+			draftId
+		});
+		provider.session.status = 'open';
+		const gateway = providerGateway(provider);
+		const route = fixture({ retrievePaidCheckout: gateway.retrievePaidCheckout });
+
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).rejects.toMatchObject({
+			code: 'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED',
+			retryable: true
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 0 });
+		expect(
+			database
+				.prepare('SELECT processing_status, last_error_code, completed_at FROM stripe_events')
+				.get()
+		).toEqual({
+			processing_status: 'failed',
+			last_error_code: 'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED',
+			completed_at: null
+		});
+
+		provider.session.status = 'complete';
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+		expect(
+			database.prepare('SELECT processing_status, last_error_code FROM stripe_events').get()
+		).toEqual({ processing_status: 'completed', last_error_code: null });
 	});
 
 	it.each([

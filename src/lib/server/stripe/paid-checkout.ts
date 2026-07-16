@@ -580,9 +580,8 @@ function normalizePaidCheckout(
 	) {
 		fail('STRIPE_PAID_CHECKOUT_INVALID');
 	}
-	if (session.status !== 'complete' || session.payment_status !== 'paid') {
-		fail('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
-	}
+	if (session.status !== 'complete') fail('STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED');
+	if (session.payment_status !== 'paid') fail('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
 	requireCurrency(session.currency);
 
 	const draftId = validateMetadata(session.metadata);
