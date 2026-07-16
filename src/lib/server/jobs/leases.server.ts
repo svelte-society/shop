@@ -2,6 +2,7 @@ import type { ShopDatabase } from '$lib/server/db/types';
 
 export interface LeaseRepository {
 	acquire(name: string, ownerId: string, now: Date, ttlMs: number): boolean;
+	renew(name: string, ownerId: string, now: Date, ttlMs: number): boolean;
 	release(name: string, ownerId: string): void;
 }
 
@@ -20,6 +21,19 @@ export class SqliteLeaseRepository implements LeaseRepository {
 				WHERE job_leases.expires_at <= ?`
 			)
 			.run(name, ownerId, expiresAt, now.toISOString());
+
+		return result.changes === 1;
+	}
+
+	renew(name: string, ownerId: string, now: Date, ttlMs: number): boolean {
+		const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+		const result = this.database
+			.prepare(
+				`UPDATE job_leases
+				SET expires_at = ?
+				WHERE name = ? AND owner_id = ? AND expires_at > ?`
+			)
+			.run(expiresAt, name, ownerId, now.toISOString());
 
 		return result.changes === 1;
 	}

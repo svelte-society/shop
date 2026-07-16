@@ -18,6 +18,15 @@ import {
 
 const migrationsDirectory = resolve('migrations');
 const initialNow = new Date('2026-07-16T08:30:00.000Z');
+const schedulerRuntimeEnvironment = {
+	DATABASE_PATH: ':memory:',
+	SCHEDULER_ENABLED: 'true',
+	PLUNK_SECRET_KEY: 'sk_test_scheduler',
+	ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
+	PLUNK_FROM_NAME: 'Svelte Society Shop',
+	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+};
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -30,21 +39,48 @@ function deferred<T>() {
 }
 
 function timerHarness() {
-	let callback: (() => void) | undefined;
-	const handle: SchedulerTimerHandle = { unref: vi.fn() };
+	type TimerEntry = {
+		callback: () => void;
+		intervalMs: number;
+		handle: SchedulerTimerHandle;
+		cancelled: boolean;
+	};
+	const entries: TimerEntry[] = [];
 	const schedule: SchedulerTimer = vi.fn((scheduledCallback, intervalMs) => {
-		callback = scheduledCallback;
-		expect(intervalMs).toBe(60_000);
+		const handle: SchedulerTimerHandle = { unref: vi.fn() };
+		entries.push({ callback: scheduledCallback, intervalMs, handle, cancelled: false });
 		return handle;
 	});
-	const cancel = vi.fn();
+	const cancel = vi.fn((handle: SchedulerTimerHandle) => {
+		const entry = entries.find((candidate) => candidate.handle === handle);
+		if (entry) entry.cancelled = true;
+	});
+	const latestActive = (intervalMs: number): TimerEntry | undefined => {
+		for (let index = entries.length - 1; index >= 0; index -= 1) {
+			const entry = entries[index];
+			if (entry.intervalMs === intervalMs && !entry.cancelled) return entry;
+		}
+	};
 	return {
-		handle,
 		schedule,
 		cancel,
-		fire() {
-			if (!callback) throw new Error('TEST_TIMER_NOT_SCHEDULED');
-			callback();
+		handles(intervalMs: number) {
+			return entries
+				.filter((entry) => entry.intervalMs === intervalMs)
+				.map((entry) => entry.handle);
+		},
+		isCancelled(handle: SchedulerTimerHandle) {
+			return entries.find((entry) => entry.handle === handle)?.cancelled ?? false;
+		},
+		fire(intervalMs = 60_000) {
+			const entry = latestActive(intervalMs);
+			if (!entry) throw new Error('TEST_TIMER_NOT_SCHEDULED');
+			entry.callback();
+		},
+		fireCaptured(intervalMs = 60_000) {
+			const entry = [...entries].reverse().find((candidate) => candidate.intervalMs === intervalMs);
+			if (!entry) throw new Error('TEST_TIMER_NOT_SCHEDULED');
+			entry.callback();
 		}
 	};
 }
@@ -89,10 +125,11 @@ describe('application runtime', () => {
 			test: false
 		};
 
-		const first = application.start(options);
-		const second = application.start(options);
+		const firstStart = application.start(options);
+		const secondStart = application.start(options);
 
-		expect(second).toBe(first);
+		expect(secondStart).toBe(firstStart);
+		const first = await firstStart;
 		expect(sequence).toEqual([
 			'migration-started',
 			'migration-finished',
@@ -110,7 +147,7 @@ describe('application runtime', () => {
 		const createScheduler = vi.fn();
 		const application = createApplicationLifecycle({ migrationsDirectory, createScheduler });
 
-		const runtime = application.start({
+		const runtime = await application.start({
 			environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'false' },
 			building: false,
 			test: false
@@ -124,6 +161,95 @@ describe('application runtime', () => {
 		await application.stop();
 	});
 
+	it('defaults an absent scheduler flag to disabled after database readiness', async () => {
+		closeDatabase();
+		const createScheduler = vi.fn();
+		const application = createApplicationLifecycle({ migrationsDirectory, createScheduler });
+
+		const runtime = await application.start({
+			environment: { DATABASE_PATH: ':memory:' },
+			building: false,
+			test: false
+		});
+
+		expect(runtime?.scheduler).toBeNull();
+		expect(createScheduler).not.toHaveBeenCalled();
+		expect(runtime?.database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
+			count: 1
+		});
+		await application.stop();
+	});
+
+	it('fails closed on an invalid scheduler flag and closes the ready database', async () => {
+		closeDatabase();
+		let openedDatabase: ShopDatabase | undefined;
+		const createScheduler = vi.fn();
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			openDatabase(path) {
+				openedDatabase = openDatabase(path);
+				return openedDatabase;
+			},
+			createScheduler
+		});
+
+		await expect(
+			application.start({
+				environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'yes' },
+				building: false,
+				test: false
+			})
+		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
+		expect(createScheduler).not.toHaveBeenCalled();
+		expect(openedDatabase?.open).toBe(false);
+	});
+
+	it.each([
+		'PLUNK_SECRET_KEY',
+		'ADMIN_EMAIL',
+		'PLUNK_FROM_NAME',
+		'PLUNK_FROM_EMAIL',
+		'SUPPORT_EMAIL'
+	])('rejects enabled production scheduler wiring without %s', async (missingName) => {
+		closeDatabase();
+		let openedDatabase: ShopDatabase | undefined;
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			openDatabase(path) {
+				openedDatabase = openDatabase(path);
+				return openedDatabase;
+			}
+		});
+
+		await expect(
+			application.start({
+				environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
+				building: false,
+				test: false
+			})
+		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
+		expect(openedDatabase?.open).toBe(false);
+	});
+
+	it('wires the enabled production scheduler to migrated SQLite and records its immediate run', async () => {
+		closeDatabase();
+		const application = createApplicationLifecycle({ migrationsDirectory });
+
+		const runtime = await application.start({
+			environment: schedulerRuntimeEnvironment,
+			building: false,
+			test: false
+		});
+
+		expect(runtime?.scheduler).toBeInstanceOf(OutboxScheduler);
+		await runtime?.scheduler?.stop();
+		expect(
+			runtime?.database.prepare('SELECT name, result, error_code FROM job_runs ORDER BY id').all()
+		).toEqual([{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null }]);
+		await application.stop();
+		expect(runtime?.database.open).toBe(false);
+	});
+
 	it.each([
 		{ building: true, test: false },
 		{ building: false, test: true }
@@ -134,9 +260,9 @@ describe('application runtime', () => {
 			openDatabase: open as ApplicationRuntimeDependencies['openDatabase']
 		});
 
-		expect(
+		await expect(
 			application.start({ environment: {}, building: mode.building, test: mode.test })
-		).toBeNull();
+		).resolves.toBeNull();
 		expect(open).not.toHaveBeenCalled();
 		await application.stop();
 	});
@@ -157,13 +283,13 @@ describe('application runtime', () => {
 			createScheduler
 		});
 
-		expect(() =>
+		await expect(
 			application.start({
 				environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
 				building: false,
 				test: false
 			})
-		).toThrowError('MIGRATION_FAILED');
+		).rejects.toThrowError('MIGRATION_FAILED');
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(openedDatabase?.open).toBe(false);
 		await application.stop();
@@ -186,13 +312,70 @@ describe('application runtime', () => {
 			test: false
 		};
 
-		expect(() => application.start(options)).toThrowError('SCHEDULER_START_FAILED');
-		expect(() => application.start(options)).not.toThrow();
+		await expect(application.start(options)).rejects.toThrowError('SCHEDULER_START_FAILED');
+		await expect(application.start(options)).resolves.not.toBeNull();
 
 		expect(createScheduler).toHaveBeenCalledTimes(2);
 		expect(scheduler.start).toHaveBeenCalledTimes(2);
 		await application.stop();
+		expect(scheduler.stop).toHaveBeenCalledTimes(2);
+	});
+
+	it('awaits partial scheduler cleanup before closing SQLite after startup fails', async () => {
+		closeDatabase();
+		const cleanup = deferred<void>();
+		const startupFailure = new Error('SCHEDULER_START_FAILED');
+		const sequence: string[] = [];
+		let timerInstalled = false;
+		let openedDatabase: ShopDatabase | undefined;
+		const scheduler = {
+			start: vi.fn(() => {
+				timerInstalled = true;
+				throw startupFailure;
+			}),
+			stop: vi.fn(async () => {
+				sequence.push('scheduler-stop');
+				timerInstalled = false;
+				await cleanup.promise;
+				sequence.push('scheduler-stopped');
+			}),
+			runOutboxOnce: vi.fn(async () => undefined)
+		};
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			openDatabase(path) {
+				openedDatabase = openDatabase(path);
+				return openedDatabase;
+			},
+			closeDatabase() {
+				sequence.push('database-close');
+				closeDatabase();
+			},
+			createScheduler: () => scheduler
+		});
+
+		let startupSettled = false;
+		const startup = application
+			.start({
+				environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
+				building: false,
+				test: false
+			})
+			.finally(() => {
+				startupSettled = true;
+			});
+		await Promise.resolve();
+
 		expect(scheduler.stop).toHaveBeenCalledOnce();
+		expect(timerInstalled).toBe(false);
+		expect(openedDatabase?.open).toBe(true);
+		expect(startupSettled).toBe(false);
+		expect(sequence).toEqual(['scheduler-stop']);
+
+		cleanup.resolve();
+		await expect(startup).rejects.toBe(startupFailure);
+		expect(openedDatabase?.open).toBe(false);
+		expect(sequence).toEqual(['scheduler-stop', 'scheduler-stopped', 'database-close']);
 	});
 });
 
@@ -258,8 +441,8 @@ describe('OutboxScheduler', () => {
 		await scheduler.runOutboxOnce();
 
 		expect(worker.drain).toHaveBeenCalledOnce();
-		expect(timers.schedule).toHaveBeenCalledOnce();
-		expect(timers.handle.unref).toHaveBeenCalledOnce();
+		expect(timers.handles(60_000)).toHaveLength(1);
+		expect(timers.handles(60_000)[0].unref).toHaveBeenCalledOnce();
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 		expect(database.prepare('SELECT * FROM job_runs').all()).toEqual([
 			{
@@ -293,8 +476,55 @@ describe('OutboxScheduler', () => {
 		]);
 
 		await scheduler.stop();
-		expect(timers.cancel).toHaveBeenCalledOnce();
-		expect(timers.cancel).toHaveBeenCalledWith(timers.handle);
+		expect(timers.cancel).toHaveBeenCalledWith(timers.handles(60_000)[0]);
+	});
+
+	it('renews its owner lease so a long drain cannot be taken over after 55 seconds', async () => {
+		const timers = timerHarness();
+		let current = initialNow;
+		const longDrain = deferred<{ completed: number; rescheduled: number }>();
+		const worker: OutboxWorker = { drain: vi.fn(() => longDrain.promise) };
+		const leases = new SqliteLeaseRepository(database);
+		const scheduler = new OutboxScheduler({
+			database,
+			leases,
+			worker,
+			enabled: true,
+			ownerId: 'scheduler-long-drain',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		const activeRun = scheduler.runOutboxOnce();
+		await Promise.resolve();
+		expect(worker.drain).toHaveBeenCalledOnce();
+		expect(timers.handles(20_000)).toHaveLength(1);
+		expect(timers.handles(20_000)[0].unref).toHaveBeenCalledOnce();
+
+		current = new Date(initialNow.getTime() + 20_000);
+		timers.fire(20_000);
+		expect(database.prepare('SELECT expires_at FROM job_leases').get()).toEqual({
+			expires_at: '2026-07-16T08:31:15.000Z'
+		});
+
+		current = new Date(initialNow.getTime() + 55_000);
+		expect(leases.acquire(OUTBOX_JOB_NAME, 'scheduler-contender', current, 55_000)).toBe(false);
+
+		current = new Date(initialNow.getTime() + 60_000);
+		timers.fire(20_000);
+		expect(database.prepare('SELECT expires_at FROM job_leases').get()).toEqual({
+			expires_at: '2026-07-16T08:31:55.000Z'
+		});
+		expect(leases.acquire(OUTBOX_JOB_NAME, 'scheduler-contender', current, 55_000)).toBe(false);
+
+		longDrain.resolve({ completed: 0, rescheduled: 0 });
+		await activeRun;
+		expect(timers.isCancelled(timers.handles(20_000)[0])).toBe(true);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(leases.acquire(OUTBOX_JOB_NAME, 'scheduler-contender', current, 55_000)).toBe(true);
+		await scheduler.stop();
 	});
 
 	it('does not overlap a drain when the minute timer fires during an active run', async () => {
@@ -402,14 +632,14 @@ describe('OutboxScheduler', () => {
 		});
 
 		expect(stopped).toBe(false);
-		expect(timers.cancel).toHaveBeenCalledWith(timers.handle);
+		expect(timers.cancel).toHaveBeenCalledWith(timers.handles(60_000)[0]);
 		expect(worker.drain).toHaveBeenCalledOnce();
 		drain.resolve({ completed: 0, rescheduled: 0 });
 		await stopping;
 		expect(stopped).toBe(true);
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 
-		timers.fire();
+		timers.fireCaptured();
 		await Promise.resolve();
 		expect(worker.drain).toHaveBeenCalledOnce();
 	});

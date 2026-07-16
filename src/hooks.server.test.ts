@@ -2,13 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ApplicationLifecycle } from '$lib/server/app.server';
 import { createApplicationHandle } from './hooks.server';
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 describe('server application hook', () => {
 	it('starts the application once before resolving repeated requests', async () => {
 		const order: string[] = [];
+		const ready = deferred<null>();
 		const application: ApplicationLifecycle = {
 			start: vi.fn(() => {
 				order.push('application-start');
-				return null;
+				return ready.promise;
 			}),
 			stop: vi.fn(async () => undefined)
 		};
@@ -23,7 +32,11 @@ describe('server application hook', () => {
 		});
 		const input = { event: {}, resolve } as unknown as Parameters<typeof handle>[0];
 
-		await expect(handle(input)).resolves.toBeInstanceOf(Response);
+		const firstRequest = handle(input);
+		await Promise.resolve();
+		expect(resolve).not.toHaveBeenCalled();
+		ready.resolve(null);
+		await expect(firstRequest).resolves.toBeInstanceOf(Response);
 		await expect(handle(input)).resolves.toBeInstanceOf(Response);
 
 		expect(application.start).toHaveBeenCalledOnce();
@@ -35,10 +48,8 @@ describe('server application hook', () => {
 		const application: ApplicationLifecycle = {
 			start: vi
 				.fn<ApplicationLifecycle['start']>()
-				.mockImplementationOnce(() => {
-					throw new Error('STARTUP_NOT_READY');
-				})
-				.mockReturnValue(null),
+				.mockRejectedValueOnce(new Error('STARTUP_NOT_READY'))
+				.mockResolvedValue(null),
 			stop: vi.fn(async () => undefined)
 		};
 		const handle = createApplicationHandle(application, {

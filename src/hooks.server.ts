@@ -12,11 +12,18 @@ export function createApplicationHandle(
 	options: ApplicationStartOptions
 ): Handle {
 	let started = false;
+	let startup: ReturnType<ApplicationLifecycle['start']> | undefined;
 
 	return async ({ event, resolve }) => {
 		if (!started) {
-			application.start(options);
-			started = true;
+			const activeStartup = (startup ??= application.start(options));
+			try {
+				await activeStartup;
+				started = true;
+			} catch (error) {
+				if (startup === activeStartup) startup = undefined;
+				throw error;
+			}
 		}
 		return resolve(event);
 	};

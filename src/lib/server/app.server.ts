@@ -31,7 +31,7 @@ export type ApplicationRuntimeDependencies = {
 };
 
 export interface ApplicationLifecycle {
-	start(options: ApplicationStartOptions): ApplicationRuntime | null;
+	start(options: ApplicationStartOptions): Promise<ApplicationRuntime | null>;
 	stop(): Promise<void>;
 }
 
@@ -91,38 +91,81 @@ export function createApplicationLifecycle(
 	const applyMigrations = dependencies.migrate ?? migrate;
 	const createScheduler = dependencies.createScheduler ?? createRuntimeScheduler;
 	let runtime: ApplicationRuntime | null = null;
+	let startup: Promise<ApplicationRuntime | null> | null = null;
+	let stopping: Promise<void> | null = null;
+
+	const initialize = async (
+		options: ApplicationStartOptions
+	): Promise<ApplicationRuntime | null> => {
+		const databasePath = requiredEnvironmentValue(options.environment, 'DATABASE_PATH');
+		const database = open(databasePath);
+		let scheduler: Scheduler | null = null;
+		try {
+			applyMigrations(database, migrationsDirectory);
+			scheduler = schedulerEnabled(options.environment)
+				? createScheduler(database, options.environment)
+				: null;
+			scheduler?.start();
+			runtime = { database, scheduler };
+			return runtime;
+		} catch (error) {
+			let cleanupError: unknown;
+			try {
+				await scheduler?.stop();
+			} catch (stopError) {
+				cleanupError = stopError;
+			} finally {
+				runtime = null;
+				close();
+			}
+			if (cleanupError !== undefined) {
+				throw new AggregateError([error, cleanupError], 'APPLICATION_STARTUP_CLEANUP_FAILED', {
+					cause: error
+				});
+			}
+			throw error;
+		}
+	};
 
 	return {
-		start(options): ApplicationRuntime | null {
-			if (options.building || options.test) return null;
-			if (runtime) return runtime;
+		start(options): Promise<ApplicationRuntime | null> {
+			if (options.building || options.test) return Promise.resolve(null);
+			if (startup) return startup;
+			if (runtime) return Promise.resolve(runtime);
 
-			const databasePath = requiredEnvironmentValue(options.environment, 'DATABASE_PATH');
-			const database = open(databasePath);
-			try {
-				applyMigrations(database, migrationsDirectory);
-				const scheduler = schedulerEnabled(options.environment)
-					? createScheduler(database, options.environment)
-					: null;
-				runtime = { database, scheduler };
-				scheduler?.start();
-				return runtime;
-			} catch (error) {
-				runtime = null;
-				close();
-				throw error;
-			}
+			const operation = initialize(options);
+			const trackedStartup = operation.finally(() => {
+				if (startup === trackedStartup) startup = null;
+			});
+			startup = trackedStartup;
+			return trackedStartup;
 		},
 
-		async stop(): Promise<void> {
-			if (!runtime) return;
-			const current = runtime;
-			try {
-				await current.scheduler?.stop();
-			} finally {
-				close();
-				runtime = null;
-			}
+		stop(): Promise<void> {
+			if (stopping) return stopping;
+
+			const operation = (async () => {
+				if (startup) {
+					try {
+						await startup;
+					} catch {
+						return;
+					}
+				}
+				if (!runtime) return;
+				const current = runtime;
+				try {
+					await current.scheduler?.stop();
+				} finally {
+					close();
+					runtime = null;
+				}
+			})();
+			const trackedStop = operation.finally(() => {
+				if (stopping === trackedStop) stopping = null;
+			});
+			stopping = trackedStop;
+			return trackedStop;
 		}
 	};
 }
