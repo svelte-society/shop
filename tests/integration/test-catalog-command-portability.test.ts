@@ -81,4 +81,39 @@ describe('test catalog command portability', () => {
 		expect(output.log).toHaveBeenCalledWith('Test catalog preview: http://127.0.0.1:4173/');
 		expect(startedServer).toBe(server);
 	});
+
+	it('awaits server cleanup and surfaces the failure when the strict port cannot be opened', async () => {
+		const { startTestCatalogPreview } = await importLauncher();
+		const listenFailure = new Error('STRICT_PORT_UNAVAILABLE');
+		const listen = vi.fn(async () => Promise.reject(listenFailure));
+		let releaseClose!: () => void;
+		const closeBarrier = new Promise<void>((resolve) => {
+			releaseClose = resolve;
+		});
+		const close = vi.fn(async () => closeBarrier);
+		const createServer = vi.fn(async () => ({ listen, close }));
+		const output = { log: vi.fn() };
+		let startupSettled = false;
+
+		const startup = startTestCatalogPreview({
+			environment: {},
+			loadVite: async () => ({ createServer }),
+			output
+		})
+			.then(
+				(value) => ({ status: 'fulfilled' as const, value }),
+				(reason: unknown) => ({ status: 'rejected' as const, reason })
+			)
+			.finally(() => {
+				startupSettled = true;
+			});
+
+		await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+		expect(startupSettled).toBe(false);
+		expect(listen.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]);
+		releaseClose();
+
+		expect(await startup).toEqual({ status: 'rejected', reason: listenFailure });
+		expect(output.log).not.toHaveBeenCalled();
+	});
 });

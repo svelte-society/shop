@@ -65,7 +65,20 @@ export async function startTestCatalogPreview(options = {}) {
 		if (!inheritedSigtermListeners.has(listener)) process.off('SIGTERM', listener);
 	}
 
-	await server.listen();
+	try {
+		await server.listen();
+	} catch (listenError) {
+		try {
+			await server.close();
+		} catch (closeError) {
+			throw new AggregateError(
+				[listenError, closeError],
+				'Test catalog preview failed to listen and close cleanly.',
+				{ cause: closeError }
+			);
+		}
+		throw listenError;
+	}
 	output.log(`Test catalog preview: ${PREVIEW_URL}`);
 	return server;
 }
