@@ -188,6 +188,22 @@ describe('Styria submission reconciliation', () => {
 		}
 	);
 
+	it.each([
+		['wrong order', { ...paidEvent(), orderId: 'order_other' }],
+		['wrong actor', { ...paidEvent(), actor: 'codex-admin' }],
+		['failed result', { ...paidEvent(), result: 'failed' }],
+		['error result', { ...paidEvent(), errorCode: 'PAID_ORDER_FAILED' }]
+	])('rejects a paid-order audit with %s before Styria search', async (_label, event) => {
+		const state = setup();
+		state.fulfillment.events = [event];
+
+		await expect(state.service.reconcile('order_reconcile', now)).rejects.toMatchObject({
+			code: 'STYRIA_RECONCILIATION_EVIDENCE_INVALID'
+		});
+
+		expect(state.styria.calls).toEqual([]);
+	});
+
 	it('returns not_found for zero exact matches and retains review state', async () => {
 		const state = setup();
 

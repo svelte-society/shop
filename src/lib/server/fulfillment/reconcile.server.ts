@@ -86,7 +86,17 @@ function submissionEvidenceTimestamp(order: OrderWithLinesAndEvents): Date {
 	const paidEvents = order.events.filter(
 		(event) => event.action === 'paid_order_recorded' || event.action === 'paid_order_converged'
 	);
-	if (paidEvents.length === 0 || paidEvents.some((event) => !validDate(event.createdAt))) {
+	if (
+		paidEvents.length === 0 ||
+		paidEvents.some(
+			(event) =>
+				event.orderId !== order.id ||
+				event.actor !== 'stripe-webhook' ||
+				event.result !== 'succeeded' ||
+				event.errorCode !== null ||
+				!validDate(event.createdAt)
+		)
+	) {
 		throw new Error('paid-order audit invalid');
 	}
 	return new Date(
