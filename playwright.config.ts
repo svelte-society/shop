@@ -7,6 +7,7 @@ const SHARED_FIXTURE_ENV = {
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
+	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
 } as const;

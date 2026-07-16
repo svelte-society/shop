@@ -47,6 +47,7 @@ describe('test catalog command portability', () => {
 			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 			expect(server?.env).toEqual({
 				...SHARED_FIXTURE_ENV,
+				STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 				STOREFRONT_ENABLED: expected.storefront,
 				TEST_CATALOG_SCENARIO: expected.scenario
 			});
