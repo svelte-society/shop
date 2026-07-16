@@ -8,6 +8,7 @@ import { canonicalJson, styriaCountryName } from '$lib/server/styria/payload';
 import type { StyriaOrder } from '$lib/server/styria/types';
 
 const AMBIGUOUS_ERROR_CODE = 'STYRIA_CREATE_AMBIGUOUS';
+const EVIDENCE_ERROR_CODE = 'STYRIA_RECONCILIATION_EVIDENCE_INVALID';
 const RECORD_ERROR_CODE = 'STYRIA_RECONCILIATION_RECORD_FAILED';
 
 export interface ReconciliationService {
@@ -141,7 +142,7 @@ export function buildStyriaSubmissionEvidence(
 			lineSummary: expectedLineSummary(order)
 		};
 	} catch {
-		fail('STYRIA_RECONCILIATION_EVIDENCE_INVALID');
+		fail(EVIDENCE_ERROR_CODE);
 	}
 }
 
@@ -177,6 +178,20 @@ export class StyriaReconciliationService implements ReconciliationService {
 		}
 	}
 
+	private evidenceOrRequireReview(
+		order: OrderWithLinesAndEvents,
+		now: Date
+	): StyriaSubmissionEvidence {
+		try {
+			return buildStyriaSubmissionEvidence(order);
+		} catch {
+			if (order.fulfillmentStatus === 'submitting') {
+				this.requireReview(order.id, now, EVIDENCE_ERROR_CODE);
+			}
+			fail(EVIDENCE_ERROR_CODE);
+		}
+	}
+
 	async reconcile(
 		orderId: string,
 		now = new Date()
@@ -196,7 +211,7 @@ export class StyriaReconciliationService implements ReconciliationService {
 			fail('STYRIA_RECONCILIATION_NOT_ALLOWED');
 		}
 
-		const evidence = buildStyriaSubmissionEvidence(order);
+		const evidence = this.evidenceOrRequireReview(order, now);
 		let providerMatches: StyriaOrder[];
 		try {
 			providerMatches = await this.dependencies.styria.searchByExternalId(

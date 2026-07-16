@@ -204,6 +204,47 @@ describe('Styria submission reconciliation', () => {
 		expect(state.styria.calls).toEqual([]);
 	});
 
+	it.each([
+		['missing audit', []],
+		['corrupt timestamp', [{ ...paidEvent(), createdAt: new Date(Number.NaN) }]],
+		['wrong provenance', [{ ...paidEvent(), actor: 'codex-admin' }]]
+	] as const)(
+		'moves submitting to review when reconciliation evidence has %s',
+		async (_label, events) => {
+			const state = setup('submitting');
+			state.fulfillment.events = [...events];
+
+			await expect(state.service.reconcile('order_reconcile', now)).rejects.toMatchObject({
+				name: 'ReconciliationError',
+				code: 'STYRIA_RECONCILIATION_EVIDENCE_INVALID',
+				message: 'STYRIA_RECONCILIATION_EVIDENCE_INVALID'
+			});
+
+			expect(state.fulfillment.calls).toEqual(['inspect', 'requireReview']);
+			expect(state.fulfillment.order.fulfillmentStatus).toBe('review_required');
+			expect(state.fulfillment.order.lastErrorCode).toBe('STYRIA_RECONCILIATION_EVIDENCE_INVALID');
+			expect(state.styria.calls).toEqual([]);
+		}
+	);
+
+	it('returns a stable state failure when invalid evidence and review writes both fail', async () => {
+		const state = setup('submitting');
+		state.fulfillment.events = [];
+		state.fulfillment.reviewFailures = 1;
+
+		const operation = state.service.reconcile('order_reconcile', now);
+		await expect(operation).rejects.toMatchObject({
+			name: 'ReconciliationError',
+			code: 'STYRIA_RECONCILIATION_STATE_FAILED',
+			message: 'STYRIA_RECONCILIATION_STATE_FAILED'
+		});
+		await expect(operation).rejects.not.toThrow(/Ada|provider|database failure/);
+
+		expect(state.fulfillment.calls).toEqual(['inspect', 'requireReview']);
+		expect(state.fulfillment.order.fulfillmentStatus).toBe('submitting');
+		expect(state.styria.calls).toEqual([]);
+	});
+
 	it('returns not_found for zero exact matches and retains review state', async () => {
 		const state = setup();
 
