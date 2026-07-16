@@ -1,0 +1,213 @@
+import type { NewOutboxJob, OutboxJob } from '$lib/domain/orders';
+import { isStableErrorCode, RepositoryError } from '$lib/domain/orders';
+import type { ShopDatabase } from './types';
+
+export interface OutboxRepository {
+	enqueue(input: NewOutboxJob): void;
+	claimDue(now: Date, limit: number): OutboxJob[];
+	complete(id: number, now: Date): void;
+	reschedule(id: number, attemptCount: number, nextAttemptAt: Date, errorCode: string): void;
+}
+
+type OutboxRow = {
+	id: unknown;
+	kind: unknown;
+	idempotency_key: unknown;
+	order_id: unknown;
+	attempt_count: unknown;
+	next_attempt_at: unknown;
+	completed_at: unknown;
+	last_error_code: unknown;
+};
+
+const CLAIM_LEASE_MILLISECONDS = 5 * 60_000;
+
+function fail(code: string): never {
+	throw new RepositoryError(code);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isoTimestamp(value: Date, invalidCode: string): string {
+	if (!(value instanceof Date) || !Number.isFinite(value.getTime())) fail(invalidCode);
+	return value.toISOString();
+}
+
+function dateFromIso(value: unknown, invalidCode: string): Date {
+	if (typeof value !== 'string') fail(invalidCode);
+	const parsed = new Date(value);
+	if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) fail(invalidCode);
+	return parsed;
+}
+
+function mapJob(row: OutboxRow): OutboxJob {
+	if (
+		!Number.isSafeInteger(row.id) ||
+		(row.id as number) < 1 ||
+		!isNonEmptyString(row.kind) ||
+		!isNonEmptyString(row.idempotency_key) ||
+		(row.order_id !== null && !isNonEmptyString(row.order_id)) ||
+		!Number.isSafeInteger(row.attempt_count) ||
+		(row.attempt_count as number) < 0 ||
+		(row.last_error_code !== null && !isStableErrorCode(row.last_error_code))
+	) {
+		fail('OUTBOX_ROW_INVALID');
+	}
+
+	return {
+		id: row.id as number,
+		kind: row.kind,
+		idempotencyKey: row.idempotency_key,
+		orderId: row.order_id as string | null,
+		attemptCount: row.attempt_count as number,
+		nextAttemptAt: dateFromIso(row.next_attempt_at, 'OUTBOX_ROW_INVALID'),
+		completedAt:
+			row.completed_at === null ? null : dateFromIso(row.completed_at, 'OUTBOX_ROW_INVALID'),
+		lastErrorCode: row.last_error_code as string | null
+	};
+}
+
+function validateNewJob(input: NewOutboxJob): string {
+	if (
+		!input ||
+		!isNonEmptyString(input.kind) ||
+		!isNonEmptyString(input.idempotencyKey) ||
+		(input.orderId !== null && !isNonEmptyString(input.orderId))
+	) {
+		fail('OUTBOX_JOB_INVALID');
+	}
+	return isoTimestamp(input.nextAttemptAt, 'OUTBOX_JOB_INVALID');
+}
+
+export class SqliteOutboxRepository implements OutboxRepository {
+	constructor(private readonly database: ShopDatabase) {}
+
+	enqueue(input: NewOutboxJob): void {
+		const nextAttemptAt = validateNewJob(input);
+		const find = this.database.prepare('SELECT * FROM outbox_jobs WHERE idempotency_key = ?');
+		const insert = this.database.prepare(`
+			INSERT INTO outbox_jobs (
+				kind, idempotency_key, order_id, attempt_count,
+				next_attempt_at, completed_at, last_error_code
+			) VALUES (?, ?, ?, 0, ?, NULL, NULL)
+		`);
+		const enqueueJob = this.database.transaction(() => {
+			const existing = find.get(input.idempotencyKey) as OutboxRow | undefined;
+			if (existing) {
+				const job = mapJob(existing);
+				if (job.kind !== input.kind || job.orderId !== input.orderId) {
+					fail('OUTBOX_IDEMPOTENCY_CONFLICT');
+				}
+				return;
+			}
+			insert.run(input.kind, input.idempotencyKey, input.orderId, nextAttemptAt);
+		});
+
+		try {
+			enqueueJob.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('OUTBOX_ENQUEUE_FAILED');
+		}
+	}
+
+	claimDue(now: Date, limit: number): OutboxJob[] {
+		const nowTimestamp = isoTimestamp(now, 'OUTBOX_CLAIM_INVALID');
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+			fail('OUTBOX_CLAIM_LIMIT_INVALID');
+		}
+		const leaseDate = new Date(now.getTime() + CLAIM_LEASE_MILLISECONDS);
+		const leaseTimestamp = isoTimestamp(leaseDate, 'OUTBOX_CLAIM_INVALID');
+		const findDue = this.database.prepare(`
+			SELECT * FROM outbox_jobs
+			WHERE completed_at IS NULL AND next_attempt_at <= ?
+			ORDER BY next_attempt_at, id
+			LIMIT ?
+		`);
+		const reserve = this.database.prepare(`
+			UPDATE outbox_jobs
+			SET next_attempt_at = ?
+			WHERE id = ? AND completed_at IS NULL AND next_attempt_at <= ?
+		`);
+		const claim = this.database.transaction(() => {
+			const rows = findDue.all(nowTimestamp, limit) as OutboxRow[];
+			for (const row of rows) {
+				if (reserve.run(leaseTimestamp, row.id, nowTimestamp).changes !== 1) {
+					fail('OUTBOX_CLAIM_CONFLICT');
+				}
+			}
+			return rows.map((row) => ({ ...mapJob(row), nextAttemptAt: new Date(leaseDate) }));
+		});
+
+		try {
+			return claim.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('OUTBOX_CLAIM_FAILED');
+		}
+	}
+
+	complete(id: number, now: Date): void {
+		if (!Number.isSafeInteger(id) || id < 1) fail('OUTBOX_JOB_ID_INVALID');
+		const timestamp = isoTimestamp(now, 'OUTBOX_COMPLETION_INVALID');
+		const find = this.database.prepare('SELECT completed_at FROM outbox_jobs WHERE id = ?');
+		const update = this.database.prepare(`
+			UPDATE outbox_jobs
+			SET completed_at = ?, last_error_code = NULL
+			WHERE id = ? AND completed_at IS NULL
+		`);
+		const completeJob = this.database.transaction(() => {
+			const row = find.get(id) as { completed_at: unknown } | undefined;
+			if (!row) fail('OUTBOX_JOB_NOT_FOUND');
+			if (row.completed_at !== null) {
+				dateFromIso(row.completed_at, 'OUTBOX_ROW_INVALID');
+				return;
+			}
+			if (update.run(timestamp, id).changes !== 1) fail('OUTBOX_COMPLETION_CONFLICT');
+		});
+
+		try {
+			completeJob.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('OUTBOX_COMPLETE_FAILED');
+		}
+	}
+
+	reschedule(id: number, attemptCount: number, nextAttemptAt: Date, errorCode: string): void {
+		if (!Number.isSafeInteger(id) || id < 1) fail('OUTBOX_JOB_ID_INVALID');
+		if (!Number.isSafeInteger(attemptCount) || attemptCount < 1 || !isStableErrorCode(errorCode)) {
+			fail('OUTBOX_RESCHEDULE_INVALID');
+		}
+		const timestamp = isoTimestamp(nextAttemptAt, 'OUTBOX_RESCHEDULE_INVALID');
+		const find = this.database.prepare(
+			'SELECT attempt_count, completed_at FROM outbox_jobs WHERE id = ?'
+		);
+		const update = this.database.prepare(`
+			UPDATE outbox_jobs
+			SET attempt_count = ?, next_attempt_at = ?, last_error_code = ?
+			WHERE id = ? AND completed_at IS NULL AND attempt_count = ?
+		`);
+		const rescheduleJob = this.database.transaction(() => {
+			const row = find.get(id) as { attempt_count: unknown; completed_at: unknown } | undefined;
+			if (!row) fail('OUTBOX_JOB_NOT_FOUND');
+			if (row.completed_at !== null) fail('OUTBOX_JOB_COMPLETED');
+			if (!Number.isSafeInteger(row.attempt_count)) fail('OUTBOX_ROW_INVALID');
+			if (attemptCount !== (row.attempt_count as number) + 1) {
+				fail('OUTBOX_ATTEMPT_REGRESSION');
+			}
+			if (update.run(attemptCount, timestamp, errorCode, id, row.attempt_count).changes !== 1) {
+				fail('OUTBOX_ATTEMPT_REGRESSION');
+			}
+		});
+
+		try {
+			rescheduleJob.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('OUTBOX_RESCHEDULE_FAILED');
+		}
+	}
+}
