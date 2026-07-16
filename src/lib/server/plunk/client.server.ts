@@ -4,7 +4,7 @@ import { PlunkError } from './gateway';
 export { PlunkError } from './gateway';
 
 export const PLUNK_DEFAULT_BASE_URL = 'https://next-api.useplunk.com';
-const PLUNK_DEFAULT_TIMEOUT_MS = 10_000;
+export const PLUNK_DEFAULT_TIMEOUT_MS = 10_000;
 
 export type PlunkClientOptions = {
 	secretKey: string;

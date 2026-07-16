@@ -147,6 +147,28 @@ describe('createPlunkClient', () => {
 		expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
 	});
 
+	it('enforces the exact ten-second default used by the scheduler drain bound', async () => {
+		vi.useFakeTimers();
+		let requestSignal: AbortSignal | null = null;
+		const fetch: typeof globalThis.fetch = (_input, init) =>
+			new Promise((_resolve, reject) => {
+				requestSignal = init?.signal as AbortSignal;
+				requestSignal.addEventListener('abort', () => reject(new Error('timed out')));
+			});
+		const client = createPlunkClient({ secretKey: 'sk_test_secret', fetch });
+
+		const delivery = client.send(sendInput);
+		const result = delivery.catch((error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect((requestSignal as AbortSignal | null)?.aborted).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+
+		await expect(result).resolves.toEqual(
+			expect.objectContaining({ code: 'PLUNK_TIMEOUT', message: 'PLUNK_TIMEOUT' })
+		);
+		expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
+	});
+
 	it('keeps the timeout active while the success response body is being read', async () => {
 		vi.useFakeTimers();
 		let requestSignal: AbortSignal | null = null;

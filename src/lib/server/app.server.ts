@@ -7,7 +7,7 @@ import type { ShopDatabase } from '$lib/server/db/types';
 import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
-import { createPlunkClient } from '$lib/server/plunk/client.server';
+import { createPlunkClient, PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
@@ -57,7 +57,8 @@ function createRuntimeScheduler(
 	const outbox = new SqliteOutboxRepository(database);
 	const plunk = createPlunkClient({
 		secretKey: requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY'),
-		baseUrl: environment.PLUNK_BASE_URL
+		baseUrl: environment.PLUNK_BASE_URL,
+		timeoutMs: PLUNK_DEFAULT_TIMEOUT_MS
 	});
 	const worker = new PaidOrderAlertOutboxWorker({
 		database,

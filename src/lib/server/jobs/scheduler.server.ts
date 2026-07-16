@@ -6,6 +6,7 @@ export const OUTBOX_JOB_NAME = 'outbox';
 const OUTBOX_INTERVAL_MS = 60_000;
 const OUTBOX_LEASE_TTL_MS = 55_000;
 const OUTBOX_LEASE_HEARTBEAT_MS = 20_000;
+const OUTBOX_DRAIN_LIMIT = 3;
 const OUTBOX_DRAIN_ERROR_CODE = 'OUTBOX_DRAIN_FAILED';
 
 export interface Scheduler {
@@ -127,21 +128,19 @@ export class OutboxScheduler implements Scheduler {
 			runId = Number(insert.lastInsertRowid);
 			heartbeat = this.schedule(() => {
 				try {
-					leaseMaintained =
-						leaseMaintained &&
-						this.options.leases.renew(
-							OUTBOX_JOB_NAME,
-							this.options.ownerId,
-							this.clock(),
-							OUTBOX_LEASE_TTL_MS
-						);
+					leaseMaintained = this.options.leases.renew(
+						OUTBOX_JOB_NAME,
+						this.options.ownerId,
+						this.clock(),
+						OUTBOX_LEASE_TTL_MS
+					);
 				} catch {
-					leaseMaintained = false;
+					// The last confirmed lease remains valid; retry on the next 20-second heartbeat.
 				}
 			}, OUTBOX_LEASE_HEARTBEAT_MS);
 			heartbeat.unref?.();
 
-			await this.options.worker.drain(now);
+			await this.options.worker.drain(now, OUTBOX_DRAIN_LIMIT);
 			if (!leaseMaintained) throw new Error('OUTBOX_LEASE_LOST');
 			this.finishRun(runId, this.clock(), 'completed', null);
 		} catch (error) {

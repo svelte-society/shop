@@ -7,6 +7,8 @@ import {
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
+import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import { SqliteLeaseRepository } from './leases.server';
 import {
@@ -441,6 +443,7 @@ describe('OutboxScheduler', () => {
 		await scheduler.runOutboxOnce();
 
 		expect(worker.drain).toHaveBeenCalledOnce();
+		expect(worker.drain).toHaveBeenCalledWith(initialNow, 3);
 		expect(timers.handles(60_000)).toHaveLength(1);
 		expect(timers.handles(60_000)[0].unref).toHaveBeenCalledOnce();
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
@@ -524,6 +527,100 @@ describe('OutboxScheduler', () => {
 		expect(timers.isCancelled(timers.handles(20_000)[0])).toBe(true);
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 		expect(leases.acquire(OUTBOX_JOB_NAME, 'scheduler-contender', current, 55_000)).toBe(true);
+		await scheduler.stop();
+	});
+
+	it('retries a transient heartbeat failure before the still-valid lease expires', async () => {
+		const timers = timerHarness();
+		let current = initialNow;
+		const longDrain = deferred<{ completed: number; rescheduled: number }>();
+		const worker: OutboxWorker = { drain: vi.fn(() => longDrain.promise) };
+		const sqliteLeases = new SqliteLeaseRepository(database);
+		const renew = vi
+			.fn<LeaseRepository['renew']>()
+			.mockImplementationOnce(() => {
+				throw new Error('SQLITE_BUSY');
+			})
+			.mockImplementation((...input) => sqliteLeases.renew(...input));
+		const leases: LeaseRepository = {
+			acquire: (...input) => sqliteLeases.acquire(...input),
+			renew,
+			release: (...input) => sqliteLeases.release(...input)
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases,
+			worker,
+			enabled: true,
+			ownerId: 'scheduler-transient-renewal',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		const activeRun = scheduler.runOutboxOnce();
+		await Promise.resolve();
+
+		current = new Date(initialNow.getTime() + 20_000);
+		timers.fire(20_000);
+		current = new Date(initialNow.getTime() + 40_000);
+		timers.fire(20_000);
+
+		expect(renew).toHaveBeenCalledTimes(2);
+		expect(database.prepare('SELECT expires_at FROM job_leases').get()).toEqual({
+			expires_at: '2026-07-16T08:31:35.000Z'
+		});
+		current = new Date(initialNow.getTime() + 55_000);
+		expect(leases.acquire(OUTBOX_JOB_NAME, 'scheduler-contender', current, 55_000)).toBe(false);
+
+		longDrain.resolve({ completed: 0, rescheduled: 0 });
+		await expect(activeRun).resolves.toBeUndefined();
+		await scheduler.stop();
+	});
+
+	it('finishes its three-timeout drain bound before exact-expiry takeover', async () => {
+		const timers = timerHarness();
+		let current = initialNow;
+		const boundedDrain = deferred<{ completed: number; rescheduled: number }>();
+		const worker: OutboxWorker = {
+			drain: vi.fn((_runAt, limit) => {
+				expect(limit).toBe(3);
+				return boundedDrain.promise;
+			})
+		};
+		const leases = new SqliteLeaseRepository(database);
+		const scheduler = new OutboxScheduler({
+			database,
+			leases,
+			worker,
+			enabled: true,
+			ownerId: 'scheduler-bounded-owner',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		const activeRun = scheduler.runOutboxOnce();
+		await Promise.resolve();
+		expect(worker.drain).toHaveBeenCalledOnce();
+
+		current = new Date(initialNow.getTime() + 3 * PLUNK_DEFAULT_TIMEOUT_MS);
+		boundedDrain.resolve({ completed: 0, rescheduled: 0 });
+		await expect(activeRun).resolves.toBeUndefined();
+		expect(current.getTime() - initialNow.getTime()).toBe(30_000);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+
+		current = new Date(initialNow.getTime() + 55_000);
+		expect(leases.acquire(OUTBOX_JOB_NAME, 'scheduler-contender', current, 55_000)).toBe(true);
+		expect(database.prepare('SELECT owner_id FROM job_leases').get()).toEqual({
+			owner_id: 'scheduler-contender'
+		});
+		expect(database.prepare('SELECT result, error_code FROM job_runs').get()).toEqual({
+			result: 'completed',
+			error_code: null
+		});
 		await scheduler.stop();
 	});
 
