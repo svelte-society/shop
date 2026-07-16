@@ -1,0 +1,144 @@
+import type { OutboxJob } from '$lib/domain/orders';
+import { RepositoryError } from '$lib/domain/orders';
+import type { OutboxRepository } from '$lib/server/db/outbox.server';
+import type { ShopDatabase } from '$lib/server/db/types';
+import type { PlunkGateway } from '$lib/server/plunk/gateway';
+import { PlunkError } from '$lib/server/plunk/gateway';
+import { nextOutboxAttempt } from './backoff';
+
+const DEFAULT_BATCH_LIMIT = 25;
+const PAID_ORDER_ALERT_SUBJECT = 'Svelte Society Shop: paid order awaiting review';
+
+export interface OutboxWorker {
+	drain(now: Date, limit?: number): Promise<{ completed: number; rescheduled: number }>;
+}
+
+export type PaidOrderAlertEmailConfig = {
+	to: string;
+	from: { name: string; email: string };
+	replyTo: string;
+};
+
+export type PaidOrderAlertOutboxWorkerDependencies = {
+	database: ShopDatabase;
+	outbox: OutboxRepository;
+	plunk: PlunkGateway;
+	alertEmail: PaidOrderAlertEmailConfig;
+};
+
+type PaidOrderAlertRow = {
+	id: unknown;
+	total_amount: unknown;
+	destination_country: unknown;
+	unit_count: unknown;
+};
+
+type PaidOrderAlert = {
+	id: string;
+	totalAmount: number;
+	destinationCountry: string;
+	unitCount: number;
+};
+
+class OutboxWorkerError extends Error {
+	constructor(
+		readonly code:
+			| 'OUTBOX_JOB_KIND_UNSUPPORTED'
+			| 'PAID_ORDER_ALERT_JOB_INVALID'
+			| 'PAID_ORDER_ALERT_DATA_INVALID'
+	) {
+		super(code);
+		this.name = 'OutboxWorkerError';
+	}
+}
+
+function loadPaidOrderAlert(database: ShopDatabase, job: OutboxJob): PaidOrderAlert {
+	if (job.kind !== 'paid-order-alert') {
+		throw new OutboxWorkerError('OUTBOX_JOB_KIND_UNSUPPORTED');
+	}
+	if (job.orderId === null || job.idempotencyKey !== `paid-order-alert:${job.orderId}`) {
+		throw new OutboxWorkerError('PAID_ORDER_ALERT_JOB_INVALID');
+	}
+	const row = database
+		.prepare(
+			`SELECT o.id, o.total_amount, o.destination_country, SUM(ol.quantity) AS unit_count
+			FROM orders o
+			JOIN order_lines ol ON ol.order_id = o.id
+			WHERE o.id = ?
+			GROUP BY o.id, o.total_amount, o.destination_country`
+		)
+		.get(job.orderId) as PaidOrderAlertRow | undefined;
+	if (
+		!row ||
+		typeof row.id !== 'string' ||
+		row.id.length === 0 ||
+		!Number.isSafeInteger(row.total_amount) ||
+		(row.total_amount as number) < 0 ||
+		typeof row.destination_country !== 'string' ||
+		!Number.isSafeInteger(row.unit_count) ||
+		(row.unit_count as number) < 1
+	) {
+		throw new OutboxWorkerError('PAID_ORDER_ALERT_DATA_INVALID');
+	}
+	return {
+		id: row.id,
+		totalAmount: row.total_amount as number,
+		destinationCountry: row.destination_country,
+		unitCount: row.unit_count as number
+	};
+}
+
+function stableErrorCode(error: unknown): string {
+	if (error instanceof PlunkError || error instanceof RepositoryError) return error.code;
+	if (error instanceof OutboxWorkerError) return error.code;
+	return 'PAID_ORDER_ALERT_FAILED';
+}
+
+function paidOrderAlertHtml(order: PaidOrderAlert): string {
+	return (
+		`<p>Internal order ID: ${order.id}</p>` +
+		`<p>Unit count: ${order.unitCount}</p>` +
+		`<p>Total: EUR ${(order.totalAmount / 100).toFixed(2)}</p>` +
+		`<p>Destination country: ${order.destinationCountry}</p>` +
+		'<p>Open Codex and use list_pending_orders.</p>'
+	);
+}
+
+export class PaidOrderAlertOutboxWorker implements OutboxWorker {
+	constructor(private readonly dependencies: PaidOrderAlertOutboxWorkerDependencies) {}
+
+	async drain(
+		now: Date,
+		limit = DEFAULT_BATCH_LIMIT
+	): Promise<{ completed: number; rescheduled: number }> {
+		const jobs = this.dependencies.outbox.claimDue(now, limit);
+		let completed = 0;
+		let rescheduled = 0;
+
+		for (const job of jobs) {
+			try {
+				const order = loadPaidOrderAlert(this.dependencies.database, job);
+				await this.dependencies.plunk.send({
+					to: this.dependencies.alertEmail.to,
+					from: this.dependencies.alertEmail.from,
+					replyTo: this.dependencies.alertEmail.replyTo,
+					subject: PAID_ORDER_ALERT_SUBJECT,
+					html: paidOrderAlertHtml(order)
+				});
+				this.dependencies.outbox.complete(job.id, now);
+				completed += 1;
+			} catch (error) {
+				const attempt = job.attemptCount + 1;
+				this.dependencies.outbox.reschedule(
+					job.id,
+					attempt,
+					nextOutboxAttempt(now, attempt),
+					stableErrorCode(error)
+				);
+				rescheduled += 1;
+			}
+		}
+
+		return { completed, rescheduled };
+	}
+}
