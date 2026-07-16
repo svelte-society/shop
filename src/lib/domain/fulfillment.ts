@@ -45,11 +45,13 @@ export function mapStyriaStatus(input: {
 	trackingNumber: string | null;
 }): FulfillmentStatus {
 	const status = typeof input?.status === 'string' ? input.status.trim().toLowerCase() : '';
-	if (input?.deleted === true || REVIEW_STATUSES.has(status)) return 'review_required';
+	const isReceived = status === 'received';
+	const isInProduction = IN_PRODUCTION_STATUSES.has(status);
+	if (input?.deleted === true || REVIEW_STATUSES.has(status) || (!isReceived && !isInProduction)) {
+		return 'review_required';
+	}
 	if (typeof input?.trackingNumber === 'string' && input.trackingNumber.trim().length > 0) {
 		return 'shipped';
 	}
-	if (status === 'received') return 'awaiting_vendor_payment';
-	if (IN_PRODUCTION_STATUSES.has(status)) return 'in_production';
-	return 'review_required';
+	return isReceived ? 'awaiting_vendor_payment' : 'in_production';
 }

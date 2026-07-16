@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
@@ -9,7 +10,113 @@ import type { ShopDatabase } from '$lib/server/db/types';
 import { SqliteFulfillmentRepository } from './repository.server';
 
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
+const contenderTestPath = fileURLToPath(
+	new URL('./repository.approval-contender.test.ts', import.meta.url)
+);
+const vitestCliPath = fileURLToPath(
+	new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)
+);
 const now = new Date('2026-07-16T08:30:00.000Z');
+
+type ContenderProcess = {
+	child: ChildProcessWithoutNullStreams;
+	completion: Promise<void>;
+	exited: Promise<void>;
+};
+
+function waitForFiles(paths: readonly string[], timeoutMilliseconds = 10_000): Promise<void> {
+	if (paths.every(existsSync)) return Promise.resolve();
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const watcher = watch(dirname(paths[0]), check);
+		const timeout = setTimeout(
+			() => finish(new Error('CONTENTION_BARRIER_TIMEOUT')),
+			timeoutMilliseconds
+		);
+
+		function finish(error?: Error): void {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			watcher.close();
+			if (error) reject(error);
+			else resolve();
+		}
+
+		function check(): void {
+			if (paths.every(existsSync)) finish();
+		}
+
+		check();
+	});
+}
+
+function spawnApprovalContender(
+	role: 'holder' | 'waiter',
+	databasePath: string,
+	paths: {
+		ready: string;
+		start: string;
+		attempt: string;
+		lock: string;
+		release: string;
+		probe: string;
+		result: string;
+	}
+): ContenderProcess {
+	const child = spawn(
+		process.execPath,
+		[vitestCliPath, 'run', contenderTestPath, '--project', 'server'],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				FULFILLMENT_APPROVAL_CONTENDER: 'true',
+				FULFILLMENT_CONTENDER_ROLE: role,
+				FULFILLMENT_DATABASE_PATH: databasePath,
+				FULFILLMENT_READY_PATH: paths.ready,
+				FULFILLMENT_START_PATH: paths.start,
+				FULFILLMENT_ATTEMPT_PATH: paths.attempt,
+				FULFILLMENT_LOCK_PATH: paths.lock,
+				FULFILLMENT_RELEASE_PATH: paths.release,
+				FULFILLMENT_PROBE_PATH: paths.probe,
+				FULFILLMENT_RESULT_PATH: paths.result
+			}
+		}
+	);
+	let stderr = '';
+	child.stderr.setEncoding('utf8');
+	child.stderr.on('data', (chunk: string) => {
+		stderr += chunk;
+	});
+	child.stdout.resume();
+	const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+	const completion = new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			child.kill('SIGKILL');
+			reject(new Error(`CONTENDER_TIMEOUT:${role}`));
+		}, 15_000);
+		child.once('error', (error) => {
+			clearTimeout(timeout);
+			reject(error);
+		});
+		child.once('exit', (code) => {
+			clearTimeout(timeout);
+			if (code === 0) resolve();
+			else reject(new Error(`CONTENDER_FAILED:${role}:${code}:${stderr.trim()}`));
+		});
+	});
+	void completion.catch(() => undefined);
+	return { child, completion, exited };
+}
+
+async function terminateContender(contender: ContenderProcess): Promise<void> {
+	if (contender.child.exitCode !== null || contender.child.signalCode !== null) return;
+	contender.child.kill('SIGTERM');
+	const forceKill = setTimeout(() => contender.child.kill('SIGKILL'), 1_000);
+	await contender.exited;
+	clearTimeout(forceKill);
+}
 
 type OrderSeed = {
 	id: string;
@@ -351,42 +458,90 @@ describe('beginSubmission', () => {
 		).toEqual({ used_at: null });
 	});
 
-	it('allows only one of two file-backed connection contenders to use an approval', () => {
+	it('serializes two overlapping process contenders and consumes the approval exactly once', async () => {
 		if (database.open) database.close();
 		const directory = mkdtempSync(join(tmpdir(), 'shop-fulfillment-approval-'));
 		const path = join(directory, 'shop.sqlite');
-		const first = new Database(path);
-		const second = new Database(path);
+		const setup = new Database(path);
+		const releasePath = join(directory, 'release');
+		const holderPaths = {
+			ready: join(directory, 'holder-ready'),
+			start: join(directory, 'holder-start'),
+			attempt: join(directory, 'holder-attempt'),
+			lock: join(directory, 'holder-lock'),
+			release: releasePath,
+			probe: join(directory, 'holder-probe'),
+			result: join(directory, 'holder-result')
+		};
+		const waiterPaths = {
+			ready: join(directory, 'waiter-ready'),
+			start: join(directory, 'waiter-start'),
+			attempt: join(directory, 'waiter-attempt'),
+			lock: join(directory, 'waiter-lock'),
+			release: releasePath,
+			probe: join(directory, 'waiter-blocked'),
+			result: join(directory, 'waiter-result')
+		};
+		const contenders: ContenderProcess[] = [];
 		try {
-			configure(first);
-			configure(second);
-			migrate(first, migrationsDirectory);
-			seedOrder(first);
-			seedApproval(first);
+			configure(setup);
+			migrate(setup, migrationsDirectory);
+			seedOrder(setup);
+			seedApproval(setup);
+			setup.exec(`
+				CREATE TRIGGER hold_first_approval_consume
+				BEFORE UPDATE OF used_at ON submission_approvals
+				WHEN OLD.used_at IS NULL AND NEW.used_at IS NOT NULL
+				BEGIN SELECT hold_approval_lock(); END
+			`);
+			setup.close();
 
-			new SqliteFulfillmentRepository(first).beginSubmission(
-				'order_one',
-				'approval_one',
-				'payload-hash-one',
-				now
-			);
-			expect(() =>
-				new SqliteFulfillmentRepository(second).beginSubmission(
-					'order_one',
-					'approval_one',
-					'payload-hash-one',
-					now
+			const holder = spawnApprovalContender('holder', path, holderPaths);
+			const waiter = spawnApprovalContender('waiter', path, waiterPaths);
+			contenders.push(holder, waiter);
+			await waitForFiles([holderPaths.ready, waiterPaths.ready]);
+
+			writeFileSync(holderPaths.start, 'start');
+			await waitForFiles([holderPaths.attempt, holderPaths.lock]);
+			writeFileSync(waiterPaths.start, 'start');
+			await waitForFiles([waiterPaths.attempt, waiterPaths.probe]);
+			expect(existsSync(holderPaths.result)).toBe(false);
+			expect(existsSync(waiterPaths.result)).toBe(false);
+
+			writeFileSync(releasePath, 'release');
+			await Promise.all([holder.completion, waiter.completion]);
+			const outcomes = [holderPaths.result, waiterPaths.result]
+				.map(
+					(resultPath) =>
+						JSON.parse(readFileSync(resultPath, 'utf8')) as { role: string; outcome: string }
 				)
-			).toThrowError('SUBMISSION_APPROVAL_USED');
-			expect(first.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
+				.sort((left, right) => left.role.localeCompare(right.role));
+			expect(outcomes).toEqual([
+				{ role: 'holder', outcome: 'succeeded' },
+				{ role: 'waiter', outcome: 'SUBMISSION_APPROVAL_USED' }
+			]);
+
+			const verification = new Database(path);
+			configure(verification);
+			expect(
+				verification
+					.prepare('SELECT used_at FROM submission_approvals WHERE id = ?')
+					.get('approval_one')
+			).toEqual({ used_at: now.toISOString() });
+			expect(
+				verification.prepare('SELECT fulfillment_status FROM orders WHERE id = ?').get('order_one')
+			).toEqual({ fulfillment_status: 'submitting' });
+			expect(verification.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
 				count: 1
 			});
+			verification.close();
 		} finally {
-			first.close();
-			second.close();
+			if (setup.open) setup.close();
+			if (!existsSync(releasePath)) writeFileSync(releasePath, 'release');
+			await Promise.all(contenders.map(terminateContender));
 			rmSync(directory, { recursive: true, force: true });
 		}
-	});
+	}, 20_000);
 });
 
 describe('provider-result mutations', () => {
@@ -550,6 +705,41 @@ describe('provider-result mutations', () => {
 				shipped_at: shippedAt.toISOString()
 			})
 		);
+	});
+
+	it('moves an already tracked order to review when the provider status is unknown', () => {
+		const shippedAt = new Date('2026-07-16T08:10:00.000Z');
+		seedOrder(database, {
+			status: 'shipped',
+			styriaOrderId: 'styria-123',
+			styriaStatus: 'quality control',
+			trackingNumber: 'TRACK-123',
+			submittedAt: new Date('2026-07-16T08:00:00.000Z'),
+			shippedAt
+		});
+
+		repository.applyStyriaStatus(
+			'order_one',
+			{ status: 'provider surprise', deleted: false, trackingNumber: 'TRACK-123' },
+			now
+		);
+
+		expect(orderState(database)).toEqual(
+			expect.objectContaining({
+				fulfillment_status: 'review_required',
+				tracking_number: 'TRACK-123',
+				shipped_at: shippedAt.toISOString(),
+				last_error_code: 'STYRIA_STATUS_REVIEW_REQUIRED'
+			})
+		);
+		expect(events(database)).toEqual([
+			expect.objectContaining({
+				prior_state: 'shipped',
+				next_state: 'review_required',
+				result: 'failed',
+				error_code: 'STYRIA_STATUS_REVIEW_REQUIRED'
+			})
+		]);
 	});
 
 	it('rolls back provider state when its audit append fails', () => {

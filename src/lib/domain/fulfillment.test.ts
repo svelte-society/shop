@@ -85,6 +85,15 @@ describe('Styria status mapping', () => {
 		expect(mapStyriaStatus(input)).toBe('review_required');
 	});
 
+	it.each([
+		{ status: 'provider surprise', deleted: false, trackingNumber: 'TRACK-123' },
+		{ status: 'received', deleted: true, trackingNumber: 'TRACK-123' },
+		{ status: 'refunded', deleted: false, trackingNumber: 'TRACK-123' },
+		{ status: 'internal order query', deleted: false, trackingNumber: 'TRACK-123' }
+	])('makes review safety precedence override tracking for %#', (input) => {
+		expect(mapStyriaStatus(input)).toBe('review_required');
+	});
+
 	it('requires review for an unknown provider status', () => {
 		expect(
 			mapStyriaStatus({ status: 'provider surprise', deleted: false, trackingNumber: null })
