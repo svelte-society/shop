@@ -483,7 +483,7 @@ function validatePaymentIntent(
 	) {
 		fail('STRIPE_PAID_CHECKOUT_PAYMENT_INTENT_INVALID');
 	}
-	if (value.status !== 'succeeded') fail('STRIPE_PAID_CHECKOUT_UNPAID');
+	if (value.status !== 'succeeded') fail('STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED');
 	requireCurrency(value.currency);
 	if (
 		!isSafeNonNegativeInteger(value.amount) ||
@@ -511,8 +511,6 @@ function validatePaymentIntent(
 		charge.amount_refunded > charge.amount ||
 		charge.amount !== expected.total ||
 		charge.amount_captured !== expected.total ||
-		charge.captured !== true ||
-		charge.paid !== true ||
 		typeof charge.refunded !== 'boolean' ||
 		charge.refunded !== (charge.amount_refunded === charge.amount) ||
 		referenceId(charge.payment_intent, PAYMENT_INTENT_ID_PATTERN) !== value.id ||
@@ -520,7 +518,9 @@ function validatePaymentIntent(
 	) {
 		fail('STRIPE_PAID_CHECKOUT_PAYMENT_INTENT_INVALID');
 	}
-	if (charge.status !== 'succeeded') fail('STRIPE_PAID_CHECKOUT_UNPAID');
+	if (charge.status !== 'succeeded' || charge.captured !== true || charge.paid !== true) {
+		fail('STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED');
+	}
 	requireCurrency(charge.currency);
 	return { paymentIntentId: value.id, charge };
 }
@@ -581,7 +581,7 @@ function normalizePaidCheckout(
 		fail('STRIPE_PAID_CHECKOUT_INVALID');
 	}
 	if (session.status !== 'complete' || session.payment_status !== 'paid') {
-		fail('STRIPE_PAID_CHECKOUT_UNPAID');
+		fail('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
 	}
 	requireCurrency(session.currency);
 

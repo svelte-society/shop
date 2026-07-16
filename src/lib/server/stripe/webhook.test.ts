@@ -1,12 +1,20 @@
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'node:url';
 import Stripe from 'stripe';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NewCheckoutDraft, PaymentStatus } from '$lib/domain/orders';
+import { RepositoryError } from '$lib/domain/orders';
+import {
+	SqliteOrderEventRepository,
+	type OrderEventRepository
+} from '$lib/server/audit/order-events.server';
 import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOrderRepository, SqlitePaidOrderUnitOfWork } from '$lib/server/db/orders.server';
-import { SqliteStripeEventRepository } from '$lib/server/db/stripe-events.server';
+import {
+	SqliteStripeEventRepository,
+	type StripeEventRepository
+} from '$lib/server/db/stripe-events.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import {
 	SqliteRefundOrderUnitOfWork,
@@ -116,6 +124,16 @@ type FixtureOptions = {
 	retrieveRefundStatus?: StripeOrderGateway['retrieveRefundStatus'];
 	refunds?: RefundOrderUnitOfWork;
 };
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
 
 describe('Stripe webhook service', () => {
 	let database: ShopDatabase;
@@ -340,6 +358,73 @@ describe('Stripe webhook service', () => {
 		});
 	});
 
+	it('coalesces overlapping delivery of one Event ID into one provider and commercial intake', async () => {
+		const retrieval = deferred<PaidCheckoutSnapshot>();
+		const route = fixture({ retrievePaidCheckout: async () => retrieval.promise });
+
+		const first = route.service.handle(RAW_BODY, SIGNATURE);
+		await vi.waitFor(() => expect(route.paidCalls).toHaveLength(1));
+		const overlapping = route.service.handle(RAW_BODY, SIGNATURE);
+		await Promise.resolve();
+
+		expect(route.paidCalls).toEqual(['cs_paid']);
+		retrieval.resolve(paidSnapshot(draftId));
+		await expect(Promise.all([first, overlapping])).resolves.toEqual([
+			{ duplicate: false },
+			{ duplicate: true }
+		]);
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+		expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
+			count: 1
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
+			count: 1
+		});
+	});
+
+	it('releases a failed overlapping Event ID so a later delivery can retry durably', async () => {
+		const retrieval = deferred<PaidCheckoutSnapshot>();
+		let providerAttempt = 0;
+		const route = fixture({
+			retrievePaidCheckout: async () => {
+				providerAttempt += 1;
+				if (providerAttempt === 1) return retrieval.promise;
+				return paidSnapshot(draftId);
+			}
+		});
+
+		const first = route.service.handle(RAW_BODY, SIGNATURE);
+		await vi.waitFor(() => expect(route.paidCalls).toHaveLength(1));
+		const overlapping = route.service.handle(RAW_BODY, SIGNATURE);
+		await Promise.resolve();
+		expect(route.paidCalls).toEqual(['cs_paid']);
+		retrieval.reject(new PaidCheckoutError('STRIPE_PAID_CHECKOUT_RETRIEVAL_FAILED'));
+		const failures = await Promise.allSettled([first, overlapping]);
+		expect(failures).toEqual([
+			expect.objectContaining({
+				status: 'rejected',
+				reason: expect.objectContaining({
+					code: 'STRIPE_PAID_CHECKOUT_RETRIEVAL_FAILED',
+					retryable: true
+				})
+			}),
+			expect.objectContaining({
+				status: 'rejected',
+				reason: expect.objectContaining({
+					code: 'STRIPE_PAID_CHECKOUT_RETRIEVAL_FAILED',
+					retryable: true
+				})
+			})
+		]);
+		expect(database.prepare('SELECT processing_status FROM stripe_events').get()).toEqual({
+			processing_status: 'failed'
+		});
+
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
+		expect(route.paidCalls).toEqual(['cs_paid', 'cs_paid']);
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+	});
+
 	it('retries failed and abandoned event claims without losing first-seen identity', async () => {
 		let attempts = 0;
 		const route = fixture({
@@ -373,7 +458,7 @@ describe('Stripe webhook service', () => {
 	it('acknowledges an unpaid completion and completes its event without an order', async () => {
 		const route = fixture({
 			retrievePaidCheckout: async () => {
-				throw new PaidCheckoutError('STRIPE_PAID_CHECKOUT_UNPAID');
+				throw new PaidCheckoutError('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
 			}
 		});
 
@@ -390,6 +475,55 @@ describe('Stripe webhook service', () => {
 			stripe_checkout_session_id: 'cs_paid',
 			stripe_payment_intent_id: null
 		});
+	});
+
+	it.each([
+		[
+			'async paid event with an unpaid Session',
+			'checkout.session.async_payment_succeeded' as const,
+			'STRIPE_PAID_CHECKOUT_SESSION_UNPAID'
+		],
+		[
+			'async paid event with unsettled payment objects',
+			'checkout.session.async_payment_succeeded' as const,
+			'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED'
+		],
+		[
+			'completed paid Session with unsettled payment objects',
+			'checkout.session.completed' as const,
+			'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED'
+		]
+	])('retries %s and converges after Stripe settles', async (_label, type, code) => {
+		let settled = false;
+		const route = fixture({
+			event: checkoutEvent('evt_settlement_retry', type),
+			retrievePaidCheckout: async () => {
+				if (!settled) throw new PaidCheckoutError(code);
+				return paidSnapshot(draftId);
+			}
+		});
+
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).rejects.toMatchObject({
+			code,
+			retryable: true
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 0 });
+		expect(
+			database
+				.prepare('SELECT processing_status, last_error_code, completed_at FROM stripe_events')
+				.get()
+		).toEqual({
+			processing_status: 'failed',
+			last_error_code: code,
+			completed_at: null
+		});
+
+		settled = true;
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+		expect(
+			database.prepare('SELECT processing_status, last_error_code FROM stripe_events').get()
+		).toEqual({ processing_status: 'completed', last_error_code: null });
 	});
 
 	it('rolls back commercial writes and leaves a stable retryable failed event', async () => {
@@ -491,6 +625,167 @@ describe('Stripe webhook service', () => {
 			paymentStatus: 'refunded',
 			fulfillmentStatus: 'pending_review'
 		});
+	});
+
+	it('retries a refunded Charge whose current provider state is still paid', async () => {
+		const paid = fixture();
+		await paid.service.handle(RAW_BODY, SIGNATURE);
+		let currentStatus: PaymentStatus = 'paid';
+		const refund = fixture({
+			event: refundEvent('evt_stale_refund'),
+			retrieveRefundStatus: async () => currentStatus
+		});
+
+		await expect(refund.service.handle(RAW_BODY, SIGNATURE)).rejects.toMatchObject({
+			code: 'STRIPE_REFUND_STATUS_NOT_SETTLED',
+			retryable: true
+		});
+		expect(orders.findByCheckoutSession('cs_paid')).toMatchObject({ paymentStatus: 'paid' });
+		expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
+			count: 1
+		});
+		expect(
+			database
+				.prepare(
+					'SELECT processing_status, last_error_code, completed_at FROM stripe_events WHERE stripe_event_id = ?'
+				)
+				.get('evt_stale_refund')
+		).toEqual({
+			processing_status: 'failed',
+			last_error_code: 'STRIPE_REFUND_STATUS_NOT_SETTLED',
+			completed_at: null
+		});
+
+		currentStatus = 'partially_refunded';
+		await expect(refund.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
+		expect(orders.findByCheckoutSession('cs_paid')).toMatchObject({
+			paymentStatus: 'partially_refunded'
+		});
+		expect(
+			database
+				.prepare(
+					'SELECT processing_status, last_error_code FROM stripe_events WHERE stripe_event_id = ?'
+				)
+				.get('evt_stale_refund')
+		).toEqual({ processing_status: 'completed', last_error_code: null });
+	});
+
+	it.each(['audit insert', 'event completion'] as const)(
+		'rolls back refund state when injected %s fails and converges on retry',
+		async (failurePoint) => {
+			const paid = fixture();
+			await paid.service.handle(RAW_BODY, SIGNATURE);
+			let rejectWrite = true;
+			const realAudit = new SqliteOrderEventRepository(database);
+			const realEvents = new SqliteStripeEventRepository(database);
+			const audit: OrderEventRepository = {
+				append(input) {
+					if (rejectWrite && failurePoint === 'audit insert') {
+						throw new RepositoryError('ORDER_EVENT_APPEND_FAILED');
+					}
+					realAudit.append(input);
+				}
+			};
+			const events: StripeEventRepository = {
+				begin: (...args) => realEvents.begin(...args),
+				complete(...args) {
+					if (rejectWrite && failurePoint === 'event completion') {
+						throw new RepositoryError('STRIPE_EVENT_COMPLETE_FAILED');
+					}
+					realEvents.complete(...args);
+				},
+				fail: (...args) => realEvents.fail(...args)
+			};
+			const refundUnitOfWork = new SqliteRefundOrderUnitOfWork(database, {
+				audit,
+				events
+			});
+			const refund = fixture({
+				event: refundEvent('evt_refund_atomic_retry'),
+				retrieveRefundStatus: async () => 'partially_refunded',
+				refunds: refundUnitOfWork
+			});
+
+			await expect(refund.service.handle(RAW_BODY, SIGNATURE)).rejects.toMatchObject({
+				code: 'REFUND_ORDER_COMMIT_FAILED',
+				retryable: true
+			});
+			expect(orders.findByCheckoutSession('cs_paid')).toMatchObject({ paymentStatus: 'paid' });
+			expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
+				count: 1
+			});
+			expect(
+				database
+					.prepare(
+						'SELECT processing_status, last_error_code, completed_at FROM stripe_events WHERE stripe_event_id = ?'
+					)
+					.get('evt_refund_atomic_retry')
+			).toEqual({
+				processing_status: 'failed',
+				last_error_code: 'REFUND_ORDER_COMMIT_FAILED',
+				completed_at: null
+			});
+
+			rejectWrite = false;
+			await expect(refund.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({
+				duplicate: false
+			});
+			expect(orders.findByCheckoutSession('cs_paid')).toMatchObject({
+				paymentStatus: 'partially_refunded'
+			});
+			expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
+				count: 2
+			});
+			expect(
+				database
+					.prepare(
+						'SELECT processing_status, last_error_code FROM stripe_events WHERE stripe_event_id = ?'
+					)
+					.get('evt_refund_atomic_retry')
+			).toEqual({ processing_status: 'completed', last_error_code: null });
+		}
+	);
+
+	it('completes distinct full-before-partial deliveries without downgrading current refund state', async () => {
+		const paid = fixture();
+		await paid.service.handle(RAW_BODY, SIGNATURE);
+		const refunds = fixture({
+			event: refundEvent('evt_full_first'),
+			retrieveRefundStatus: async () => 'refunded'
+		});
+
+		await expect(refunds.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({
+			duplicate: false
+		});
+		await expect(refunds.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({
+			duplicate: true
+		});
+		refunds.setEvent(refundEvent('evt_partial_delivered_late'));
+		await expect(refunds.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({
+			duplicate: false
+		});
+		await expect(refunds.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({
+			duplicate: true
+		});
+
+		expect(orders.findByCheckoutSession('cs_paid')).toMatchObject({ paymentStatus: 'refunded' });
+		expect(
+			database
+				.prepare(
+					"SELECT stripe_event_id, processing_status FROM stripe_events WHERE event_type = 'charge.refunded' ORDER BY stripe_event_id"
+				)
+				.all()
+		).toEqual([
+			{ stripe_event_id: 'evt_full_first', processing_status: 'completed' },
+			{ stripe_event_id: 'evt_partial_delivered_late', processing_status: 'completed' }
+		]);
+		expect(
+			database.prepare('SELECT action, prior_state, next_state FROM order_events ORDER BY id').all()
+		).toEqual([
+			{ action: 'paid_order_recorded', prior_state: null, next_state: 'pending_review' },
+			{ action: 'payment_status_updated', prior_state: 'paid', next_state: 'refunded' },
+			{ action: 'payment_status_converged', prior_state: 'refunded', next_state: 'refunded' }
+		]);
 	});
 
 	it('never persists the raw webhook, signature, provider PII, or failure text', async () => {

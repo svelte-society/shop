@@ -1,13 +1,25 @@
 import type { PaymentStatus, StripeEventInput } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
-import { SqliteOrderEventRepository } from '$lib/server/audit/order-events.server';
-import { SqliteOrderRepository } from '$lib/server/db/orders.server';
-import { SqliteStripeEventRepository } from '$lib/server/db/stripe-events.server';
+import {
+	SqliteOrderEventRepository,
+	type OrderEventRepository
+} from '$lib/server/audit/order-events.server';
+import { SqliteOrderRepository, type OrderRepository } from '$lib/server/db/orders.server';
+import {
+	SqliteStripeEventRepository,
+	type StripeEventRepository
+} from '$lib/server/db/stripe-events.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 
 export interface RefundOrderUnitOfWork {
 	commitRefund(paymentIntentId: string, status: PaymentStatus, event: StripeEventInput): void;
 }
+
+type RefundOrderUnitOfWorkDependencies = {
+	orders?: OrderRepository;
+	events?: StripeEventRepository;
+	audit?: OrderEventRepository;
+};
 
 type RefundOrderRow = {
 	id: unknown;
@@ -48,14 +60,17 @@ function validateEvent(event: StripeEventInput): void {
 }
 
 export class SqliteRefundOrderUnitOfWork implements RefundOrderUnitOfWork {
-	private readonly orders: SqliteOrderRepository;
-	private readonly events: SqliteStripeEventRepository;
-	private readonly audit: SqliteOrderEventRepository;
+	private readonly orders: OrderRepository;
+	private readonly events: StripeEventRepository;
+	private readonly audit: OrderEventRepository;
 
-	constructor(private readonly database: ShopDatabase) {
-		this.orders = new SqliteOrderRepository(database);
-		this.events = new SqliteStripeEventRepository(database);
-		this.audit = new SqliteOrderEventRepository(database);
+	constructor(
+		private readonly database: ShopDatabase,
+		dependencies: RefundOrderUnitOfWorkDependencies = {}
+	) {
+		this.orders = dependencies.orders ?? new SqliteOrderRepository(database);
+		this.events = dependencies.events ?? new SqliteStripeEventRepository(database);
+		this.audit = dependencies.audit ?? new SqliteOrderEventRepository(database);
 	}
 
 	commitRefund(paymentIntentId: string, status: PaymentStatus, event: StripeEventInput): void {

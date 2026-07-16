@@ -125,6 +125,7 @@ function errorDetails(error: unknown): { code: string; retryable: boolean } {
 		const code = error.code;
 		const retryable =
 			code.endsWith('_RETRIEVAL_FAILED') ||
+			code === 'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED' ||
 			code === 'ORDER_NOT_FOUND' ||
 			code === 'PAID_ORDER_COMMIT_FAILED' ||
 			code === 'REFUND_ORDER_COMMIT_FAILED' ||
@@ -184,6 +185,87 @@ export function createStripeWebhookService(
 		processing = loaded;
 		return processing;
 	};
+	const inFlight = new Map<string, Promise<{ duplicate: boolean }>>();
+	const processEvent = async (
+		event: Stripe.Event,
+		isPaidEvent: boolean,
+		isRefundEvent: boolean
+	): Promise<{ duplicate: boolean }> => {
+		const sessionId = isPaidEvent ? checkoutSessionId(event) : null;
+		const intentId = isRefundEvent ? paymentIntentId(event) : null;
+		const processing = loadProcessing();
+		const processedAt = now();
+		if (!(processedAt instanceof Date) || !Number.isFinite(processedAt.getTime())) {
+			throw new StripeWebhookError('STRIPE_WEBHOOK_CLOCK_INVALID', true);
+		}
+
+		let claim: 'new' | 'completed' | 'retry';
+		try {
+			claim = processing.stripeEvents.begin(event.id, event.type, processedAt);
+		} catch (error) {
+			const details = errorDetails(error);
+			throw new StripeWebhookError(details.code, details.retryable);
+		}
+		if (claim === 'completed') return { duplicate: true };
+
+		try {
+			if (sessionId !== null) {
+				let paid;
+				try {
+					paid = await processing.stripeOrders.retrievePaidCheckout(sessionId);
+				} catch (error) {
+					if (
+						error instanceof PaidCheckoutError &&
+						error.code === 'STRIPE_PAID_CHECKOUT_SESSION_UNPAID'
+					) {
+						if (event.type === 'checkout.session.completed') {
+							processing.stripeEvents.complete(
+								event.id,
+								{ checkoutSessionId: sessionId, paymentIntentId: null },
+								processedAt
+							);
+							return { duplicate: false };
+						}
+						throw new StripeWebhookError(error.code, true);
+					}
+					throw error;
+				}
+				const draft = processing.drafts.findById(paid.draftId);
+				if (!draft) {
+					throw new StripeWebhookError('PAID_CHECKOUT_DRAFT_NOT_FOUND', false);
+				}
+				comparePaidCheckout(draft, paid);
+				processing.paidOrders.commitPaidOrder(
+					{
+						checkoutSessionId: paid.checkoutSessionId,
+						paymentIntentId: paid.paymentIntentId,
+						customerId: paid.customerId,
+						checkoutDraftId: paid.draftId,
+						currency: paid.currency,
+						amounts: paid.amounts,
+						destinationCountry: paid.destinationCountry,
+						updatedAt: processedAt
+					},
+					eventInput(event, processedAt)
+				);
+			} else if (intentId !== null) {
+				const status = await processing.stripeOrders.retrieveRefundStatus(intentId);
+				if (status === 'paid') {
+					throw new StripeWebhookError('STRIPE_REFUND_STATUS_NOT_SETTLED', true);
+				}
+				processing.refunds.commitRefund(intentId, status, eventInput(event, processedAt));
+			}
+			return { duplicate: false };
+		} catch (error) {
+			const details = errorDetails(error);
+			try {
+				processing.stripeEvents.fail(event.id, details.code);
+			} catch {
+				throw new StripeWebhookError('STRIPE_WEBHOOK_EVENT_FAILURE_FAILED', true);
+			}
+			throw new StripeWebhookError(details.code, details.retryable);
+		}
+	};
 
 	return {
 		async handle(rawBody, signature): Promise<{ duplicate: boolean }> {
@@ -205,73 +287,17 @@ export function createStripeWebhookService(
 			const isRefundEvent = REFUND_EVENT_TYPES.has(event.type);
 			if (!isPaidEvent && !isRefundEvent) return { duplicate: false };
 
-			const sessionId = isPaidEvent ? checkoutSessionId(event) : null;
-			const intentId = isRefundEvent ? paymentIntentId(event) : null;
-			const processing = loadProcessing();
-			const processedAt = now();
-			if (!(processedAt instanceof Date) || !Number.isFinite(processedAt.getTime())) {
-				throw new StripeWebhookError('STRIPE_WEBHOOK_CLOCK_INVALID', true);
+			const active = inFlight.get(event.id);
+			if (active) {
+				await active;
+				return { duplicate: true };
 			}
-
-			let claim: 'new' | 'completed' | 'retry';
+			const operation = processEvent(event, isPaidEvent, isRefundEvent);
+			inFlight.set(event.id, operation);
 			try {
-				claim = processing.stripeEvents.begin(event.id, event.type, processedAt);
-			} catch (error) {
-				const details = errorDetails(error);
-				throw new StripeWebhookError(details.code, details.retryable);
-			}
-			if (claim === 'completed') return { duplicate: true };
-
-			try {
-				if (sessionId !== null) {
-					let paid;
-					try {
-						paid = await processing.stripeOrders.retrievePaidCheckout(sessionId);
-					} catch (error) {
-						if (
-							error instanceof PaidCheckoutError &&
-							error.code === 'STRIPE_PAID_CHECKOUT_UNPAID'
-						) {
-							processing.stripeEvents.complete(
-								event.id,
-								{ checkoutSessionId: sessionId, paymentIntentId: null },
-								processedAt
-							);
-							return { duplicate: false };
-						}
-						throw error;
-					}
-					const draft = processing.drafts.findById(paid.draftId);
-					if (!draft) {
-						throw new StripeWebhookError('PAID_CHECKOUT_DRAFT_NOT_FOUND', false);
-					}
-					comparePaidCheckout(draft, paid);
-					processing.paidOrders.commitPaidOrder(
-						{
-							checkoutSessionId: paid.checkoutSessionId,
-							paymentIntentId: paid.paymentIntentId,
-							customerId: paid.customerId,
-							checkoutDraftId: paid.draftId,
-							currency: paid.currency,
-							amounts: paid.amounts,
-							destinationCountry: paid.destinationCountry,
-							updatedAt: processedAt
-						},
-						eventInput(event, processedAt)
-					);
-				} else if (intentId !== null) {
-					const status = await processing.stripeOrders.retrieveRefundStatus(intentId);
-					processing.refunds.commitRefund(intentId, status, eventInput(event, processedAt));
-				}
-				return { duplicate: false };
-			} catch (error) {
-				const details = errorDetails(error);
-				try {
-					processing.stripeEvents.fail(event.id, details.code);
-				} catch {
-					throw new StripeWebhookError('STRIPE_WEBHOOK_EVENT_FAILURE_FAILED', true);
-				}
-				throw new StripeWebhookError(details.code, details.retryable);
+				return await operation;
+			} finally {
+				if (inFlight.get(event.id) === operation) inFlight.delete(event.id);
 			}
 		}
 	};

@@ -361,7 +361,20 @@ describe('Stripe paid Checkout normalization', () => {
 			'unpaid Session',
 			(session: StripeFixtureCheckoutSession) => (session.payment_status = 'unpaid')
 		],
-		['open Session', (session: StripeFixtureCheckoutSession) => (session.status = 'open')],
+		['open Session', (session: StripeFixtureCheckoutSession) => (session.status = 'open')]
+	])('classifies an %s separately from stale settlement state', async (_label, mutate) => {
+		const fixture = paidCheckoutProviderFixture();
+		mutate(fixture.session);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_SESSION_UNPAID'
+		);
+	});
+
+	it.each([
 		[
 			'processing PaymentIntent',
 			(session: StripeFixtureCheckoutSession) => {
@@ -376,8 +389,26 @@ describe('Stripe paid Checkout normalization', () => {
 					throw new Error();
 				paymentIntent.latest_charge.status = 'pending';
 			}
+		],
+		[
+			'uncaptured Charge',
+			(session: StripeFixtureCheckoutSession) => {
+				const paymentIntent = session.payment_intent as StripeFixturePaymentIntent;
+				if (typeof paymentIntent.latest_charge !== 'object' || !paymentIntent.latest_charge)
+					throw new Error();
+				paymentIntent.latest_charge.captured = false;
+			}
+		],
+		[
+			'unpaid Charge',
+			(session: StripeFixtureCheckoutSession) => {
+				const paymentIntent = session.payment_intent as StripeFixturePaymentIntent;
+				if (typeof paymentIntent.latest_charge !== 'object' || !paymentIntent.latest_charge)
+					throw new Error();
+				paymentIntent.latest_charge.paid = false;
+			}
 		]
-	])('rejects an %s', async (_label, mutate) => {
+	])('classifies an %s as unsettled and retryable', async (_label, mutate) => {
 		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture.session);
 
@@ -385,7 +416,7 @@ describe('Stripe paid Checkout normalization', () => {
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
 			),
-			'STRIPE_PAID_CHECKOUT_UNPAID'
+			'STRIPE_PAID_CHECKOUT_PAYMENT_NOT_SETTLED'
 		);
 	});
 
