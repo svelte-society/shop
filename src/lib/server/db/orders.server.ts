@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isAllowedDestination } from '$lib/domain/destinations';
 import type {
 	CheckoutDraftLine,
+	FulfillmentStatus,
 	Order,
 	OrderLine,
 	OrderWithLines,
@@ -441,6 +442,44 @@ export class SqliteOrderRepository implements OrderRepository {
 			...order,
 			lines: lineRows.map((line, index) => mapOrderLine(line, order.id, index))
 		};
+	}
+
+	findById(orderId: string): OrderWithLines | null {
+		if (!isNonEmptyString(orderId)) fail('ORDER_ID_INVALID');
+		const row = this.database.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as
+			OrderRow | undefined;
+		if (!row) return null;
+		const order = mapOrder(row);
+		const lineRows = this.database
+			.prepare('SELECT * FROM order_lines WHERE order_id = ? ORDER BY line_index')
+			.all(order.id) as OrderLineRow[];
+		return {
+			...order,
+			lines: lineRows.map((line, index) => mapOrderLine(line, order.id, index))
+		};
+	}
+
+	listByFulfillmentStatuses(statuses: readonly FulfillmentStatus[], limit: number): Order[] {
+		if (
+			!Array.isArray(statuses) ||
+			statuses.length === 0 ||
+			statuses.some((status) => !fulfillmentStatuses.has(status)) ||
+			!Number.isSafeInteger(limit) ||
+			limit < 1 ||
+			limit > 100
+		) {
+			fail('ORDER_LIST_INVALID');
+		}
+		const placeholders = statuses.map(() => '?').join(', ');
+		const rows = this.database
+			.prepare(
+				`SELECT * FROM orders
+				WHERE fulfillment_status IN (${placeholders})
+				ORDER BY updated_at, id
+				LIMIT ?`
+			)
+			.all(...statuses, limit) as OrderRow[];
+		return rows.map(mapOrder);
 	}
 
 	updatePaymentStatus(paymentIntentId: string, status: PaymentStatus, now: Date): void {
