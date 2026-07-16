@@ -87,6 +87,7 @@ test('reduced-motion preference collapses storefront transitions', async ({ page
 test('primary actions and purchase controls meet the 44px target', async ({ page }) => {
 	await page.goto('/');
 	await expectAtLeast44Pixels(page.getByRole('link', { name: 'Shop the collection' }).first());
+	await page.waitForLoadState('networkidle');
 
 	await page.goto('/products/community-tee');
 	await expectAtLeast44Pixels(page.getByRole('button', { name: 'Add to cart' }));

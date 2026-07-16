@@ -9,7 +9,7 @@
 	"packageManager": "pnpm@10.28.1",
 	"scripts": {
 		"dev": "vite dev",
-		"dev:test-catalog": "NODE_ENV=test TEST_CATALOG_FIXTURE=true TEST_CATALOG_SCENARIO=available STOREFRONT_ENABLED=true CHECKOUT_ENABLED=false PRODUCTION_ORIGIN=https://shop.sveltesociety.dev SUPPORT_EMAIL=merch@sveltesociety.dev STRIPE_SECRET_KEY=sk_test_catalog_fixture STRIPE_PAID_SHIPPING_RATE_ID=shr_test_paid STRIPE_FREE_SHIPPING_RATE_ID=shr_test_free vite dev --host 127.0.0.1 --port 4173 --strictPort",
+		"dev:test-catalog": "node scripts/dev-test-catalog.mjs",
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",

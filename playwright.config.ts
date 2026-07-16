@@ -1,18 +1,15 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const PUBLIC_TEST_ENV = [
-	'NODE_ENV=test',
-	'TEST_CATALOG_FIXTURE=true',
-	'CHECKOUT_ENABLED=false',
-	'PRODUCTION_ORIGIN=https://shop.sveltesociety.dev',
-	'SUPPORT_EMAIL=merch@sveltesociety.dev'
-].join(' ');
-
-const PRIVATE_TEST_ENV = [
-	'STRIPE_SECRET_KEY=sk_test_catalog_fixture',
-	'STRIPE_PAID_SHIPPING_RATE_ID=shr_test_paid',
-	'STRIPE_FREE_SHIPPING_RATE_ID=shr_test_free'
-].join(' ');
+const SHARED_FIXTURE_ENV = {
+	NODE_ENV: 'test',
+	TEST_CATALOG_FIXTURE: 'true',
+	CHECKOUT_ENABLED: 'false',
+	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
+	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
+} as const;
 
 function fixtureServer(
 	port: number,
@@ -20,7 +17,12 @@ function fixtureServer(
 	scenario: 'available' | 'unavailable' | 'guard-proof'
 ) {
 	return {
-		command: `${PUBLIC_TEST_ENV} ${PRIVATE_TEST_ENV} STOREFRONT_ENABLED=${storefrontEnabled} TEST_CATALOG_SCENARIO=${scenario} pnpm exec vite dev --host 127.0.0.1 --port ${port} --strictPort`,
+		command: `pnpm exec vite dev --host 127.0.0.1 --port ${port} --strictPort`,
+		env: {
+			...SHARED_FIXTURE_ENV,
+			STOREFRONT_ENABLED: storefrontEnabled ? 'true' : 'false',
+			TEST_CATALOG_SCENARIO: scenario
+		},
 		port,
 		reuseExistingServer: false,
 		timeout: 120_000

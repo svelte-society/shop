@@ -1,0 +1,84 @@
+import { readFile } from 'node:fs/promises';
+import { describe, expect, it, vi } from 'vitest';
+import playwrightConfig from '../../playwright.config';
+
+const INLINE_ENV_ASSIGNMENT = /(?:^|\s)[A-Z][A-Z0-9_]*=[^\s]+/;
+const SHARED_FIXTURE_ENV = {
+	NODE_ENV: 'test',
+	TEST_CATALOG_FIXTURE: 'true',
+	CHECKOUT_ENABLED: 'false',
+	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
+	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
+} as const;
+
+async function importLauncher() {
+	return import('../../scripts/dev-test-catalog.mjs');
+}
+
+describe('test catalog command portability', () => {
+	it('keeps the package preview command platform-neutral', async () => {
+		const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {
+			scripts: Record<string, string>;
+		};
+		const command = packageJson.scripts['dev:test-catalog'];
+
+		expect(command).toBe('node scripts/dev-test-catalog.mjs');
+		expect(command).not.toMatch(INLINE_ENV_ASSIGNMENT);
+	});
+
+	it('passes fixture variables through webServer.env for every scenario', () => {
+		const configuredServers = playwrightConfig.webServer;
+		const webServers = Array.isArray(configuredServers) ? configuredServers : [configuredServers];
+		const scenarios = [
+			{ port: 4173, storefront: 'true', scenario: 'available' },
+			{ port: 4174, storefront: 'true', scenario: 'unavailable' },
+			{ port: 4175, storefront: 'false', scenario: 'guard-proof' }
+		] as const;
+
+		expect(webServers).toHaveLength(3);
+		for (const [index, server] of webServers.entries()) {
+			const expected = scenarios[index];
+			expect(server?.command).toBe(
+				`pnpm exec vite dev --host 127.0.0.1 --port ${expected.port} --strictPort`
+			);
+			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
+			expect(server?.env).toEqual({
+				...SHARED_FIXTURE_ENV,
+				STOREFRONT_ENABLED: expected.storefront,
+				TEST_CATALOG_SCENARIO: expected.scenario
+			});
+		}
+	});
+
+	it('applies the guarded fixture environment before starting Vite on the strict preview port', async () => {
+		const { startTestCatalogPreview } = await importLauncher();
+		const environment: Record<string, string | undefined> = { EXISTING_VALUE: 'preserved' };
+		const listen = vi.fn(async () => undefined);
+		const close = vi.fn(async () => undefined);
+		const server = { listen, close };
+		const createServer = vi.fn(async () => server);
+		const output = { log: vi.fn() };
+
+		const startedServer = await startTestCatalogPreview({
+			environment,
+			loadVite: async () => ({ createServer }),
+			output
+		});
+
+		expect(environment).toEqual({
+			EXISTING_VALUE: 'preserved',
+			...SHARED_FIXTURE_ENV,
+			STOREFRONT_ENABLED: 'true',
+			TEST_CATALOG_SCENARIO: 'available'
+		});
+		expect(createServer).toHaveBeenCalledWith({
+			server: { host: '127.0.0.1', port: 4173, strictPort: true }
+		});
+		expect(listen).toHaveBeenCalledOnce();
+		expect(output.log).toHaveBeenCalledWith('Test catalog preview: http://127.0.0.1:4173/');
+		expect(startedServer).toBe(server);
+	});
+});
