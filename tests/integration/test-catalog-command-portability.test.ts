@@ -10,6 +10,7 @@ const SHARED_FIXTURE_ENV = {
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
+	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
 } as const;
@@ -47,7 +48,6 @@ describe('test catalog command portability', () => {
 			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 			expect(server?.env).toEqual({
 				...SHARED_FIXTURE_ENV,
-				STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 				STOREFRONT_ENABLED: expected.storefront,
 				TEST_CATALOG_SCENARIO: expected.scenario
 			});
