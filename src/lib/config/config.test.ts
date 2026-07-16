@@ -12,6 +12,7 @@ const validPublicEnv = {
 const validPrivateEnv = {
 	...validPublicEnv,
 	STRIPE_SECRET_KEY: 'sk_test_private_value',
+	STRIPE_WEBHOOK_SECRET: 'whsec_test_private_value',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
 };
@@ -58,28 +59,33 @@ describe('parsePrivateConfig', () => {
 			productionOrigin: new URL('https://shop.sveltesociety.dev'),
 			supportEmail: 'merch@sveltesociety.dev',
 			stripeSecretKey: 'sk_test_private_value',
+			stripeWebhookSecret: 'whsec_test_private_value',
 			stripePaidShippingRateId: 'shr_paid',
 			stripeFreeShippingRateId: 'shr_free'
 		});
 	});
 
-	it.each(['STRIPE_SECRET_KEY', 'STRIPE_PAID_SHIPPING_RATE_ID', 'STRIPE_FREE_SHIPPING_RATE_ID'])(
-		'rejects a missing %s',
-		(name) => {
-			expect(() => parsePrivateConfig({ ...validPrivateEnv, [name]: undefined })).toThrowError(
-				'CONFIG_PRIVATE_INVALID'
-			);
-		}
-	);
+	it.each([
+		'STRIPE_SECRET_KEY',
+		'STRIPE_WEBHOOK_SECRET',
+		'STRIPE_PAID_SHIPPING_RATE_ID',
+		'STRIPE_FREE_SHIPPING_RATE_ID'
+	])('rejects a missing %s', (name) => {
+		expect(() => parsePrivateConfig({ ...validPrivateEnv, [name]: undefined })).toThrowError(
+			'CONFIG_PRIVATE_INVALID'
+		);
+	});
 
-	it.each(['STRIPE_SECRET_KEY', 'STRIPE_PAID_SHIPPING_RATE_ID', 'STRIPE_FREE_SHIPPING_RATE_ID'])(
-		'rejects an empty %s',
-		(name) => {
-			expect(() => parsePrivateConfig({ ...validPrivateEnv, [name]: '' })).toThrowError(
-				'CONFIG_PRIVATE_INVALID'
-			);
-		}
-	);
+	it.each([
+		'STRIPE_SECRET_KEY',
+		'STRIPE_WEBHOOK_SECRET',
+		'STRIPE_PAID_SHIPPING_RATE_ID',
+		'STRIPE_FREE_SHIPPING_RATE_ID'
+	])('rejects an empty %s', (name) => {
+		expect(() => parsePrivateConfig({ ...validPrivateEnv, [name]: '' })).toThrowError(
+			'CONFIG_PRIVATE_INVALID'
+		);
+	});
 
 	it('does not include secret values in configuration errors', () => {
 		const secret = 'sk_live_must_not_leak';

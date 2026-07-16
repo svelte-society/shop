@@ -29,6 +29,7 @@ describe('product catalog loader', () => {
 				...disabledEnv,
 				STOREFRONT_ENABLED: 'true',
 				STRIPE_SECRET_KEY: 'sk_test_catalog',
+				STRIPE_WEBHOOK_SECRET: 'whsec_test_catalog',
 				STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 				STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
 			},

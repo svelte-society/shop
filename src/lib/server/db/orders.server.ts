@@ -172,10 +172,27 @@ function validateAmounts(input: PaidOrderInput): void {
 		fail('PAID_ORDER_INVALID');
 	}
 
-	const calculated = BigInt(subtotal) - BigInt(discount) + BigInt(shipping) + BigInt(tax);
-	if (calculated !== BigInt(total) || calculated > BigInt(Number.MAX_SAFE_INTEGER)) {
+	if (!hasValidInclusiveShippingAmounts({ subtotal, discount, shipping, tax, total })) {
 		fail('PAID_ORDER_INVALID');
 	}
+}
+
+function hasValidInclusiveShippingAmounts(amounts: {
+	subtotal: number;
+	discount: number;
+	shipping: number;
+	tax: number;
+	total: number;
+}): boolean {
+	const netSubtotal = BigInt(amounts.subtotal) - BigInt(amounts.discount);
+	const beforeMerchandiseTax = netSubtotal + BigInt(amounts.shipping);
+	const merchandiseTax = BigInt(amounts.total) - beforeMerchandiseTax;
+	const inclusiveShippingTax = BigInt(amounts.tax) - merchandiseTax;
+	return (
+		merchandiseTax >= 0n &&
+		inclusiveShippingTax >= 0n &&
+		inclusiveShippingTax <= BigInt(amounts.shipping)
+	);
 }
 
 function validatePaidOrder(input: PaidOrderInput): string {
@@ -228,16 +245,7 @@ function mapOrder(row: OrderRow): Order {
 		tax: row.tax_amount,
 		total: row.total_amount
 	};
-	const calculated =
-		BigInt(amounts.subtotal) -
-		BigInt(amounts.discount) +
-		BigInt(amounts.shipping) +
-		BigInt(amounts.tax);
-	if (
-		amounts.discount > amounts.subtotal ||
-		calculated !== BigInt(amounts.total) ||
-		calculated > BigInt(Number.MAX_SAFE_INTEGER)
-	) {
+	if (amounts.discount > amounts.subtotal || !hasValidInclusiveShippingAmounts(amounts)) {
 		fail('ORDER_ROW_INVALID');
 	}
 

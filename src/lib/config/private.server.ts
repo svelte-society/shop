@@ -3,6 +3,7 @@ import { parsePublicConfig, type PublicConfig } from './public';
 
 export type PrivateConfig = PublicConfig & {
 	stripeSecretKey: string;
+	stripeWebhookSecret: string;
 	stripePaidShippingRateId: string;
 	stripeFreeShippingRateId: string;
 };
@@ -14,6 +15,7 @@ const requiredValueSchema = v.pipe(
 
 const stripeEnvSchema = v.object({
 	STRIPE_SECRET_KEY: requiredValueSchema,
+	STRIPE_WEBHOOK_SECRET: requiredValueSchema,
 	STRIPE_PAID_SHIPPING_RATE_ID: requiredValueSchema,
 	STRIPE_FREE_SHIPPING_RATE_ID: requiredValueSchema
 });
@@ -36,6 +38,7 @@ export function parsePrivateConfig(env: Record<string, string | undefined>): Pri
 	return {
 		...publicConfig,
 		stripeSecretKey: result.output.STRIPE_SECRET_KEY,
+		stripeWebhookSecret: result.output.STRIPE_WEBHOOK_SECRET,
 		stripePaidShippingRateId: result.output.STRIPE_PAID_SHIPPING_RATE_ID,
 		stripeFreeShippingRateId: result.output.STRIPE_FREE_SHIPPING_RATE_ID
 	};

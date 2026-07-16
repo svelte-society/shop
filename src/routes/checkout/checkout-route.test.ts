@@ -9,6 +9,7 @@ const BASE_ENV = {
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 	STRIPE_SECRET_KEY: 'sk_test_route',
+	STRIPE_WEBHOOK_SECRET: 'whsec_test_route',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
 	DATABASE_PATH: ':memory:'
