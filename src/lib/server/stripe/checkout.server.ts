@@ -8,6 +8,9 @@ import {
 type CreatedCheckoutSession = Pick<Stripe.Checkout.Session, 'id' | 'url'>;
 type ExpiredCheckoutSession = Pick<Stripe.Checkout.Session, 'id'>;
 
+const CHECKOUT_SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]+$/;
+const STRIPE_CHECKOUT_HOSTNAME = 'checkout.stripe.com';
+
 export type StripeCheckoutClient = {
 	checkout: {
 		sessions: {
@@ -28,11 +31,21 @@ function checkoutMetadata(draftId: string): Record<string, string> {
 	};
 }
 
-function isHttpsUrl(value: unknown): value is string {
-	if (typeof value !== 'string') return false;
+function isCheckoutSessionId(value: unknown): value is string {
+	return typeof value === 'string' && CHECKOUT_SESSION_ID_PATTERN.test(value);
+}
+
+function isStripeCheckoutUrl(value: unknown): value is string {
+	if (typeof value !== 'string' || value.trim() !== value) return false;
 
 	try {
-		return new URL(value).protocol === 'https:';
+		const url = new URL(value);
+		return (
+			url.protocol === 'https:' &&
+			url.hostname === STRIPE_CHECKOUT_HOSTNAME &&
+			url.username === '' &&
+			url.password === ''
+		);
 	} catch {
 		return false;
 	}
@@ -74,7 +87,7 @@ export function createStripeCheckoutGateway(client: StripeCheckoutClient): Strip
 				{ idempotencyKey: `checkout-draft:${input.draftId}` }
 			);
 
-			if (typeof session.id !== 'string' || session.id.length === 0 || !isHttpsUrl(session.url)) {
+			if (!isCheckoutSessionId(session.id) || !isStripeCheckoutUrl(session.url)) {
 				throw new Error('STRIPE_CHECKOUT_SESSION_INVALID');
 			}
 

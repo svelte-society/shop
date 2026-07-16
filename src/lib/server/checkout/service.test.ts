@@ -315,6 +315,46 @@ describe('createCheckoutService', () => {
 		expect(stripe.expirations).toEqual([]);
 	});
 
+	it('keeps the draft unattached when Stripe returns a malformed Checkout Session', async () => {
+		const drafts = new RecordingDraftRepository();
+		const stripe = createStripeCheckoutGateway({
+			checkout: {
+				sessions: {
+					async create() {
+						return {
+							id: 'anything',
+							url: 'https://attacker.example/c/pay/anything'
+						};
+					},
+					async expire(sessionId) {
+						return { id: sessionId };
+					}
+				}
+			}
+		});
+		const service = createCheckoutService({
+			catalog: {
+				async resolveCart() {
+					return [resolvedLine(medium, 1)];
+				}
+			},
+			drafts,
+			stripe,
+			paidShippingRateId: 'shr_paid_10_eur',
+			freeShippingRateId: 'shr_free',
+			productionOrigin: ORIGIN,
+			clock: () => new Date(NOW)
+		});
+
+		await expectCheckoutCode(
+			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			'CHECKOUT_PROVIDER_UNAVAILABLE'
+		);
+
+		expect(drafts.creates).toHaveLength(1);
+		expect(drafts.attachments).toEqual([]);
+	});
+
 	it('expires a created Session and hides its URL when local correlation fails', async () => {
 		const drafts = new RecordingDraftRepository();
 		drafts.attachFailure = new Error('SQLITE_BUSY: /private/shop.sqlite');
@@ -462,14 +502,43 @@ describe('createStripeCheckoutGateway', () => {
 	});
 
 	it.each([
-		['missing URL', null],
-		['non-HTTPS URL', 'javascript:alert(1)']
-	])('rejects a provider response with %s', async (_label, url) => {
+		['missing Session ID', '', 'https://checkout.stripe.com/c/pay/cs_test_valid'],
+		['unprefixed Session ID', 'anything', 'https://checkout.stripe.com/c/pay/cs_test_valid'],
+		[
+			'whitespace in the Session ID',
+			'cs_test invalid',
+			'https://checkout.stripe.com/c/pay/cs_test_valid'
+		],
+		[
+			'URL-like Session ID',
+			'https://checkout.stripe.com/c/pay/cs_test_valid',
+			'https://checkout.stripe.com/c/pay/cs_test_valid'
+		],
+		['missing URL', 'cs_test_valid', null],
+		['non-HTTPS URL', 'cs_test_valid', 'javascript:alert(1)'],
+		['attacker host', 'cs_test_valid', 'https://attacker.example/c/pay/cs_test_valid'],
+		['lookalike host', 'cs_test_valid', 'https://checkout-stripe.com/c/pay/cs_test_valid'],
+		[
+			'subdomain suffix host',
+			'cs_test_valid',
+			'https://checkout.stripe.com.attacker.example/c/pay/cs_test_valid'
+		],
+		[
+			'userinfo',
+			'cs_test_valid',
+			'https://attacker.example@checkout.stripe.com/c/pay/cs_test_valid'
+		],
+		[
+			'surrounding URL whitespace',
+			'cs_test_valid',
+			' https://checkout.stripe.com/c/pay/cs_test_valid '
+		]
+	])('rejects a provider response with %s', async (_label, id, url) => {
 		const client: StripeCheckoutClient = {
 			checkout: {
 				sessions: {
 					async create() {
-						return { id: 'cs_test_123', url };
+						return { id, url };
 					},
 					async expire(sessionId) {
 						return { id: sessionId };
@@ -489,5 +558,38 @@ describe('createStripeCheckoutGateway', () => {
 				cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
 			})
 		).rejects.toThrowError('STRIPE_CHECKOUT_SESSION_INVALID');
+	});
+
+	it.each([
+		[
+			'cs_test_a1B2C3_4',
+			'https://checkout.stripe.com/c/pay/cs_test_a1B2C3_4#fidkdWxOYHwnPyd1blpxYHZxWjA0'
+		],
+		['cs_live_Z9y8X7_6', 'https://checkout.stripe.com/c/pay/cs_live_Z9y8X7_6']
+	])('accepts a valid Stripe Checkout Session fixture %s', async (id, url) => {
+		const client: StripeCheckoutClient = {
+			checkout: {
+				sessions: {
+					async create() {
+						return { id, url };
+					},
+					async expire(sessionId) {
+						return { id: sessionId };
+					}
+				}
+			}
+		};
+
+		await expect(
+			createStripeCheckoutGateway(client).createSession({
+				draftId: 'draft_123',
+				lines: [{ priceId: medium.priceId, quantity: 1 }],
+				shippingRateId: 'shr_paid_10_eur',
+				allowedCountries: ALLOWED_DESTINATIONS,
+				successUrl:
+					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
+				cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
+			})
+		).resolves.toEqual({ id, url });
 	});
 });

@@ -5,6 +5,8 @@ type CheckoutClientOptions = {
 	assign?: (url: string) => void;
 };
 
+const STRIPE_CHECKOUT_HOSTNAME = 'checkout.stripe.com';
+
 export class CheckoutClientError extends Error {
 	constructor() {
 		super('CHECKOUT_UNAVAILABLE');
@@ -18,10 +20,20 @@ function checkoutUrl(input: unknown): string {
 	}
 
 	const redirectUrl = (input as Record<string, unknown>).redirectUrl;
-	if (typeof redirectUrl !== 'string') throw new CheckoutClientError();
+	if (typeof redirectUrl !== 'string' || redirectUrl.trim() !== redirectUrl) {
+		throw new CheckoutClientError();
+	}
 
 	try {
-		if (new URL(redirectUrl).protocol !== 'https:') throw new CheckoutClientError();
+		const url = new URL(redirectUrl);
+		if (
+			url.protocol !== 'https:' ||
+			url.hostname !== STRIPE_CHECKOUT_HOSTNAME ||
+			url.username !== '' ||
+			url.password !== ''
+		) {
+			throw new CheckoutClientError();
+		}
 	} catch (error) {
 		if (error instanceof CheckoutClientError) throw error;
 		throw new CheckoutClientError();

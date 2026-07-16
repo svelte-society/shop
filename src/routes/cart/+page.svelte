@@ -64,7 +64,6 @@
 			await beginCheckout(cart.lines);
 		} catch {
 			checkoutError = 'Checkout is temporarily unavailable. Your cart is safe. Try again shortly.';
-		} finally {
 			checkoutPending = false;
 		}
 	}

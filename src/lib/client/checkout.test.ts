@@ -41,6 +41,47 @@ describe('beginCheckout', () => {
 		[
 			'unsafe redirect',
 			new Response(JSON.stringify({ redirectUrl: 'javascript:alert(1)' }), { status: 200 })
+		],
+		[
+			'attacker host',
+			new Response(
+				JSON.stringify({ redirectUrl: 'https://attacker.example/c/pay/cs_test_client' }),
+				{ status: 200 }
+			)
+		],
+		[
+			'lookalike host',
+			new Response(
+				JSON.stringify({ redirectUrl: 'https://checkout-stripe.com/c/pay/cs_test_client' }),
+				{ status: 200 }
+			)
+		],
+		[
+			'subdomain suffix host',
+			new Response(
+				JSON.stringify({
+					redirectUrl: 'https://checkout.stripe.com.attacker.example/c/pay/cs_test_client'
+				}),
+				{ status: 200 }
+			)
+		],
+		[
+			'userinfo',
+			new Response(
+				JSON.stringify({
+					redirectUrl: 'https://attacker.example@checkout.stripe.com/c/pay/cs_test_client'
+				}),
+				{ status: 200 }
+			)
+		],
+		[
+			'surrounding URL whitespace',
+			new Response(
+				JSON.stringify({
+					redirectUrl: ' https://checkout.stripe.com/c/pay/cs_test_client '
+				}),
+				{ status: 200 }
+			)
 		]
 	])('returns one stable client error for %s without navigating', async (_label, response) => {
 		const redirects: string[] = [];
