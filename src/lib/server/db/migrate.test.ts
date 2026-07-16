@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { closeDatabase, openDatabase } from './connection.server';
 import { migrate } from './migrate.server';
@@ -33,6 +33,44 @@ describe('openDatabase', () => {
 		expect(database.pragma('busy_timeout', { simple: true })).toBe(5_000);
 		expect(database.pragma('foreign_keys', { simple: true })).toBe(1);
 		expect(database.pragma('synchronous', { simple: true })).toBe(2);
+	});
+
+	it('returns the active connection for the same normalized filesystem path', () => {
+		const databasePath = join(temporaryDirectory(), 'shop.sqlite');
+		const database = openDatabase(databasePath);
+
+		expect(openDatabase(databasePath)).toBe(database);
+		expect(openDatabase(relative(process.cwd(), databasePath))).toBe(database);
+	});
+
+	it('rejects a different path without exposing either filesystem location', () => {
+		const firstPath = join(temporaryDirectory(), 'first.sqlite');
+		const secondPath = join(temporaryDirectory(), 'second.sqlite');
+		openDatabase(firstPath);
+
+		expect(() => openDatabase(secondPath)).toThrowError(/^DATABASE_PATH_MISMATCH$/);
+	});
+
+	it('owns the in-memory sentinel explicitly', () => {
+		const database = openDatabase(':memory:');
+
+		expect(openDatabase(':memory:')).toBe(database);
+		expect(() => openDatabase(join(temporaryDirectory(), 'shop.sqlite'))).toThrowError(
+			/^DATABASE_PATH_MISMATCH$/
+		);
+	});
+
+	it('allows a different path after closeDatabase releases ownership', () => {
+		const firstPath = join(temporaryDirectory(), 'first.sqlite');
+		const secondPath = join(temporaryDirectory(), 'second.sqlite');
+		const first = openDatabase(firstPath);
+		closeDatabase();
+
+		const second = openDatabase(secondPath);
+
+		expect(first.open).toBe(false);
+		expect(second.open).toBe(true);
+		expect(second).not.toBe(first);
 	});
 });
 
