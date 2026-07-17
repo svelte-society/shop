@@ -67,25 +67,34 @@
 	);
 	let editingReview = $state(false);
 	let lastItemInput = $state<HTMLInputElement>();
+	let initialFormSync = true;
+	let receivedLabel = $state(
+		untrack(() => (form?.success ? utcFallback(form.result.createdAt) : ''))
+	);
 
 	$effect(() => {
 		const current = form;
+		const syncFields = !initialFormSync;
+		initialFormSync = false;
 		untrack(() => {
-			const fields = (current?.fields ?? {}) as Fields;
-			fullName = fields.fullName ?? '';
-			receiptEmail = fields.receiptEmail ?? '';
-			enteredOrderReference = fields.enteredOrderReference ?? '';
-			scope = fields.scope ?? 'entire_order';
-			const descriptions = fields.itemDescriptions ?? Array(data.itemRowCount).fill('');
-			const quantities = fields.itemQuantities ?? Array(Math.max(1, descriptions.length)).fill('1');
-			rows = Array.from(
-				{ length: Math.max(1, current?.itemRowCount ?? descriptions.length) },
-				(_, index) => ({
-					description: descriptions[index] ?? '',
-					quantity: quantities[index] ?? '1'
-				})
-			);
-			editingReview = false;
+			if (syncFields) {
+				const fields = (current?.fields ?? {}) as Fields;
+				fullName = fields.fullName ?? '';
+				receiptEmail = fields.receiptEmail ?? '';
+				enteredOrderReference = fields.enteredOrderReference ?? '';
+				scope = fields.scope ?? 'entire_order';
+				const descriptions = fields.itemDescriptions ?? Array(data.itemRowCount).fill('');
+				const quantities =
+					fields.itemQuantities ?? Array(Math.max(1, descriptions.length)).fill('1');
+				rows = Array.from(
+					{ length: Math.max(1, current?.itemRowCount ?? descriptions.length) },
+					(_, index) => ({
+						description: descriptions[index] ?? '',
+						quantity: quantities[index] ?? '1'
+					})
+				);
+				editingReview = false;
+			}
 			if (current?.errorSummary || current?.message || current?.success) {
 				void tick().then(() =>
 					document
@@ -97,6 +106,13 @@
 			} else if ((current?.itemRowCount ?? 0) > data.itemRowCount) {
 				void tick().then(() => lastItemInput?.focus());
 			}
+		});
+	});
+
+	$effect(() => {
+		const createdAt = form?.success ? form.result.createdAt : '';
+		untrack(() => {
+			receivedLabel = createdAt ? localizedUtcLabel(createdAt) : '';
 		});
 	});
 
@@ -131,8 +147,24 @@
 		);
 	}
 
-	function utcLabel(value: string): string {
+	function utcFallback(value: string): string {
 		return `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
+	}
+
+	function localizedUtcLabel(value: string): string {
+		try {
+			return new Intl.DateTimeFormat(undefined, {
+				year: 'numeric',
+				month: 'short',
+				day: 'numeric',
+				hour: 'numeric',
+				minute: '2-digit',
+				timeZone: 'UTC',
+				timeZoneName: 'short'
+			}).format(new Date(value));
+		} catch {
+			return utcFallback(value);
+		}
 	}
 </script>
 
@@ -160,7 +192,7 @@
 				</div>
 				<div>
 					<dt>Received</dt>
-					<dd><time datetime={form.result.createdAt}>{utcLabel(form.result.createdAt)}</time></dd>
+					<dd><time datetime={form.result.createdAt}>{receivedLabel}</time></dd>
 				</div>
 				<div>
 					<dt>Order reference entered</dt>
@@ -171,20 +203,22 @@
 					<dd>{form.result.scope === 'entire_order' ? 'The whole purchase' : 'Specific items'}</dd>
 				</div>
 			</dl>
-			{#if form.result.deliveryState === 'delivered'}
-				<p>A receipt was emailed to the address you entered.</p>
-			{:else if form.result.deliveryState === 'queued'}
-				<p>Your receipt email is queued. You can download it now.</p>
-			{:else}
-				<p>
-					Email could not be sent. Your withdrawal notice is safely recorded. Download the receipt
-					now.
-				</p>
-			{/if}
+			<div class="delivery-state" aria-live="polite">
+				{#if form.result.deliveryState === 'delivered'}
+					<p>A receipt was emailed to the address you entered.</p>
+				{:else if form.result.deliveryState === 'queued'}
+					<p>Your receipt email is queued. You can download it now.</p>
+				{:else}
+					<p>
+						Email could not be sent. Your withdrawal notice is safely recorded. Download the receipt
+						now.
+					</p>
+				{/if}
+			</div>
 			<a
 				class="primary-action"
 				href={resolve('/withdraw/receipt/[reference]', { reference: form.result.reference })}
-				>Download withdrawal receipt</a
+				data-sveltekit-reload>Download withdrawal receipt</a
 			>
 		</section>
 	</main>
@@ -276,9 +310,11 @@
 							name="itemDescription"
 							value={row.description}
 						/><input type="hidden" name="itemQuantity" value={row.quantity} />{/each}
-					<p class="confirmation">
-						Submitting this notice does not confirm eligibility, approval, or a refund.
-					</p>
+					<div class="confirmation">
+						<p>Email my withdrawal receipt to {form.review.receiptEmail}</p>
+						<p>I confirm that I want to withdraw from this purchase.</p>
+						<p>Submitting this notice does not confirm eligibility, approval, or a refund.</p>
+					</div>
 					<div class="actions confirm-actions">
 						<button class="secondary-action" type="button" onclick={() => (editingReview = true)}
 							>Back to notice details</button
@@ -361,7 +397,14 @@
 										name="itemDescription"
 										bind:value={row.description}
 										bind:this={lastItemInput}
-									/>{#if form?.errors?.[`itemDescription-${index}`]}<p class="field-error">
+										aria-describedby={form?.errors?.[`itemDescription-${index}`]
+											? `itemDescription-${index}-error`
+											: undefined}
+										aria-invalid={form?.errors?.[`itemDescription-${index}`] ? 'true' : undefined}
+									/>{#if form?.errors?.[`itemDescription-${index}`]}<p
+											class="field-error"
+											id={`itemDescription-${index}-error`}
+										>
 											{form.errors[`itemDescription-${index}`]}
 										</p>{/if}
 								</div>
@@ -374,7 +417,14 @@
 										max="99"
 										inputmode="numeric"
 										bind:value={row.quantity}
-									/>{#if form?.errors?.[`itemQuantity-${index}`]}<p class="field-error">
+										aria-describedby={form?.errors?.[`itemQuantity-${index}`]
+											? `itemQuantity-${index}-error`
+											: undefined}
+										aria-invalid={form?.errors?.[`itemQuantity-${index}`] ? 'true' : undefined}
+									/>{#if form?.errors?.[`itemQuantity-${index}`]}<p
+											class="field-error"
+											id={`itemQuantity-${index}-error`}
+										>
 											{form.errors[`itemQuantity-${index}`]}
 										</p>{/if}
 								</div>
@@ -636,7 +686,10 @@
 		color: var(--color-slate-700);
 		line-height: 1.6;
 	}
-	.receipt > p {
+	.confirmation p {
+		margin: 0.35rem 0;
+	}
+	.delivery-state p {
 		line-height: 1.6;
 	}
 	@media (max-width: 36rem) {

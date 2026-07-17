@@ -55,6 +55,23 @@ describe('withdrawal page', () => {
 			.toHaveValue('Community Tee');
 	});
 
+	it('focuses a row added by the server during initial hydration', async () => {
+		render(WithdrawalPage, {
+			data,
+			form: {
+				fields: {
+					...fields,
+					itemDescriptions: ['Community Tee', ''],
+					itemQuantities: ['2', '1']
+				},
+				itemRowCount: 2
+			}
+		});
+		const addedRow = page.getByLabelText('Item description 2', { exact: true });
+		await expect.element(addedRow).toBeVisible();
+		expect(document.activeElement).toBe(addedRow.element());
+	});
+
 	it('places adjacent errors under preserved controls and links them from a focusable summary', async () => {
 		render(WithdrawalPage, {
 			data,
@@ -65,12 +82,15 @@ describe('withdrawal page', () => {
 				errors: {
 					fullName: 'Enter your full name.',
 					receiptEmail: 'Enter a valid email address.',
-					scope: 'Choose the whole purchase or specific items.'
+					scope: 'Choose the whole purchase or specific items.',
+					'itemDescription-0': 'Describe this item.',
+					'itemQuantity-0': 'Enter a quantity from 1 to 99.'
 				}
 			}
 		});
 		const summary = page.getByRole('alert');
 		await expect.element(summary).toHaveAttribute('id', 'withdrawal-errors');
+		expect(document.activeElement).toBe(summary.element());
 		await expect
 			.element(summary.getByRole('link', { name: 'Enter your full name.' }))
 			.toHaveAttribute('href', '#fullName');
@@ -82,6 +102,12 @@ describe('withdrawal page', () => {
 		expect(document.querySelector('#receiptEmail-error')?.textContent).toBe(
 			'Enter a valid email address.'
 		);
+		for (const name of ['itemDescription', 'itemQuantity']) {
+			const control = document.querySelector(`#${name}-0`);
+			expect(control).toHaveAttribute('aria-describedby', `${name}-0-error`);
+			expect(control).toHaveAttribute('aria-invalid', 'true');
+			expect(document.querySelector(`#${name}-0-error`)).not.toBeNull();
+		}
 	});
 
 	it('renders and focuses generic secure action failures', async () => {
@@ -133,6 +159,14 @@ describe('withdrawal page', () => {
 			)
 			.toBeVisible();
 		await expect
+			.element(page.getByText('Email my withdrawal receipt to ada@example.test', { exact: true }))
+			.toBeVisible();
+		await expect
+			.element(
+				page.getByText('I confirm that I want to withdraw from this purchase.', { exact: true })
+			)
+			.toBeVisible();
+		await expect
 			.element(page.getByRole('button', { name: 'Confirm withdrawal from purchase' }))
 			.toBeVisible();
 	});
@@ -145,13 +179,14 @@ describe('withdrawal page', () => {
 			'Email could not be sent. Your withdrawal notice is safely recorded. Download the receipt now.'
 		]
 	] as const)('renders the restrained %s success trust state', async (deliveryState, message) => {
+		const createdAt = '2026-07-17T12:00:00.000Z';
 		render(WithdrawalPage, {
 			data,
 			form: {
 				success: true,
 				result: {
 					reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
-					createdAt: '2026-07-17T12:00:00.000Z',
+					createdAt,
 					scope: 'specific_items',
 					enteredOrderReference: 'ORDER-2042',
 					deliveryState
@@ -167,12 +202,25 @@ describe('withdrawal page', () => {
 		await expect.element(page.getByText('ORDER-2042', { exact: true })).toBeVisible();
 		await expect.element(page.getByText('Specific items', { exact: true })).toBeVisible();
 		await expect.element(page.getByText(message, { exact: true })).toBeVisible();
+		const liveRegion = page.getByText(message, { exact: true }).element().closest('[aria-live]');
+		expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+		const downloadLink = page.getByRole('link', { name: 'Download withdrawal receipt' });
 		await expect
-			.element(page.getByRole('link', { name: 'Download withdrawal receipt' }))
+			.element(downloadLink)
 			.toHaveAttribute('href', '/withdraw/receipt/WDR-AAAAAAAAAAAAAAAAAAAAAA');
+		await expect.element(downloadLink).toHaveAttribute('data-sveltekit-reload', '');
+		const localizedTime = new Intl.DateTimeFormat(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit',
+			timeZone: 'UTC',
+			timeZoneName: 'short'
+		}).format(new Date(createdAt));
 		await expect
-			.element(page.getByText('2026-07-17 12:00 UTC', { exact: true }))
-			.toHaveAttribute('datetime', '2026-07-17T12:00:00.000Z');
+			.element(page.getByText(localizedTime, { exact: true }))
+			.toHaveAttribute('datetime', createdAt);
 		expect(document.body.textContent).not.toMatch(
 			/withdrawal approved|refund (?:issued|started|confirmed)/iu
 		);

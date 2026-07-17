@@ -41,7 +41,11 @@ function form(overrides: Record<string, string | string[]> = {}) {
 }
 
 function setup(
-	options: { deliveryState?: 'delivered' | 'queued' | 'failed'; submitError?: Error } = {}
+	options: {
+		deliveryState?: 'delivered' | 'queued' | 'failed';
+		submitError?: Error;
+		production?: boolean;
+	} = {}
 ) {
 	const cookies = new TestCookies();
 	const csrfToken = _issueOrReuseWithdrawalCsrf(cookies as never, false);
@@ -55,7 +59,7 @@ function setup(
 				deliveryState: options.deliveryState ?? 'delivered'
 			}));
 	const page = _createWithdrawalPage({
-		production: true,
+		production: options.production ?? true,
 		environment: {
 			PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 			HOST_ALLOWLIST: 'shop.sveltesociety.dev'
@@ -70,7 +74,13 @@ function event(
 	data: FormData,
 	cookies: TestCookies,
 	csrfToken: string | null,
-	options: { host?: string; origin?: string; address?: string; contentLength?: string } = {}
+	options: {
+		host?: string;
+		origin?: string;
+		address?: string;
+		contentLength?: string;
+		eventProtocol?: 'http:' | 'https:';
+	} = {}
 ) {
 	if (csrfToken !== null) data.set('csrfToken', csrfToken);
 	const host = options.host ?? 'shop.sveltesociety.dev';
@@ -84,7 +94,7 @@ function event(
 	return {
 		request,
 		cookies,
-		url: new URL(request.url),
+		url: new URL(`${options.eventProtocol ?? 'https:'}//${host}/withdraw?/confirm`),
 		getClientAddress: () => options.address ?? '192.0.2.10'
 	} as never;
 }
@@ -150,6 +160,80 @@ describe('withdrawal page server', () => {
 			)
 		);
 		expect(isActionFailure(tooMany) && tooMany.status).toBe(400);
+	});
+
+	it('rejects oversized raw item arrays before scope branching and clamps failure row counts', async () => {
+		const { cookies, csrfToken, page, submit } = setup();
+		const rows = Array.from({ length: 21 }, (_, index) => `Item ${index}`);
+		const quantities = rows.map(() => '1');
+		const review = await page.actions.review(
+			event(
+				form({ scope: 'entire_order', itemDescription: rows, itemQuantity: quantities }),
+				cookies,
+				csrfToken
+			)
+		);
+		expect(isActionFailure(review) && review.data).toMatchObject({
+			errors: { items: expect.any(String) },
+			itemRowCount: 20
+		});
+		const confirm = await page.actions.confirm(
+			event(
+				form({ scope: 'tampered', itemDescription: rows, itemQuantity: quantities }),
+				cookies,
+				csrfToken
+			)
+		);
+		expect(isActionFailure(confirm) && confirm.data).toMatchObject({
+			errors: { items: expect.any(String), scope: expect.any(String) },
+			itemRowCount: 20
+		});
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['mismatched cardinality', ['Tee', 'Cap'], ['1']],
+		['oversized quantity array', ['Tee'], Array.from({ length: 21 }, () => '1')]
+	])('rejects %s for a whole-order notice', async (_label, descriptions, quantities) => {
+		const { cookies, csrfToken, page, submit } = setup();
+		const response = await page.actions.review(
+			event(
+				form({
+					scope: 'entire_order',
+					itemDescription: descriptions,
+					itemQuantity: quantities
+				}),
+				cookies,
+				csrfToken
+			)
+		);
+		if (!isActionFailure(response) || !response.data) throw new Error('EXPECTED_ACTION_FAILURE');
+		const failureData = response.data as unknown as {
+			errors: Record<string, string>;
+			itemRowCount: number;
+		};
+		expect(failureData).toMatchObject({
+			errors: { items: expect.any(String) }
+		});
+		expect(failureData.itemRowCount).toBeLessThanOrEqual(20);
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it('rejects an oversized add request without returning more than twenty rows', async () => {
+		const { cookies, csrfToken, page, submit } = setup();
+		const rows = Array.from({ length: 21 }, (_, index) => `Item ${index}`);
+		const response = await page.actions.addItem(
+			event(
+				form({ scope: 'specific_items', itemDescription: rows, itemQuantity: rows.map(() => '1') }),
+				cookies,
+				csrfToken
+			)
+		);
+		expect(isActionFailure(response) && response.data).toMatchObject({
+			errors: { items: expect.any(String) },
+			itemRowCount: 20
+		});
+		expect(submit).not.toHaveBeenCalled();
 	});
 
 	it('returns adjacent validation errors and no case from review or confirm', async () => {
@@ -249,6 +333,15 @@ describe('withdrawal page server', () => {
 			});
 		}
 	);
+
+	it('keeps the receipt cookie Secure in production behind an HTTP-shaped internal URL', async () => {
+		const { cookies, csrfToken, page } = setup({ production: true });
+		const response = await page.actions.confirm(
+			event(form(), cookies, csrfToken, { eventProtocol: 'http:' })
+		);
+		expect(response).toMatchObject({ success: true });
+		expect(cookies.sets.at(-1)?.options.secure).toBe(true);
+	});
 
 	it('maps database or encryption failures to a generic 503 without reflecting submitted data', async () => {
 		const { cookies, csrfToken, page } = setup({

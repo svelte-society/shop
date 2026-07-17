@@ -72,8 +72,20 @@ function rawFields(data: FormData): RawFields {
 	};
 }
 
+function itemStructureError(fields: RawFields): string | undefined {
+	if (
+		fields.itemDescriptions.length > MAX_ITEMS ||
+		fields.itemQuantities.length > MAX_ITEMS ||
+		fields.itemDescriptions.length !== fields.itemQuantities.length
+	) {
+		return 'Add between 1 and 20 item rows.';
+	}
+}
+
 function fieldErrors(fields: RawFields): Record<string, string> {
 	const errors: Record<string, string> = {};
+	const structureError = itemStructureError(fields);
+	if (structureError) errors.items = structureError;
 	if (!fields.fullName.trim()) errors.fullName = 'Enter your full name.';
 	if (!/^\S+@[^\s@]+\.[^\s@]+$/u.test(fields.receiptEmail.trim()))
 		errors.receiptEmail = 'Enter a valid email address.';
@@ -82,19 +94,15 @@ function fieldErrors(fields: RawFields): Record<string, string> {
 	if (fields.scope !== 'entire_order' && fields.scope !== 'specific_items')
 		errors.scope = 'Choose the whole purchase or specific items.';
 	if (fields.scope === 'specific_items') {
-		if (
-			fields.itemDescriptions.length < 1 ||
-			fields.itemDescriptions.length > MAX_ITEMS ||
-			fields.itemDescriptions.length !== fields.itemQuantities.length
-		) {
-			errors.items = 'Add between 1 and 20 item rows.';
+		if (fields.itemDescriptions.length < 1) errors.items = 'Add between 1 and 20 item rows.';
+		if (!structureError) {
+			fields.itemDescriptions.forEach((description, index) => {
+				if (!description.trim()) errors[`itemDescription-${index}`] = 'Describe this item.';
+				const quantity = Number(fields.itemQuantities[index]);
+				if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99)
+					errors[`itemQuantity-${index}`] = 'Enter a quantity from 1 to 99.';
+			});
 		}
-		fields.itemDescriptions.forEach((description, index) => {
-			if (!description.trim()) errors[`itemDescription-${index}`] = 'Describe this item.';
-			const quantity = Number(fields.itemQuantities[index]);
-			if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99)
-				errors[`itemQuantity-${index}`] = 'Enter a quantity from 1 to 99.';
-		});
 	}
 	return errors;
 }
@@ -169,7 +177,7 @@ export function _createWithdrawalPage(overrides: Partial<PageDependencies> = {})
 		return fail(400, {
 			fields,
 			errors,
-			itemRowCount: Math.max(1, fields.itemDescriptions.length),
+			itemRowCount: Math.min(MAX_ITEMS, Math.max(1, fields.itemDescriptions.length)),
 			errorSummary: true
 		});
 	}
@@ -178,6 +186,8 @@ export function _createWithdrawalPage(overrides: Partial<PageDependencies> = {})
 		const parsed = await read(event);
 		if (!(parsed instanceof FormData)) return parsed;
 		const fields = rawFields(parsed);
+		const structureError = itemStructureError(fields);
+		if (structureError) return validationFailure(fields, { items: structureError });
 		if (fields.itemDescriptions.length >= MAX_ITEMS)
 			return validationFailure(fields, { items: 'You can add up to 20 item rows.' });
 		fields.itemDescriptions.push('');
@@ -189,6 +199,8 @@ export function _createWithdrawalPage(overrides: Partial<PageDependencies> = {})
 		const parsed = await read(event);
 		if (!(parsed instanceof FormData)) return parsed;
 		const fields = rawFields(parsed);
+		const structureError = itemStructureError(fields);
+		if (structureError) return validationFailure(fields, { items: structureError });
 		const index = Number(exactText(parsed, 'removeIndex'));
 		if (
 			Number.isInteger(index) &&
@@ -199,7 +211,10 @@ export function _createWithdrawalPage(overrides: Partial<PageDependencies> = {})
 			fields.itemDescriptions.splice(index, 1);
 			fields.itemQuantities.splice(index, 1);
 		}
-		return { fields, itemRowCount: Math.max(1, fields.itemDescriptions.length) };
+		return {
+			fields,
+			itemRowCount: Math.min(MAX_ITEMS, Math.max(1, fields.itemDescriptions.length))
+		};
 	};
 
 	const review = async (event: RequestEvent) => {
@@ -240,7 +255,7 @@ export function _createWithdrawalPage(overrides: Partial<PageDependencies> = {})
 			event.cookies.set(WITHDRAWAL_RECEIPT_COOKIE, token, {
 				httpOnly: true,
 				sameSite: 'strict',
-				secure: event.url.protocol === 'https:',
+				secure: dependencies.production || event.url.protocol === 'https:',
 				path: `/withdraw/receipt/${submission.reference}`,
 				maxAge: WITHDRAWAL_RECEIPT_MAX_AGE_SECONDS
 			});
