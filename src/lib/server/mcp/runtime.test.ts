@@ -167,6 +167,46 @@ function initializeBody(): Record<string, unknown> {
 	};
 }
 
+function createComposedRuntimeHandler(database: ShopDatabase) {
+	const respond = createMcpResponder(() =>
+		createRuntimeMcpServices(database, environment, {
+			createStripeGateway: () => stripeGateway(),
+			createStyriaGateway: () => styriaGateway(),
+			createPlunkGateway: () => plunkGateway()
+		})
+	);
+	return _createMcpRequestHandler({ MCP_ENABLED: 'true', MCP_BEARER_TOKEN: TOKEN }, respond);
+}
+
+async function initializeRuntimeSession(
+	handler: ReturnType<typeof createComposedRuntimeHandler>,
+	sessionId: string
+): Promise<void> {
+	const initialized = await handler({
+		request: rpcRequest(initializeBody(), { sessionId })
+	} as Parameters<typeof handler>[0]);
+	expect(initialized.status).toBe(200);
+}
+
+async function inspectWithdrawal(
+	handler: ReturnType<typeof createComposedRuntimeHandler>,
+	sessionId: string,
+	reference: string
+): Promise<JsonRpcResponse> {
+	const response = await handler({
+		request: rpcRequest(
+			{
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'inspect_withdrawal_case', arguments: { reference } }
+			},
+			{ sessionId }
+		)
+	} as Parameters<typeof handler>[0]);
+	return eventData(response);
+}
+
 describe('runtime MCP composition', () => {
 	const databases: Database.Database[] = [];
 
@@ -512,5 +552,64 @@ describe('runtime MCP composition', () => {
 			level: 'warn',
 			code: 'HTTP_REQUEST_REJECTED'
 		});
+	});
+
+	it('returns a stable not-found inspection error through the authenticated composed runtime without reading history', async () => {
+		const database = new Database(':memory:');
+		databases.push(database);
+		migrate(database, migrationsDirectory);
+		const handler = createComposedRuntimeHandler(database);
+		const historyRead = vi.spyOn(SqliteWithdrawalRepository.prototype, 'getInspectionHistory');
+
+		try {
+			const unauthorized = await handler({
+				request: rpcRequest(initializeBody(), { token: 'wrong-token' })
+			} as Parameters<typeof handler>[0]);
+			expect(unauthorized.status).toBe(401);
+
+			const sessionId = 'runtime-missing-withdrawal-session';
+			await initializeRuntimeSession(handler, sessionId);
+			const message = await inspectWithdrawal(handler, sessionId, 'WDR-MMMMMMMMMMMMMMMMMMMMMM');
+
+			expect(message.result).toMatchObject({
+				isError: true,
+				structuredContent: { error: { code: 'WITHDRAWAL_CASE_NOT_FOUND' } }
+			});
+			expect(historyRead).not.toHaveBeenCalled();
+		} finally {
+			historyRead.mockRestore();
+		}
+	});
+
+	it('returns a stable PII-purged inspection error through the authenticated composed runtime without reading history', async () => {
+		const database = new Database(':memory:');
+		databases.push(database);
+		migrate(database, migrationsDirectory);
+		seedWithdrawal(database);
+		database
+			.prepare(
+				`UPDATE withdrawal_cases SET schema_version = NULL,
+				 encryption_key_version = NULL, encrypted_payload = NULL,
+				 payload_nonce = NULL, payload_tag = NULL, dedupe_fingerprint = NULL,
+				 purged_at = '2026-07-17T09:00:00.000Z'
+				 WHERE id = 'case_runtime_private'`
+			)
+			.run();
+		const handler = createComposedRuntimeHandler(database);
+		const historyRead = vi.spyOn(SqliteWithdrawalRepository.prototype, 'getInspectionHistory');
+
+		try {
+			const sessionId = 'runtime-purged-withdrawal-session';
+			await initializeRuntimeSession(handler, sessionId);
+			const message = await inspectWithdrawal(handler, sessionId, 'WDR-RRRRRRRRRRRRRRRRRRRRRR');
+
+			expect(message.result).toMatchObject({
+				isError: true,
+				structuredContent: { error: { code: 'WITHDRAWAL_PII_PURGED' } }
+			});
+			expect(historyRead).not.toHaveBeenCalled();
+		} finally {
+			historyRead.mockRestore();
+		}
 	});
 });

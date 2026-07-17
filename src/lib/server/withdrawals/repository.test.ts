@@ -306,15 +306,58 @@ describe('SqliteWithdrawalRepository submissions', () => {
 		expect(repository.loadEncryptedById('case_missing')).toBeNull();
 	});
 
-	it('reads validated case-scoped PII-free event and message delivery history', () => {
+	it('reads PII-free history in ID order, excludes other cases, and performs no writes', () => {
 		repository.createSubmission(submission());
+		repository.createSubmission(
+			submission({
+				id: 'case_456',
+				reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+				encryptedPayload: encryptWithdrawalPayload(payload(), 'case_456', key),
+				dedupeFingerprint: 'b'.repeat(64),
+				createdAt: new Date(now.getTime() + 1_000)
+			})
+		);
 		database
 			.prepare(
 				`UPDATE withdrawal_messages SET attempt_count = 2,
 				 provider_delivery_id = 'delivery_123', completed_at = ?,
-				 last_error_code = NULL WHERE id = 1`
+				 last_error_code = NULL WHERE case_id = 'case_123'`
 			)
 			.run(new Date(now.getTime() + 2_000).toISOString());
+		database
+			.prepare(
+				`UPDATE withdrawal_case_events SET action = 'other_case_only',
+				 result_code = 'OTHER_CASE_ONLY' WHERE case_id = 'case_456'`
+			)
+			.run();
+		database
+			.prepare(
+				`UPDATE withdrawal_messages SET attempt_count = 9,
+				 provider_delivery_id = 'other_case_delivery' WHERE case_id = 'case_456'`
+			)
+			.run();
+		database
+			.prepare(
+				`INSERT INTO withdrawal_case_events (
+				 case_id, actor, action, prior_status, next_status, result_code, created_at
+				 ) VALUES ('case_123', 'codex-admin', 'review_started', 'submitted',
+				 'reviewing', 'REVIEW_STARTED', ?)`
+			)
+			.run(new Date(now.getTime() - 2_000).toISOString());
+		database
+			.prepare(
+				`INSERT INTO withdrawal_messages (
+				 case_id, kind, resend_of_message_id, idempotency_key, attempt_count,
+				 next_attempt_at, provider_delivery_id, completed_at, last_error_code
+				 ) VALUES ('case_123', 'eligible_instructions', NULL,
+				 'withdrawal:eligible:case_123', 1, ?, NULL, NULL, 'DELIVERY_PENDING')`
+			)
+			.run(new Date(now.getTime() - 1_000).toISOString());
+		const before = {
+			cases: database.prepare('SELECT * FROM withdrawal_cases ORDER BY id').all(),
+			events: database.prepare('SELECT * FROM withdrawal_case_events ORDER BY id').all(),
+			messages: database.prepare('SELECT * FROM withdrawal_messages ORDER BY id').all()
+		};
 
 		const history = repository.getInspectionHistory('case_123');
 
@@ -327,6 +370,14 @@ describe('SqliteWithdrawalRepository submissions', () => {
 					nextStatus: 'submitted',
 					resultCode: 'NOTICE_RECEIVED',
 					createdAt: now
+				},
+				{
+					actor: 'codex-admin',
+					action: 'review_started',
+					priorStatus: 'submitted',
+					nextStatus: 'reviewing',
+					resultCode: 'REVIEW_STARTED',
+					createdAt: new Date(now.getTime() - 2_000)
 				}
 			],
 			messages: [
@@ -337,15 +388,52 @@ describe('SqliteWithdrawalRepository submissions', () => {
 					providerDeliveryId: 'delivery_123',
 					completedAt: new Date(now.getTime() + 2_000),
 					lastErrorCode: null
+				},
+				{
+					kind: 'eligible_instructions',
+					attemptCount: 1,
+					nextAttemptAt: new Date(now.getTime() - 1_000),
+					providerDeliveryId: null,
+					completedAt: null,
+					lastErrorCode: 'DELIVERY_PENDING'
 				}
 			]
 		});
 		const serialized = JSON.stringify(history);
 		expect(serialized).not.toMatch(
-			/case_123|withdrawal:receipt|Private Test Name|Private\.Customer@example\.com|PRIVATE-ORDER-42/iu
+			/case_(?:123|456)|withdrawal:receipt|Private Test Name|Private\.Customer@example\.com|PRIVATE-ORDER-42|other_case/iu
 		);
+		expect({
+			cases: database.prepare('SELECT * FROM withdrawal_cases ORDER BY id').all(),
+			events: database.prepare('SELECT * FROM withdrawal_case_events ORDER BY id').all(),
+			messages: database.prepare('SELECT * FROM withdrawal_messages ORDER BY id').all()
+		}).toEqual(before);
 		expect(() => repository.getInspectionHistory(' case_123')).toThrowError(
 			'WITHDRAWAL_CASE_ID_INVALID'
+		);
+	});
+
+	it('rejects corrupt inspection event and message rows with stable validation errors', () => {
+		repository.createSubmission(submission());
+		database
+			.prepare(
+				"UPDATE withdrawal_case_events SET action = 'INVALID ACTION' WHERE case_id = 'case_123'"
+			)
+			.run();
+
+		expect(() => repository.getInspectionHistory('case_123')).toThrowError(
+			'WITHDRAWAL_EVENT_ROW_INVALID'
+		);
+
+		database
+			.prepare("UPDATE withdrawal_case_events SET action = 'submitted' WHERE case_id = 'case_123'")
+			.run();
+		database
+			.prepare("UPDATE withdrawal_messages SET next_attempt_at = '' WHERE case_id = 'case_123'")
+			.run();
+
+		expect(() => repository.getInspectionHistory('case_123')).toThrowError(
+			'WITHDRAWAL_MESSAGE_ROW_INVALID'
 		);
 	});
 });

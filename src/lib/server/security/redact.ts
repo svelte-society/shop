@@ -96,6 +96,9 @@ function safeScalar(key: string, value: unknown): unknown {
 		return Number.isFinite(value) && value >= 0 ? value : REDACTED;
 	}
 	if (typeof value !== 'string') return REDACTED;
+	if (normalized === 'reference' || normalized === 'publicreference') {
+		return /^WDR-[A-Za-z0-9_-]{22}$/u.test(value) ? value : REDACTED;
+	}
 	if (containsSensitiveScalar(value)) {
 		return REDACTED;
 	}

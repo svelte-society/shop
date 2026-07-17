@@ -90,6 +90,27 @@ describe('redact', () => {
 		});
 	});
 
+	it.each(['reference', 'public_reference'])(
+		'redacts a private token hidden under the public withdrawal key %s',
+		(key) => {
+			expect(redact({ [key]: 'private-withdrawal-token' })).toEqual({
+				[key]: '[REDACTED]'
+			});
+		}
+	);
+
+	it('retains only exact public withdrawal reference values under withdrawal reference keys', () => {
+		expect(
+			redact({
+				reference: 'WDR-AbCdEfGhIjKlMnOpQrSt_1',
+				public_reference: 'WDR-0123456789abcdefghij-_'
+			})
+		).toEqual({
+			reference: 'WDR-AbCdEfGhIjKlMnOpQrSt_1',
+			public_reference: 'WDR-0123456789abcdefghij-_'
+		});
+	});
+
 	it.each(['/customer/person%40example.test', '/customer/46701234567'])(
 		'redacts personal data embedded in a pathname value %s',
 		(pathname) => {
