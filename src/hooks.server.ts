@@ -197,6 +197,12 @@ function rateLimitProblem(policy: RateLimitPolicy): Response {
 	return response;
 }
 
+function routeTemplate(routeId: string | null | undefined): string {
+	return typeof routeId === 'string' && /^\/[A-Za-z0-9_./()[\]+=-]{0,255}$/u.test(routeId)
+		? routeId
+		: 'unmatched';
+}
+
 type SecurityHandleOptions = {
 	production?: boolean;
 	now?: () => number;
@@ -234,7 +240,7 @@ export function createSecurityHandle(
 			} else if (pathname === '/webhooks/stripe' && event.request.method === 'POST') {
 				policy = rateLimitPolicies.webhook;
 				keyPrefix = 'webhook';
-			} else if (pathname === '/mcp' && environment.MCP_ENABLED !== 'false') {
+			} else if (pathname === '/mcp' && environment.MCP_ENABLED === 'true') {
 				const authorized = authorizeBearer(
 					event.request.headers.get('authorization'),
 					environment.MCP_BEARER_TOKEN ?? ''
@@ -289,17 +295,18 @@ export function createSecurityHandle(
 					? 'HTTP_REQUEST_REJECTED'
 					: 'HTTP_REQUEST_COMPLETED';
 		try {
-			emit({
-				level: response.status >= 500 ? 'error' : response.status >= 400 ? 'warn' : 'info',
-				code,
-				fields: {
-					request_id: id,
-					method: event.request.method,
-					pathname: event.url.pathname,
-					status: response.status,
-					duration_ms: duration
-				}
-			});
+			if (!event.locals.unexpectedErrorLogged)
+				emit({
+					level: response.status >= 500 ? 'error' : response.status >= 400 ? 'warn' : 'info',
+					code,
+					fields: {
+						request_id: id,
+						method: event.request.method,
+						route: routeTemplate(event.route.id),
+						status: response.status,
+						duration_ms: duration
+					}
+				});
 		} catch {
 			// Logging cannot change the HTTP result.
 		}
@@ -315,7 +322,9 @@ export function createApplicationHandle(
 	let startup: ReturnType<ApplicationLifecycle['start']> | undefined;
 
 	return async ({ event, resolve }) => {
-		if (event.url?.pathname === '/health/live') return resolve(event);
+		if (event.url?.pathname === '/health/live' && event.request.method === 'GET') {
+			return resolve(event);
+		}
 
 		if (!started) {
 			const activeStartup = (startup ??= application.start(options));
@@ -342,16 +351,21 @@ export const handle: Handle = sequence(
 	applicationHandle
 );
 
-export const handleError: HandleServerError = ({ event }) => {
-	log({
-		level: 'error',
-		code: 'HTTP_UNEXPECTED_ERROR',
-		fields: {
-			request_id: event.locals.requestId ?? 'request_unavailable',
-			method: event.request.method,
-			pathname: event.url.pathname,
-			status: 500
-		}
-	});
-	return { message: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' };
+export const handleError: HandleServerError = ({ event, status }) => {
+	if (status >= 500) {
+		event.locals.unexpectedErrorLogged = true;
+		log({
+			level: 'error',
+			code: 'HTTP_UNEXPECTED_ERROR',
+			fields: {
+				request_id: event.locals.requestId ?? 'request_unavailable',
+				method: event.request.method,
+				route: routeTemplate(event.route.id),
+				status
+			}
+		});
+		return { message: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' };
+	}
+	if (status === 404) return { message: 'Not found', code: 'NOT_FOUND' };
+	return { message: 'Request failed', code: 'REQUEST_FAILED' };
 };

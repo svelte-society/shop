@@ -4,6 +4,7 @@ export type SecurityConfig = {
 	production: boolean;
 	productionOrigin: URL;
 	allowedHosts: readonly string[];
+	livenessPort: string | null;
 	valid: boolean;
 };
 
@@ -78,6 +79,12 @@ function validHttpsOrigin(value: string | undefined): URL | null {
 	}
 }
 
+function configuredPort(value: string | undefined): string | null {
+	if (typeof value !== 'string' || !/^\d{1,5}$/u.test(value)) return null;
+	const port = Number(value);
+	return Number.isSafeInteger(port) && port >= 1 && port <= 65_535 ? String(port) : null;
+}
+
 export function createSecurityConfig(
 	environment: Record<string, string | undefined>,
 	production: boolean
@@ -95,12 +102,23 @@ export function createSecurityConfig(
 		production,
 		productionOrigin,
 		allowedHosts,
+		livenessPort: configuredPort(environment.PORT),
 		valid: parsedOrigin !== null && allowedHosts.length > 0
 	};
 }
 
-function isLocalLiveness(request: Request, host: string | null): boolean {
-	if (request.headers.get('origin') !== null || host === null) return false;
+function isLocalLiveness(
+	request: Request,
+	host: string | null,
+	configuredPort: string | null
+): boolean {
+	if (
+		request.method !== 'GET' ||
+		request.headers.get('origin') !== null ||
+		host === null ||
+		configuredPort === null
+	)
+		return false;
 	let pathname: string;
 	try {
 		pathname = new URL(request.url).pathname;
@@ -112,7 +130,7 @@ function isLocalLiveness(request: Request, host: string | null): boolean {
 	try {
 		const parsed = new URL(`http://${host}`);
 		const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-		return hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
+		return (hostname === '127.0.0.1' || hostname === '::1') && parsed.port === configuredPort;
 	} catch {
 		return false;
 	}
@@ -120,7 +138,8 @@ function isLocalLiveness(request: Request, host: string | null): boolean {
 
 export function validateHostAndOrigin(request: Request, config: SecurityConfig): void {
 	const host = normalizedHost(request.headers.get('host') ?? new URL(request.url).host);
-	if (isLocalLiveness(request, host)) return;
+	// This exception is only for the static GET liveness probe on the configured container port.
+	if (isLocalLiveness(request, host, config.livenessPort)) return;
 	if (!config.valid) throw new SecurityBoundaryError('SECURITY_CONFIGURATION_INVALID');
 	if (host === null || !config.allowedHosts.includes(host)) {
 		throw new SecurityBoundaryError('REQUEST_HOST_INVALID');

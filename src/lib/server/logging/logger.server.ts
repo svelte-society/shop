@@ -19,7 +19,7 @@ export function createLogger(write: LogWriter = defaultWriter): (event: LogEvent
 			const fields = event.fields === undefined ? {} : redact(event.fields);
 			const safeFields =
 				fields !== null && typeof fields === 'object' && !Array.isArray(fields) ? fields : {};
-			write(JSON.stringify({ level: event.level, code, ...safeFields }), event.level);
+			write(JSON.stringify({ ...safeFields, level: event.level, code }), event.level);
 		} catch {
 			try {
 				write(JSON.stringify({ level: 'error', code: 'LOG_SERIALIZATION_FAILED' }), 'error');

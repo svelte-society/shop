@@ -11,7 +11,7 @@ export function _createMcpRequestHandler(
 	respond: McpResponder = handleMcp
 ): RequestHandler {
 	return ({ request }) => {
-		if (runtimeEnv.MCP_ENABLED === 'false') {
+		if (runtimeEnv.MCP_ENABLED !== 'true') {
 			return new Response(null, { status: 404 });
 		}
 

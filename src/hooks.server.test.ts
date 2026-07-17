@@ -30,13 +30,41 @@ describe('server application hook', () => {
 		const resolve = vi.fn(async () => new Response('live'));
 
 		const response = await handle({
-			event: { url: new URL('https://shop.sveltesociety.dev/health/live') },
+			event: {
+				url: new URL('https://shop.sveltesociety.dev/health/live'),
+				request: { method: 'GET' }
+			},
 			resolve
 		} as unknown as Parameters<typeof handle>[0]);
 
 		expect(response).toBeInstanceOf(Response);
 		expect(resolve).toHaveBeenCalledOnce();
 		expect(application.start).not.toHaveBeenCalled();
+	});
+
+	it('does not grant the static liveness lifecycle bypass to other methods', async () => {
+		const application: ApplicationLifecycle = {
+			current: () => null,
+			start: vi.fn(async () => null),
+			stop: vi.fn(async () => undefined)
+		};
+		const handle = createApplicationHandle(application, {
+			environment: {},
+			building: false,
+			test: false
+		});
+		const resolve = vi.fn(async () => new Response(null, { status: 405 }));
+
+		const response = await handle({
+			event: {
+				url: new URL('https://shop.sveltesociety.dev/health/live'),
+				request: { method: 'POST' }
+			},
+			resolve
+		} as unknown as Parameters<typeof handle>[0]);
+
+		expect(response.status).toBe(405);
+		expect(application.start).toHaveBeenCalledOnce();
 	});
 
 	it('starts the application once before resolving repeated requests', async () => {
@@ -102,6 +130,7 @@ describe('server application hook', () => {
 const SECURITY_ENV = {
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 	HOST_ALLOWLIST: 'shop.sveltesociety.dev',
+	PORT: '3000',
 	MCP_ENABLED: 'true',
 	MCP_BEARER_TOKEN: 'test-mcp-token',
 	UMAMI_SCRIPT_URL: 'https://analytics.sveltesociety.dev/script.js',
@@ -120,6 +149,7 @@ function securityEvent(
 		clientAddress?: string;
 		query?: string;
 		host?: string;
+		routeId?: string | null;
 	} = {}
 ) {
 	const host = options.host ?? 'shop.sveltesociety.dev';
@@ -134,6 +164,7 @@ function securityEvent(
 	return {
 		request,
 		url,
+		route: { id: options.routeId === undefined ? pathname : options.routeId },
 		locals: {},
 		getClientAddress: vi.fn(() => options.clientAddress ?? '192.0.2.10')
 	};
@@ -260,6 +291,36 @@ describe('HTTP security hook', () => {
 		expect(resolve).toHaveBeenCalledOnce();
 		expect(await blocked.text()).not.toContain('private-token');
 	});
+
+	it.each([undefined, '', 'false', 'TRUE', 'True', '1', 'yes'])(
+		'bypasses MCP auth, address, session, and rate work unless MCP_ENABLED is exactly true (%j)',
+		async (enabled) => {
+			const handle = createSecurityHandle(
+				{ ...SECURITY_ENV, MCP_ENABLED: enabled },
+				{
+					production: true,
+					now: () => 31_000,
+					requestId: () => 'req_mcp_disabled',
+					emit: () => undefined
+				}
+			);
+			const event = securityEvent('/mcp', {
+				method: 'POST',
+				authorization: 'Bearer wrong-private-token',
+				sessionId: 'private-session'
+			});
+			event.getClientAddress.mockImplementation(() => {
+				throw new Error('must not inspect the client address');
+			});
+			const resolve = vi.fn(async () => new Response(null, { status: 404 }));
+
+			const response = await handle({ event, resolve } as unknown as Parameters<typeof handle>[0]);
+
+			expect(response.status).toBe(404);
+			expect(resolve).toHaveBeenCalledOnce();
+			expect(event.getClientAddress).not.toHaveBeenCalled();
+		}
+	);
 
 	it('fails closed when the adapter cannot provide a valid client address', async () => {
 		const handle = createSecurityHandle(SECURITY_ENV, {
@@ -406,7 +467,7 @@ describe('HTTP security hook', () => {
 		expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
 	});
 
-	it('logs request results with pathname only and sanitized unexpected failures', async () => {
+	it('logs only the stable route template and sanitized unexpected failures', async () => {
 		const emitted: Array<{ code: string; fields?: Record<string, unknown> }> = [];
 		const handle = createSecurityHandle(SECURITY_ENV, {
 			production: true,
@@ -414,7 +475,8 @@ describe('HTTP security hook', () => {
 			requestId: () => 'req_query_safe',
 			emit: (event) => emitted.push(event)
 		});
-		const event = securityEvent('/checkout/success', {
+		const event = securityEvent('/products/person%2540example.test', {
+			routeId: '/products/[slug]',
 			query: '?session_id=cs_private&email=private%40example.test'
 		});
 
@@ -434,7 +496,7 @@ describe('HTTP security hook', () => {
 				fields: {
 					request_id: 'req_query_safe',
 					method: 'GET',
-					pathname: '/checkout/success',
+					route: '/products/[slug]',
 					status: 500,
 					duration_ms: 8
 				}
@@ -442,14 +504,16 @@ describe('HTTP security hook', () => {
 		]);
 		expect(JSON.stringify(emitted)).not.toContain('session_id');
 		expect(JSON.stringify(emitted)).not.toContain('private');
+		expect(JSON.stringify(emitted)).not.toContain('person');
 	});
 });
 
 describe('handleError', () => {
-	it('returns a stable public error and never logs query, stack, secret, or PII', () => {
+	it('returns a stable public 500 and logs only the route template once', () => {
 		const error = new Error('sk_live_private private@example.test');
 		error.stack = 'private stack at /data/shop.sqlite';
-		const event = securityEvent('/checkout/success', {
+		const event = securityEvent('/checkout/success/private%40example.test', {
+			routeId: '/checkout/success/[session_id]',
 			query: '?session_id=cs_private&email=private%40example.test'
 		});
 		event.locals = { requestId: 'req_handle_error' };
@@ -464,11 +528,61 @@ describe('handleError', () => {
 		const serializedLogs = JSON.stringify(consoleError.mock.calls);
 
 		expect(result).toEqual({ message: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' });
-		expect(serializedLogs).toContain('/checkout/success');
-		expect(serializedLogs).not.toContain('session_id');
+		expect(consoleError).toHaveBeenCalledOnce();
+		expect(serializedLogs).toContain('/checkout/success/[session_id]');
+		expect(serializedLogs).not.toContain('cs_private');
 		expect(serializedLogs).not.toContain('sk_live');
 		expect(serializedLogs).not.toContain('example.test');
 		expect(serializedLogs).not.toContain('/data/');
+		consoleError.mockRestore();
+	});
+
+	it('returns a safe 404 without error telemetry', () => {
+		const event = securityEvent('/private%40example.test', { routeId: null });
+		event.locals = { requestId: 'req_not_found' };
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+		const result = handleError({
+			error: new Error('private@example.test'),
+			event,
+			status: 404,
+			message: 'private@example.test'
+		} as unknown as Parameters<typeof handleError>[0]);
+
+		expect(result).toEqual({ message: 'Not found', code: 'NOT_FOUND' });
+		expect(consoleError).not.toHaveBeenCalled();
+		consoleError.mockRestore();
+	});
+
+	it('does not duplicate the error request log after handleError records an unexpected 5xx', async () => {
+		const emitted: Array<{ code: string }> = [];
+		const handle = createSecurityHandle(SECURITY_ENV, {
+			production: true,
+			now: () => 1,
+			requestId: () => 'req_one_error',
+			emit: (event) => emitted.push(event)
+		});
+		const event = securityEvent('/products/private%40example.test', {
+			routeId: '/products/[slug]'
+		});
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+		const response = await handle({
+			event,
+			resolve: async () => {
+				handleError({
+					error: new Error('private@example.test'),
+					event,
+					status: 500,
+					message: 'private@example.test'
+				} as unknown as Parameters<typeof handleError>[0]);
+				return new Response(null, { status: 500 });
+			}
+		} as unknown as Parameters<typeof handle>[0]);
+
+		expect(response.status).toBe(500);
+		expect(consoleError).toHaveBeenCalledOnce();
+		expect(emitted).toEqual([]);
 		consoleError.mockRestore();
 	});
 });

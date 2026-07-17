@@ -11,12 +11,18 @@ const config: SecurityConfig = {
 	production: true,
 	productionOrigin: new URL('https://shop.sveltesociety.dev'),
 	allowedHosts: ['shop.sveltesociety.dev'],
+	livenessPort: '3000',
 	valid: true
 };
 
 function request(
 	pathname: string,
-	options: { host?: string; origin?: string | null; protocol?: 'http:' | 'https:' } = {}
+	options: {
+		host?: string;
+		origin?: string | null;
+		protocol?: 'http:' | 'https:';
+		method?: string;
+	} = {}
 ): Request {
 	const protocol = options.protocol ?? 'https:';
 	const headers = new Headers({ host: options.host ?? 'shop.sveltesociety.dev' });
@@ -24,7 +30,8 @@ function request(
 		headers.set('origin', options.origin ?? 'https://shop.sveltesociety.dev');
 	}
 	return new Request(`${protocol}//shop.sveltesociety.dev${pathname}`, {
-		headers
+		headers,
+		method: options.method ?? 'GET'
 	});
 }
 
@@ -113,9 +120,30 @@ describe('validateHostAndOrigin', () => {
 		);
 	});
 
+	it.each([
+		['POST', '127.0.0.1:3000'],
+		['PUT', '[::1]:3000'],
+		['GET', '127.0.0.1:3001'],
+		['GET', '[::1]:9999'],
+		['GET', 'localhost:3000']
+	])('rejects spoofed local liveness using %s and Host %s', (method, host) => {
+		expectBoundaryError(
+			() =>
+				validateHostAndOrigin(
+					request('/health/live', { method, host, origin: null, protocol: 'http:' }),
+					config
+				),
+			'REQUEST_HOST_INVALID'
+		);
+	});
+
 	it('fails closed on invalid production security configuration except local liveness', () => {
 		const invalid = createSecurityConfig(
-			{ PRODUCTION_ORIGIN: 'javascript:alert(1)', HOST_ALLOWLIST: 'attacker.example' },
+			{
+				PRODUCTION_ORIGIN: 'javascript:alert(1)',
+				HOST_ALLOWLIST: 'attacker.example',
+				PORT: '3000'
+			},
 			true
 		);
 		expectBoundaryError(

@@ -45,4 +45,22 @@ describe('structured server logger', () => {
 		expect(() => log({ level: 'warn', code: 'SECURITY_EVENT', fields })).not.toThrow();
 		expect(write).toHaveBeenCalledOnce();
 	});
+
+	it('keeps the validated envelope authoritative over conflicting fields', () => {
+		const write = vi.fn();
+		const log = createLogger(write);
+
+		log({
+			level: 'error',
+			code: 'CANONICAL_EVENT',
+			fields: { level: 'info', code: 'FORGED_EVENT', request_id: 'req_envelope' }
+		});
+
+		expect(JSON.parse(write.mock.calls[0][0] as string)).toEqual({
+			level: 'error',
+			code: 'CANONICAL_EVENT',
+			request_id: 'req_envelope'
+		});
+		expect(write).toHaveBeenCalledWith(expect.any(String), 'error');
+	});
 });

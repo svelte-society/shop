@@ -69,6 +69,24 @@ describe('redact', () => {
 		}
 	);
 
+	it.each([
+		'/customer/person%2540example.test',
+		'/customer/person%252540example.test',
+		'/customer/%42earer%2520private-token',
+		'/customer/%2577hsec_private',
+		'/customer/%252B46%252070%2520123%252045%252067',
+		'/customer/safe%250d%250ainjected',
+		'/customer/safe%25250d%25250ainjected'
+	])('redacts recursively or mixed-encoded credential, PII, and control data %s', (pathname) => {
+		expect(redact({ pathname })).toEqual({ pathname: '[REDACTED]' });
+	});
+
+	it('fails closed when a pathname exceeds the bounded decoding depth', () => {
+		expect(redact({ pathname: '/customer/%2525252540' })).toEqual({
+			pathname: '[REDACTED]'
+		});
+	});
+
 	it('handles cycles, throwing getters, and hostile proxies without throwing', () => {
 		const cyclic: Record<string, unknown> = { status: 'pending_review' };
 		cyclic.self = cyclic;

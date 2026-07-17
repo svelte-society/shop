@@ -24,6 +24,41 @@ describe('fixed-window rate limiter', () => {
 		expect(limiter.size()).toBe(1);
 	});
 
+	it('fails closed at the injected hard bucket cap and admits after efficient expiry', () => {
+		const limiter = createFixedWindowRateLimiter({ maxBuckets: 2 });
+		const policy = { limit: 1, windowMs: 1_000 };
+
+		expect(limiter.take('first', policy, 0)).toBe(true);
+		expect(limiter.take('second', policy, 10)).toBe(true);
+		expect(limiter.take('third', policy, 20)).toBe(false);
+		expect(limiter.size()).toBe(2);
+		expect(limiter.take('third', policy, 1_000)).toBe(true);
+		expect(limiter.size()).toBe(1);
+	});
+
+	it('keeps storage bounded across many distinct keys and window resets', () => {
+		const limiter = createFixedWindowRateLimiter({ maxBuckets: 4 });
+		const policy = { limit: 2, windowMs: 10 };
+
+		for (let index = 0; index < 1_000; index += 1) {
+			limiter.take(`key-${index}`, policy, index);
+			expect(limiter.size()).toBeLessThanOrEqual(4);
+		}
+		for (let window = 0; window < 1_000; window += 1) {
+			expect(limiter.take('reused', policy, 10_000 + window * 10)).toBe(true);
+			expect(limiter.size()).toBeLessThanOrEqual(4);
+		}
+	});
+
+	it('rejects invalid hard-cap configuration', () => {
+		expect(() => createFixedWindowRateLimiter({ maxBuckets: 0 })).toThrow(
+			'RATE_LIMIT_MAX_BUCKETS_INVALID'
+		);
+		expect(() => createFixedWindowRateLimiter({ maxBuckets: 1.5 })).toThrow(
+			'RATE_LIMIT_MAX_BUCKETS_INVALID'
+		);
+	});
+
 	it('fails closed for invalid keys, policies, and clocks', () => {
 		const limiter = createFixedWindowRateLimiter();
 

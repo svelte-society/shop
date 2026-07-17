@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createBoundedMcpSessionManagers } from '$lib/server/mcp/session-managers.server';
 import { createMcpResponder } from '$lib/server/mcp/transport.server';
 import { _createMcpRequestHandler } from './+server';
 
@@ -67,19 +68,22 @@ function initializeBody(id = 1): Record<string, unknown> {
 }
 
 describe('/mcp bearer guard', () => {
-	it('returns 404 before auth or transport when MCP is disabled', async () => {
-		const respond = vi.fn(async () => new Response(null, { status: 200 }));
-		const handler = _createMcpRequestHandler(
-			{ MCP_ENABLED: 'false', MCP_BEARER_TOKEN: TOKEN },
-			respond
-		);
+	it.each([undefined, '', 'false', 'TRUE', 'True', '1', 'yes'])(
+		'returns 404 before auth or transport unless MCP_ENABLED is exactly true (%j)',
+		async (enabled) => {
+			const respond = vi.fn(async () => new Response(null, { status: 200 }));
+			const handler = _createMcpRequestHandler(
+				{ MCP_ENABLED: enabled, MCP_BEARER_TOKEN: TOKEN },
+				respond
+			);
 
-		const response = await invoke(handler, request('POST', { body: initializeBody() }));
+			const response = await invoke(handler, request('POST', { body: initializeBody() }));
 
-		expect(response.status).toBe(404);
-		expect(await response.text()).toBe('');
-		expect(respond).not.toHaveBeenCalled();
-	});
+			expect(response.status).toBe(404);
+			expect(await response.text()).toBe('');
+			expect(respond).not.toHaveBeenCalled();
+		}
+	);
 
 	it.each([
 		['missing bearer', null, TOKEN],
@@ -203,5 +207,115 @@ describe('/mcp TMCP Streamable HTTP protocol', () => {
 
 		await replacement.body?.cancel();
 		await first.body?.cancel();
+	});
+
+	it('bounds initialized session info and deterministically evicts the oldest session', async () => {
+		const managers = createBoundedMcpSessionManagers({
+			maxInfoSessions: 2,
+			maxStreams: 2,
+			infoIdleTtlMs: 1_000,
+			streamMaxLifetimeMs: 1_000
+		});
+		const boundedHandler = _createMcpRequestHandler(
+			ENABLED_ENV,
+			createMcpResponder(() => ({}), { sessionManagers: managers })
+		);
+
+		for (const [id, sessionId] of [
+			[20, 'codex-info-one'],
+			[21, 'codex-info-two'],
+			[22, 'codex-info-three']
+		] as const) {
+			const response = await invoke(
+				boundedHandler,
+				request('POST', { sessionId, body: initializeBody(id) })
+			);
+			expect((await eventData(response)).id).toBe(id);
+		}
+
+		expect(managers.info.size()).toBe(2);
+		await expect(managers.info.getClientInfo('codex-info-one')).rejects.toThrow(
+			'MCP_SESSION_INFO_NOT_FOUND'
+		);
+		await expect(managers.info.getClientInfo('codex-info-two')).resolves.toMatchObject({
+			name: 'codex-admin-test'
+		});
+	});
+
+	it('caps concurrent notification streams and closes the oldest response body', async () => {
+		const managers = createBoundedMcpSessionManagers({
+			maxInfoSessions: 3,
+			maxStreams: 2,
+			infoIdleTtlMs: 1_000,
+			streamMaxLifetimeMs: 1_000
+		});
+		const boundedHandler = _createMcpRequestHandler(
+			ENABLED_ENV,
+			createMcpResponder(() => ({}), { sessionManagers: managers })
+		);
+		const first = await invoke(boundedHandler, request('GET', { sessionId: 'stream-one' }));
+		const firstReader = first.body?.getReader();
+		expect((await firstReader?.read())?.done).toBe(false);
+		const second = await invoke(boundedHandler, request('GET', { sessionId: 'stream-two' }));
+		const third = await invoke(boundedHandler, request('GET', { sessionId: 'stream-three' }));
+
+		expect(managers.streams.size()).toBe(2);
+		expect((await firstReader?.read())?.done).toBe(true);
+		expect(await managers.streams.has('stream-one')).toBe(false);
+		expect(await managers.streams.has('stream-two')).toBe(true);
+		expect(await managers.streams.has('stream-three')).toBe(true);
+
+		await second.body?.cancel();
+		await third.body?.cancel();
+	});
+
+	it('DELETE removes both initialized info and active stream state', async () => {
+		const managers = createBoundedMcpSessionManagers({
+			maxInfoSessions: 2,
+			maxStreams: 2,
+			infoIdleTtlMs: 1_000,
+			streamMaxLifetimeMs: 1_000
+		});
+		const boundedHandler = _createMcpRequestHandler(
+			ENABLED_ENV,
+			createMcpResponder(() => ({}), { sessionManagers: managers })
+		);
+		const sessionId = 'codex-delete-cleanup';
+		await eventData(
+			await invoke(boundedHandler, request('POST', { sessionId, body: initializeBody(30) }))
+		);
+		const stream = await invoke(boundedHandler, request('GET', { sessionId }));
+
+		const deleted = await invoke(boundedHandler, request('DELETE', { sessionId }));
+
+		expect(deleted.status).toBe(200);
+		expect(managers.info.size()).toBe(0);
+		expect(managers.streams.size()).toBe(0);
+		await stream.body?.cancel();
+	});
+
+	it('response-body cancellation removes both active stream and initialized info state', async () => {
+		const managers = createBoundedMcpSessionManagers({
+			maxInfoSessions: 2,
+			maxStreams: 2,
+			infoIdleTtlMs: 1_000,
+			streamMaxLifetimeMs: 1_000
+		});
+		const boundedHandler = _createMcpRequestHandler(
+			ENABLED_ENV,
+			createMcpResponder(() => ({}), { sessionManagers: managers })
+		);
+		const sessionId = 'codex-cancel-cleanup';
+		await eventData(
+			await invoke(boundedHandler, request('POST', { sessionId, body: initializeBody(31) }))
+		);
+		const stream = await invoke(boundedHandler, request('GET', { sessionId }));
+		expect(managers.info.size()).toBe(1);
+		expect(managers.streams.size()).toBe(1);
+
+		await stream.body?.cancel();
+
+		expect(managers.info.size()).toBe(0);
+		expect(managers.streams.size()).toBe(0);
 	});
 });
