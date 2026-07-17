@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parsePrivateConfig } from './private.server';
+import { parsePrivateConfig, parseWithdrawalConfig } from './private.server';
 import { parsePublicConfig } from './public';
+
+const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString(
+	'base64'
+);
 
 const validPublicEnv = {
 	STOREFRONT_ENABLED: 'true',
@@ -26,11 +30,90 @@ const validPolicyEnv = {
 const validPrivateEnv = {
 	...validPublicEnv,
 	...validPolicyEnv,
+	WITHDRAWAL_DATA_KEY: withdrawalDataKey,
 	STRIPE_SECRET_KEY: 'sk_test_private_value',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_private_value',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
 };
+
+describe('parseWithdrawalConfig', () => {
+	it('accepts only the canonical base64 representation of a 32-byte key at key version one', () => {
+		expect(parseWithdrawalConfig(validPrivateEnv)).toEqual({
+			dataKey: Buffer.from(withdrawalDataKey, 'base64'),
+			keyVersion: 1,
+			productionOrigin: new URL('https://shop.sveltesociety.dev'),
+			supportEmail: 'merch@sveltesociety.dev',
+			seller: {
+				legalName: 'Svelte School AB',
+				registrationNumber: 'reviewed-registration',
+				addressLine1: 'Reviewed street 1',
+				postalCode: '123 45',
+				city: 'Reviewed city',
+				country: 'Sweden',
+				email: 'merchant@example.com'
+			}
+		});
+	});
+
+	it.each([
+		undefined,
+		'',
+		Buffer.alloc(31).toString('base64'),
+		Buffer.alloc(33).toString('base64'),
+		Buffer.from(withdrawalDataKey, 'base64').toString('base64url'),
+		`${withdrawalDataKey}\n`,
+		'!'.repeat(44)
+	])('rejects a missing, malformed, non-canonical, or wrong-length key %j', (value) => {
+		expect(() =>
+			parseWithdrawalConfig({ ...validPrivateEnv, WITHDRAWAL_DATA_KEY: value })
+		).toThrowError('CONFIG_WITHDRAWAL_INVALID');
+	});
+
+	it.each([
+		'SELLER_LEGAL_NAME',
+		'SELLER_REGISTRATION_NUMBER',
+		'SELLER_ADDRESS_LINE1',
+		'SELLER_POSTAL_CODE',
+		'SELLER_CITY',
+		'SELLER_COUNTRY',
+		'SELLER_EMAIL'
+	])('rejects an incomplete seller identity without exposing policy errors: %s', (name) => {
+		expect(() => parseWithdrawalConfig({ ...validPrivateEnv, [name]: undefined })).toThrowError(
+			'CONFIG_WITHDRAWAL_INVALID'
+		);
+	});
+
+	it('operates with commerce flags disabled and without Stripe configuration', () => {
+		const {
+			STRIPE_SECRET_KEY: _secret,
+			STRIPE_WEBHOOK_SECRET: _webhook,
+			...withoutSecret
+		} = validPrivateEnv;
+		const {
+			STRIPE_PAID_SHIPPING_RATE_ID: _paid,
+			STRIPE_FREE_SHIPPING_RATE_ID: _free,
+			...withdrawalOnly
+		} = withoutSecret;
+
+		expect(
+			parseWithdrawalConfig({
+				...withdrawalOnly,
+				STOREFRONT_ENABLED: 'false',
+				CHECKOUT_ENABLED: 'false'
+			})
+		).toMatchObject({ keyVersion: 1 });
+	});
+
+	it('maps every public or policy validation error to its withdrawal-only error', () => {
+		expect(() =>
+			parseWithdrawalConfig({ ...validPrivateEnv, SUPPORT_EMAIL: 'not-an-email' })
+		).toThrowError('CONFIG_WITHDRAWAL_INVALID');
+		expect(() =>
+			parseWithdrawalConfig({ ...validPrivateEnv, POLICY_EFFECTIVE_DATE: 'not-a-date' })
+		).toThrowError('CONFIG_WITHDRAWAL_INVALID');
+	});
+});
 
 describe('parsePublicConfig', () => {
 	it('parses explicit feature booleans without treating false as truthy', () => {
@@ -109,6 +192,17 @@ describe('parsePrivateConfig', () => {
 				CHECKOUT_ENABLED: 'true'
 			})
 		).not.toThrow();
+	});
+
+	it('rejects checkout-enabled production startup when the withdrawal key is absent', () => {
+		expect(() =>
+			parsePrivateConfig({
+				...validPrivateEnv,
+				NODE_ENV: 'production',
+				CHECKOUT_ENABLED: 'true',
+				WITHDRAWAL_DATA_KEY: undefined
+			})
+		).toThrowError('CONFIG_PRIVATE_INVALID');
 	});
 
 	it('parses required Stripe configuration', () => {

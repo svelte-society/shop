@@ -291,6 +291,31 @@ describe('SqliteWithdrawalRepository submissions', () => {
 });
 
 describe('SqliteWithdrawalRepository message claims and settlement', () => {
+	it('reads the persisted message state by ID without claiming it', () => {
+		repository.createSubmission(submission());
+
+		expect(repository.getMessage(1)).toEqual({
+			id: 1,
+			caseId: 'case_123',
+			kind: 'receipt',
+			resendOfMessageId: null,
+			idempotencyKey: 'withdrawal:receipt:case_123',
+			attemptCount: 0,
+			nextAttemptAt: now,
+			providerDeliveryId: null,
+			completedAt: null,
+			lastErrorCode: null
+		});
+		expect(repository.getMessage(999)).toBeNull();
+	});
+
+	it('strictly validates a message loaded by ID', () => {
+		repository.createSubmission(submission());
+		database.prepare("UPDATE withdrawal_messages SET next_attempt_at = '' WHERE id = 1").run();
+
+		expect(() => repository.getMessage(1)).toThrowError('WITHDRAWAL_MESSAGE_ROW_INVALID');
+	});
+
 	it('claims due messages in stable order, increments the attempt, and moves a five-minute lease', () => {
 		repository.createSubmission(submission());
 

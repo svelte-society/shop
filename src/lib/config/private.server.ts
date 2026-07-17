@@ -1,4 +1,6 @@
 import * as v from 'valibot';
+import { Buffer } from 'node:buffer';
+import { parseWithdrawalDataKey } from '$lib/server/withdrawals/crypto.server';
 import { parsePublicConfig, type PublicConfig } from './public';
 
 export type PrivateConfig = PublicConfig & {
@@ -20,6 +22,24 @@ export type SellerPolicyConfig = {
 	deliveryEstimateEu: string;
 	deliveryEstimateUs: string;
 	policyEffectiveDate: string;
+};
+
+export type WithdrawalSellerIdentity = {
+	legalName: string;
+	registrationNumber: string;
+	addressLine1: string;
+	postalCode: string;
+	city: string;
+	country: string;
+	email: string;
+};
+
+export type WithdrawalConfig = {
+	dataKey: Buffer;
+	keyVersion: 1;
+	productionOrigin: URL;
+	supportEmail: string;
+	seller: WithdrawalSellerIdentity;
 };
 
 const requiredValueSchema = v.pipe(
@@ -78,6 +98,30 @@ export function parseSellerPolicyConfig(
 	};
 }
 
+export function parseWithdrawalConfig(env: Record<string, string | undefined>): WithdrawalConfig {
+	try {
+		const publicConfig = parsePublicConfig(env);
+		const policyConfig = parseSellerPolicyConfig(env);
+		return {
+			dataKey: parseWithdrawalDataKey(env.WITHDRAWAL_DATA_KEY),
+			keyVersion: 1,
+			productionOrigin: publicConfig.productionOrigin,
+			supportEmail: publicConfig.supportEmail,
+			seller: {
+				legalName: policyConfig.sellerLegalName,
+				registrationNumber: policyConfig.sellerRegistrationNumber,
+				addressLine1: policyConfig.sellerAddressLine1,
+				postalCode: policyConfig.sellerPostalCode,
+				city: policyConfig.sellerCity,
+				country: policyConfig.sellerCountry,
+				email: policyConfig.sellerEmail
+			}
+		};
+	} catch {
+		throw new Error('CONFIG_WITHDRAWAL_INVALID');
+	}
+}
+
 export function parsePrivateConfig(env: Record<string, string | undefined>): PrivateConfig {
 	let publicConfig: PublicConfig;
 
@@ -98,7 +142,7 @@ export function parsePrivateConfig(env: Record<string, string | undefined>): Pri
 			throw new Error('CONFIG_PRIVATE_INVALID');
 		}
 		try {
-			parseSellerPolicyConfig(env);
+			parseWithdrawalConfig(env);
 		} catch {
 			throw new Error('CONFIG_PRIVATE_INVALID');
 		}

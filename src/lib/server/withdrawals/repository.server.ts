@@ -505,6 +505,13 @@ export class SqliteWithdrawalRepository {
 		return rows.map(mapCase).map(summary);
 	}
 
+	getMessage(id: number): WithdrawalMessage | null {
+		validateMessageId(id);
+		const row = this.database.prepare('SELECT * FROM withdrawal_messages WHERE id = ?').get(id) as
+			MessageRow | undefined;
+		return row ? mapMessage(row) : null;
+	}
+
 	claimDueMessages(now: Date, limit: number): WithdrawalMessage[] {
 		const nowTimestamp = isoTimestamp(now, 'WITHDRAWAL_MESSAGE_INVALID');
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
