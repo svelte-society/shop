@@ -146,7 +146,8 @@ const expectedColumns = {
 		column('outcome', 'TEXT', 1),
 		column('external_reference', 'TEXT', 0),
 		column('actor', 'TEXT', 1),
-		column('created_at', 'TEXT', 1)
+		column('created_at', 'TEXT', 1),
+		column('note', 'TEXT', 0)
 	],
 	job_leases: [
 		column('name', 'TEXT', 0, null, 1),

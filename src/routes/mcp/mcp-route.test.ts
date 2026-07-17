@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleMcp } from '$lib/server/mcp/transport.server';
+import { createMcpResponder } from '$lib/server/mcp/transport.server';
 import { _createMcpRequestHandler } from './+server';
 
 const TOKEN = 'test.mcp-token_123-~';
@@ -120,7 +120,10 @@ describe('/mcp bearer guard', () => {
 });
 
 describe('/mcp TMCP Streamable HTTP protocol', () => {
-	const handler = _createMcpRequestHandler(ENABLED_ENV, handleMcp);
+	const handler = _createMcpRequestHandler(
+		ENABLED_ENV,
+		createMcpResponder(() => ({}))
+	);
 
 	it('initializes the exact internal fulfillment server without browser CORS', async () => {
 		const response = await invoke(

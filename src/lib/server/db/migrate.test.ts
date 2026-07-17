@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -149,5 +149,55 @@ describe('migrate', () => {
 					'eur'
 				)
 		).toThrow();
+		expect(
+			database
+				.prepare("SELECT name, [notnull] FROM pragma_table_info('support_notes') ORDER BY cid")
+				.all()
+		).toContainEqual({ name: 'note', notnull: 0 });
+	});
+
+	it('adds nullable support note text to an existing database without losing rows', () => {
+		const directory = temporaryDirectory();
+		writeFileSync(
+			join(directory, '0001_initial.sql'),
+			`CREATE TABLE support_notes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				order_id TEXT NOT NULL,
+				outcome TEXT NOT NULL,
+				external_reference TEXT,
+				actor TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			);`
+		);
+		const database = openDatabase(':memory:');
+		migrate(database, directory);
+		database
+			.prepare(
+				`INSERT INTO support_notes (order_id, outcome, external_reference, actor, created_at)
+				VALUES ('order_existing', 'return_approved', 'case-existing', 'codex-admin',
+					'2026-07-17T09:00:00.000Z')`
+			)
+			.run();
+		writeFileSync(
+			join(directory, '0002_support_note_text.sql'),
+			readFileSync(join(initialMigrationsDirectory, '0002_support_note_text.sql'), 'utf8')
+		);
+
+		migrate(database, directory);
+
+		expect(
+			database
+				.prepare('SELECT order_id, outcome, note, external_reference FROM support_notes')
+				.get()
+		).toEqual({
+			order_id: 'order_existing',
+			outcome: 'return_approved',
+			note: null,
+			external_reference: 'case-existing'
+		});
+		expect(database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
+			{ name: '0001_initial.sql' },
+			{ name: '0002_support_note_text.sql' }
+		]);
 	});
 });

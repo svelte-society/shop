@@ -148,6 +148,7 @@ describe('application runtime', () => {
 		closeDatabase();
 		const createScheduler = vi.fn();
 		const application = createApplicationLifecycle({ migrationsDirectory, createScheduler });
+		expect(application.current()).toBeNull();
 
 		const runtime = await application.start({
 			environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'false' },
@@ -156,11 +157,14 @@ describe('application runtime', () => {
 		});
 
 		expect(runtime?.scheduler).toBeNull();
+		expect(application.current()).toBe(runtime);
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
-			{ name: '0001_initial.sql' }
+			{ name: '0001_initial.sql' },
+			{ name: '0002_support_note_text.sql' }
 		]);
 		await application.stop();
+		expect(application.current()).toBeNull();
 	});
 
 	it('defaults an absent scheduler flag to disabled after database readiness', async () => {
@@ -177,7 +181,7 @@ describe('application runtime', () => {
 		expect(runtime?.scheduler).toBeNull();
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 1
+			count: 2
 		});
 		await application.stop();
 	});

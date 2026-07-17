@@ -1,7 +1,14 @@
 import * as v from 'valibot';
 import type { GenericSchema } from 'valibot';
 import type { McpServer } from 'tmcp';
-import { caughtToolError, toolError, toolResult } from '../result';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
 export type ShippingEmailTarget = {
 	email: string;
@@ -19,13 +26,22 @@ export interface ShippingEmailService {
 
 const exactString = (maximum: number) =>
 	v.pipe(v.string(), v.minLength(1), v.maxLength(maximum), v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/));
-const inputSchema = v.strictObject({
-	order_id: exactString(200),
-	mode: v.optional(v.picklist(['preview', 'send']), 'preview'),
-	expected_email: v.optional(v.pipe(exactString(500), v.email())),
-	expected_tracking_number: v.optional(exactString(200))
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		order_id: exactString(200),
+		mode: v.optional(v.picklist(['preview', 'send']), 'preview'),
+		expected_email: v.optional(v.pipe(exactString(500), v.email())),
+		expected_tracking_number: v.optional(exactString(200))
+	})
+);
+const outputSchema = v.strictObject({
+	order_id: v.optional(v.string()),
+	mode: v.optional(v.picklist(['preview', 'send'])),
+	email: v.optional(v.string()),
+	tracking_number: v.optional(v.string()),
+	sent: v.optional(v.boolean()),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 
 export function registerResendShippingTool(
 	server: McpServer<GenericSchema>,
@@ -45,7 +61,9 @@ export function registerResendShippingTool(
 				openWorldHint: true
 			}
 		},
-		async ({ order_id, mode, expected_email, expected_tracking_number }) => {
+		async (input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { order_id, mode, expected_email, expected_tracking_number } = input;
 			if (!shipping) return toolError('MCP_SHIPPING_SERVICE_UNAVAILABLE');
 			if (
 				mode === 'send' &&

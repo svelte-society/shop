@@ -2,7 +2,14 @@ import * as v from 'valibot';
 import type { GenericSchema } from 'valibot';
 import type { McpServer } from 'tmcp';
 import type { FulfillmentStatus } from '$lib/domain/orders';
-import { caughtToolError, toolError, toolResult } from '../result';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
 export interface FulfillmentStatusService {
 	check(orderId: string): Promise<{
@@ -13,15 +20,23 @@ export interface FulfillmentStatusService {
 	}>;
 }
 
-const inputSchema = v.strictObject({
-	order_id: v.pipe(
-		v.string(),
-		v.minLength(1),
-		v.maxLength(200),
-		v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
-	)
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		order_id: v.pipe(
+			v.string(),
+			v.minLength(1),
+			v.maxLength(200),
+			v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
+		)
+	})
+);
+const outputSchema = v.strictObject({
+	orderId: v.optional(v.string()),
+	fulfillmentStatus: v.optional(v.string()),
+	styriaStatus: v.optional(v.string()),
+	trackingNumber: v.optional(v.nullable(v.string())),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 
 export function registerCheckStatusTool(
 	server: McpServer<GenericSchema>,
@@ -40,10 +55,18 @@ export function registerCheckStatusTool(
 				openWorldHint: true
 			}
 		},
-		async ({ order_id }) => {
+		async (input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { order_id } = input;
 			if (!status) return toolError('MCP_STATUS_SERVICE_UNAVAILABLE');
 			try {
-				return toolResult({ ...(await status.check(order_id)) });
+				const result = await status.check(order_id);
+				return toolResult({
+					orderId: result.orderId,
+					fulfillmentStatus: result.fulfillmentStatus,
+					styriaStatus: result.styriaStatus,
+					trackingNumber: result.trackingNumber
+				});
 			} catch (error) {
 				return caughtToolError(error, 'FULFILLMENT_STATUS_CHECK_FAILED');
 			}

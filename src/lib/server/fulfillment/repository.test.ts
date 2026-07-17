@@ -323,6 +323,7 @@ describe('fulfillment reads', () => {
 		repository.recordSupportNote({
 			orderId: 'order_one',
 			outcome: 'return_approved',
+			note: 'Reviewed in support mailbox',
 			externalReference: 'case-123',
 			createdAt: now
 		});
@@ -341,7 +342,11 @@ describe('fulfillment reads', () => {
 					expect.objectContaining({ actor: 'codex-admin', action: 'support_note_recorded' })
 				],
 				supportNotes: [
-					expect.objectContaining({ outcome: 'return_approved', externalReference: 'case-123' })
+					expect.objectContaining({
+						outcome: 'return_approved',
+						note: 'Reviewed in support mailbox',
+						externalReference: 'case-123'
+					})
 				]
 			})
 		);
@@ -771,6 +776,7 @@ describe('support-note mutation', () => {
 		repository.recordSupportNote({
 			orderId: 'order_one',
 			outcome: 'replacement_ordered',
+			note: 'Replacement approved in support mailbox',
 			externalReference: 'support-case-456',
 			createdAt: now
 		});
@@ -778,12 +784,13 @@ describe('support-note mutation', () => {
 		expect(
 			database
 				.prepare(
-					'SELECT order_id, outcome, external_reference, actor, created_at FROM support_notes'
+					'SELECT order_id, outcome, note, external_reference, actor, created_at FROM support_notes'
 				)
 				.get()
 		).toEqual({
 			order_id: 'order_one',
 			outcome: 'replacement_ordered',
+			note: 'Replacement approved in support mailbox',
 			external_reference: 'support-case-456',
 			actor: 'codex-admin',
 			created_at: now.toISOString()
@@ -800,5 +807,28 @@ describe('support-note mutation', () => {
 		]);
 		expect(JSON.stringify(events(database))).not.toContain('support-case-456');
 		expect(JSON.stringify(events(database))).not.toContain('replacement_ordered');
+		expect(JSON.stringify(events(database))).not.toContain('Replacement approved');
+	});
+
+	it.each([
+		'ada@example.test',
+		'Call +46 70 123 45 67',
+		'Send to Currentgatan 9',
+		'Line one\nLine two'
+	])('rejects contact-like support note text before persistence: %s', (note) => {
+		seedOrder(database, { status: 'shipped' });
+
+		expect(() =>
+			repository.recordSupportNote({
+				orderId: 'order_one',
+				outcome: 'other_reviewed',
+				note,
+				externalReference: null,
+				createdAt: now
+			})
+		).toThrowError('SUPPORT_NOTE_INVALID');
+		expect(database.prepare('SELECT COUNT(*) AS count FROM support_notes').get()).toEqual({
+			count: 0
+		});
 	});
 });

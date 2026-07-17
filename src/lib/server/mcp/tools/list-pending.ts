@@ -5,12 +5,37 @@ import type {
 	FulfillmentRepository,
 	OrderSummary
 } from '$lib/server/fulfillment/repository.server';
-import { caughtToolError, toolError, toolResult } from '../result';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
-const inputSchema = v.strictObject({
-	limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(100)), 50)
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(100)), 50)
+	})
+);
+const outputSchema = v.strictObject({
+	orders: v.optional(
+		v.array(
+			v.strictObject({
+				order_id: v.string(),
+				payment_status: v.string(),
+				fulfillment_status: v.string(),
+				currency: v.literal('eur'),
+				total_amount: v.number(),
+				destination_country: v.string(),
+				updated_at: v.string(),
+				last_error_code: v.nullable(v.string())
+			})
+		)
+	),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 
 function toPendingOrder(order: OrderSummary) {
 	return {
@@ -20,9 +45,6 @@ function toPendingOrder(order: OrderSummary) {
 		currency: order.currency,
 		total_amount: order.totalAmount,
 		destination_country: order.destinationCountry,
-		styria_order_id: order.styriaOrderId,
-		styria_status: order.styriaStatus,
-		tracking_number: order.trackingNumber,
 		updated_at: order.updatedAt.toISOString(),
 		last_error_code: order.lastErrorCode
 	};
@@ -45,7 +67,9 @@ export function registerListPendingTool(
 				openWorldHint: false
 			}
 		},
-		({ limit }) => {
+		(input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { limit } = input;
 			if (!fulfillment) return toolError('MCP_FULFILLMENT_SERVICE_UNAVAILABLE');
 			try {
 				const orders = fulfillment

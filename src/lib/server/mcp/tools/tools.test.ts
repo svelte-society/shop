@@ -71,6 +71,7 @@ function orderFixture(overrides: Partial<OrderWithLinesAndEvents> = {}): OrderWi
 			id: 1,
 			orderId: order.id,
 			outcome: 'return_approved',
+			note: 'Reviewed in support mailbox',
 			externalReference: 'ticket-2042',
 			actor: 'codex-admin',
 			createdAt: new Date('2026-07-17T09:45:00.000Z')
@@ -92,9 +93,9 @@ function summaryFixture(
 		currency: 'eur',
 		totalAmount: 6_998,
 		destinationCountry: 'SE',
-		styriaOrderId: null,
-		styriaStatus: null,
-		trackingNumber: null,
+		styriaOrderId: `styria-private-${id}`,
+		styriaStatus: `provider-private-${id}`,
+		trackingNumber: `tracking-private-${id}`,
 		updatedAt: new Date(updatedAt),
 		lastErrorCode: null
 	};
@@ -165,7 +166,8 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 			orderId,
 			fulfillmentStatus: 'in_production' as const,
 			styriaStatus: 'printing',
-			trackingNumber: null
+			trackingNumber: null,
+			customerEmail: 'status-private@example.test'
 		}))
 	};
 	const shipping = {
@@ -209,7 +211,11 @@ async function listTools(server: ReturnType<typeof createMcpServer>) {
 	return response.result.tools as Array<{
 		name: string;
 		inputSchema: Record<string, unknown>;
-		outputSchema?: Record<string, unknown>;
+		outputSchema?: {
+			type?: unknown;
+			additionalProperties?: unknown;
+			properties?: Record<string, unknown>;
+		};
 		annotations: Record<string, boolean>;
 	}>;
 }
@@ -304,7 +310,22 @@ describe('fulfillment MCP protocol', () => {
 		for (const tool of tools) {
 			expect(tool.inputSchema.type).toBe('object');
 			expect(tool.outputSchema?.type).toBe('object');
+			expect(tool.outputSchema?.additionalProperties).toBe(false);
+			expect(Object.keys(tool.outputSchema?.properties ?? {})).not.toHaveLength(0);
+			expect(tool.outputSchema?.properties).toHaveProperty('error');
 		}
+		const pendingOutput = tools.find((tool) => tool.name === 'list_pending_orders')?.outputSchema;
+		const pendingItem = (
+			pendingOutput?.properties as {
+				orders?: {
+					items?: { additionalProperties?: boolean; properties?: Record<string, unknown> };
+				};
+			}
+		)?.orders?.items;
+		expect(pendingItem?.additionalProperties).toBe(false);
+		expect(pendingItem?.properties).not.toHaveProperty('styria_order_id');
+		expect(pendingItem?.properties).not.toHaveProperty('styria_status');
+		expect(pendingItem?.properties).not.toHaveProperty('tracking_number');
 	});
 
 	it.each([
@@ -327,8 +348,22 @@ describe('fulfillment MCP protocol', () => {
 		const fixture = setup();
 		const result = await callTool(fixture.server, name, args as Record<string, unknown>);
 
-		expect(result.isError).toBe(true);
-		expect(result.content[0].text).toContain(`Invalid arguments for tool ${name}`);
+		expect(result).toEqual({
+			isError: true,
+			content: [
+				{
+					type: 'text',
+					text: JSON.stringify({ error: { code: 'INVALID_TOOL_ARGUMENTS' } })
+				}
+			],
+			structuredContent: { error: { code: 'INVALID_TOOL_ARGUMENTS' } }
+		});
+		const serialized = JSON.stringify(result);
+		for (const rejected of Object.values(args as Record<string, unknown>)) {
+			if (typeof rejected === 'string' && rejected.length > 2) {
+				expect(serialized).not.toContain(rejected);
+			}
+		}
 		for (const service of Object.values(fixture.services)) {
 			for (const method of Object.values(service)) expect(method).not.toHaveBeenCalled();
 		}
@@ -363,9 +398,6 @@ describe('fulfillment MCP protocol', () => {
 					currency: 'eur',
 					total_amount: 6_998,
 					destination_country: 'SE',
-					styria_order_id: null,
-					styria_status: null,
-					tracking_number: null,
 					updated_at: '2026-07-17T09:10:00.000Z',
 					last_error_code: null
 				},
@@ -379,6 +411,9 @@ describe('fulfillment MCP protocol', () => {
 		expect(serialized).not.toContain('email');
 		expect(serialized).not.toContain('phone');
 		expect(serialized).not.toContain('address');
+		expect(serialized).not.toContain('styria-private');
+		expect(serialized).not.toContain('provider-private');
+		expect(serialized).not.toContain('tracking-private');
 	});
 
 	it('inspects local summaries without retrieving or returning contact data by default', async () => {
@@ -395,7 +430,13 @@ describe('fulfillment MCP protocol', () => {
 			},
 			fulfillment: { status: 'pending_review' },
 			lines: [{ product_name: 'Community Tee', quantity: 2 }],
-			support: [{ outcome: 'return_approved', external_reference: 'ticket-2042' }]
+			support: [
+				{
+					outcome: 'return_approved',
+					note: 'Reviewed in support mailbox',
+					external_reference: 'ticket-2042'
+				}
+			]
 		});
 		expect(fixture.services.stripe.retrieveFulfillmentDetails).not.toHaveBeenCalled();
 		const serialized = JSON.stringify(result);
@@ -442,6 +483,7 @@ describe('fulfillment MCP protocol', () => {
 		];
 
 		for (const result of calls) expectMirrored(result);
+		expect(JSON.stringify(calls[3])).not.toContain('status-private@example.test');
 		expect(fixture.services.preparation.prepare).toHaveBeenCalledWith('order_2042');
 		expect(fixture.services.submission.submit).toHaveBeenCalledWith({
 			orderId: 'order_2042',
@@ -545,9 +587,18 @@ describe('fulfillment MCP protocol', () => {
 			...unsafe
 		});
 
-		expect(result.isError).toBe(true);
-		expect(result.content[0].text).toContain(
-			'Invalid arguments for tool record_return_or_replacement'
+		expect(result).toEqual({
+			isError: true,
+			content: [
+				{
+					type: 'text',
+					text: JSON.stringify({ error: { code: 'INVALID_TOOL_ARGUMENTS' } })
+				}
+			],
+			structuredContent: { error: { code: 'INVALID_TOOL_ARGUMENTS' } }
+		});
+		expect(JSON.stringify(result)).not.toContain(
+			Object.values(unsafe).find((value) => typeof value === 'string') as string
 		);
 		expect(fixture.services.fulfillment.recordSupportNote).not.toHaveBeenCalled();
 	});
@@ -565,12 +616,14 @@ describe('fulfillment MCP protocol', () => {
 		expect(fixture.services.fulfillment.recordSupportNote).toHaveBeenCalledWith({
 			orderId: 'order_2042',
 			outcome: 'replacement_ordered',
+			note: 'Replacement approved in support mailbox',
 			externalReference: 'ticket-2042',
 			createdAt: now
 		});
 		expect(result.structuredContent).toEqual({
 			order_id: 'order_2042',
 			outcome: 'replacement_ordered',
+			note: 'Replacement approved in support mailbox',
 			external_reference: 'ticket-2042',
 			recorded: true
 		});

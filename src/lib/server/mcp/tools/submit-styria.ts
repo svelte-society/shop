@@ -2,7 +2,14 @@ import * as v from 'valibot';
 import type { GenericSchema } from 'valibot';
 import type { McpServer } from 'tmcp';
 import type { SubmissionService } from '$lib/server/fulfillment/submit.server';
-import { caughtToolError, toolError, toolResult } from '../result';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
 const exactString = v.pipe(
 	v.string(),
@@ -10,11 +17,19 @@ const exactString = v.pipe(
 	v.maxLength(200),
 	v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
 );
-const inputSchema = v.strictObject({
-	order_id: exactString,
-	approval_id: exactString
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		order_id: exactString,
+		approval_id: exactString
+	})
+);
+const outputSchema = v.strictObject({
+	orderId: v.optional(v.string()),
+	styriaOrderId: v.optional(v.string()),
+	fulfillmentStatus: v.optional(v.literal('awaiting_vendor_payment')),
+	manualPaymentRequired: v.optional(v.literal(true)),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 
 export function registerSubmitStyriaTool(
 	server: McpServer<GenericSchema>,
@@ -33,11 +48,17 @@ export function registerSubmitStyriaTool(
 				openWorldHint: true
 			}
 		},
-		async ({ order_id, approval_id }) => {
+		async (input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { order_id, approval_id } = input;
 			if (!submission) return toolError('MCP_SUBMISSION_SERVICE_UNAVAILABLE');
 			try {
+				const result = await submission.submit({ orderId: order_id, approvalId: approval_id });
 				return toolResult({
-					...(await submission.submit({ orderId: order_id, approvalId: approval_id }))
+					orderId: result.orderId,
+					styriaOrderId: result.styriaOrderId,
+					fulfillmentStatus: result.fulfillmentStatus,
+					manualPaymentRequired: result.manualPaymentRequired
 				});
 			} catch (error) {
 				return caughtToolError(error, 'FULFILLMENT_SUBMISSION_FAILED');

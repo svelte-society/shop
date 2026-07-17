@@ -2,17 +2,31 @@ import * as v from 'valibot';
 import type { GenericSchema } from 'valibot';
 import type { McpServer } from 'tmcp';
 import type { ReconciliationService } from '$lib/server/fulfillment/reconcile.server';
-import { caughtToolError, toolError, toolResult } from '../result';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
-const inputSchema = v.strictObject({
-	order_id: v.pipe(
-		v.string(),
-		v.minLength(1),
-		v.maxLength(200),
-		v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
-	)
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		order_id: v.pipe(
+			v.string(),
+			v.minLength(1),
+			v.maxLength(200),
+			v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
+		)
+	})
+);
+const outputSchema = v.strictObject({
+	outcome: v.optional(v.picklist(['reconciled', 'not_found', 'ambiguous'])),
+	matches: v.optional(v.number()),
+	fulfillmentStatus: v.optional(v.string()),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 
 export function registerReconcileStyriaTool(
 	server: McpServer<GenericSchema>,
@@ -31,10 +45,17 @@ export function registerReconcileStyriaTool(
 				openWorldHint: true
 			}
 		},
-		async ({ order_id }) => {
+		async (input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { order_id } = input;
 			if (!reconciliation) return toolError('MCP_RECONCILIATION_SERVICE_UNAVAILABLE');
 			try {
-				return toolResult({ ...(await reconciliation.reconcile(order_id)) });
+				const result = await reconciliation.reconcile(order_id);
+				return toolResult({
+					outcome: result.outcome,
+					matches: result.matches,
+					fulfillmentStatus: result.fulfillmentStatus
+				});
 			} catch (error) {
 				return caughtToolError(error, 'STYRIA_RECONCILIATION_FAILED');
 			}

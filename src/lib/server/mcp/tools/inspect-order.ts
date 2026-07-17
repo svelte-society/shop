@@ -6,7 +6,14 @@ import type {
 	OrderWithLinesAndEvents
 } from '$lib/server/fulfillment/repository.server';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
-import { caughtToolError, toolError, toolResult } from '../result';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
 const orderIdSchema = v.pipe(
 	v.string(),
@@ -14,11 +21,87 @@ const orderIdSchema = v.pipe(
 	v.maxLength(200),
 	v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
 );
-const inputSchema = v.strictObject({
-	order_id: orderIdSchema,
-	include_shipping_details: v.optional(v.boolean(), false)
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		order_id: orderIdSchema,
+		include_shipping_details: v.optional(v.boolean(), false)
+	})
+);
+const outputSchema = v.strictObject({
+	order_id: v.optional(v.string()),
+	payment: v.optional(
+		v.strictObject({
+			status: v.string(),
+			currency: v.literal('eur'),
+			amounts: v.strictObject({
+				subtotal: v.number(),
+				discount: v.number(),
+				shipping: v.number(),
+				tax: v.number(),
+				total: v.number()
+			})
+		})
+	),
+	destination_country: v.optional(v.string()),
+	fulfillment: v.optional(
+		v.strictObject({
+			status: v.string(),
+			styria_order_id: v.nullable(v.string()),
+			styria_status: v.nullable(v.string()),
+			tracking_number: v.nullable(v.string()),
+			submitted_at: v.nullable(v.string()),
+			shipped_at: v.nullable(v.string()),
+			updated_at: v.string(),
+			last_error_code: v.nullable(v.string())
+		})
+	),
+	lines: v.optional(
+		v.array(
+			v.strictObject({
+				line_index: v.number(),
+				product_name: v.string(),
+				variant_label: v.string(),
+				sku: v.string(),
+				styria_product_number: v.string(),
+				design_reference: v.string(),
+				design_placements: v.record(v.string(), v.string()),
+				quantity: v.number(),
+				unit_amount: v.number(),
+				currency: v.literal('eur')
+			})
+		)
+	),
+	support: v.optional(
+		v.array(
+			v.strictObject({
+				outcome: v.string(),
+				note: v.nullable(v.string()),
+				external_reference: v.nullable(v.string()),
+				created_at: v.string()
+			})
+		)
+	),
+	shipping_details: v.optional(
+		v.strictObject({
+			recipient: v.strictObject({
+				firstName: v.string(),
+				lastName: v.string(),
+				company: v.string(),
+				phone: v.string()
+			}),
+			address: v.strictObject({
+				line1: v.string(),
+				line2: v.string(),
+				city: v.string(),
+				state: v.string(),
+				postalCode: v.string(),
+				countryCode: v.string()
+			}),
+			email: v.string()
+		})
+	),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 const reviewStatuses = new Set(['pending_review', 'review_required']);
 
 function localSummary(order: OrderWithLinesAndEvents) {
@@ -54,6 +137,7 @@ function localSummary(order: OrderWithLinesAndEvents) {
 		})),
 		support: order.supportNotes.map((note) => ({
 			outcome: note.outcome,
+			note: note.note,
 			external_reference: note.externalReference,
 			created_at: note.createdAt.toISOString()
 		}))
@@ -81,7 +165,9 @@ export function registerInspectOrderTool(
 				openWorldHint: true
 			}
 		},
-		async ({ order_id, include_shipping_details }) => {
+		async (input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { order_id, include_shipping_details } = input;
 			if (!dependencies.fulfillment) return toolError('MCP_FULFILLMENT_SERVICE_UNAVAILABLE');
 			try {
 				const order = dependencies.fulfillment.inspect(order_id);

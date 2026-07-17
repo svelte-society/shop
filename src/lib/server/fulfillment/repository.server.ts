@@ -7,6 +7,7 @@ import type {
 	PaymentStatus
 } from '$lib/domain/orders';
 import { isStableErrorCode, RepositoryError } from '$lib/domain/orders';
+import { isConciseSupportText } from '$lib/domain/support';
 import { SqliteOrderEventRepository } from '$lib/server/audit/order-events.server';
 import { SqliteOrderRepository } from '$lib/server/db/orders.server';
 import type { ShopDatabase } from '$lib/server/db/types';
@@ -52,6 +53,7 @@ export type SupportOutcome =
 export type NewSupportNote = {
 	orderId: string;
 	outcome: SupportOutcome;
+	note: string | null;
 	externalReference: string | null;
 	createdAt: Date;
 };
@@ -95,6 +97,7 @@ type SupportNoteRow = {
 	id: unknown;
 	order_id: unknown;
 	outcome: unknown;
+	note: unknown;
 	external_reference: unknown;
 	actor: unknown;
 	created_at: unknown;
@@ -170,7 +173,8 @@ function mapSupportNote(row: SupportNoteRow, orderId: string): SupportNote {
 		(row.id as number) < 1 ||
 		row.order_id !== orderId ||
 		!supportOutcomes.has(row.outcome as SupportOutcome) ||
-		(row.external_reference !== null && !isExactString(row.external_reference, 120)) ||
+		(row.note !== null && !isConciseSupportText(row.note, 160)) ||
+		(row.external_reference !== null && !isConciseSupportText(row.external_reference, 120)) ||
 		row.actor !== ACTOR
 	) {
 		fail('SUPPORT_NOTE_ROW_INVALID');
@@ -179,6 +183,7 @@ function mapSupportNote(row: SupportNoteRow, orderId: string): SupportNote {
 		id: row.id as number,
 		orderId,
 		outcome: row.outcome as SupportOutcome,
+		note: row.note as string | null,
 		externalReference: row.external_reference as string | null,
 		actor: ACTOR,
 		createdAt: dateFromIso(row.created_at, 'SUPPORT_NOTE_ROW_INVALID')
@@ -480,20 +485,21 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			!input ||
 			!isExactString(input.orderId, 200) ||
 			!supportOutcomes.has(input.outcome) ||
-			(input.externalReference !== null && !isExactString(input.externalReference, 120))
+			(input.note !== null && !isConciseSupportText(input.note, 160)) ||
+			(input.externalReference !== null && !isConciseSupportText(input.externalReference, 120))
 		) {
 			fail('SUPPORT_NOTE_INVALID');
 		}
 		const timestamp = isoTimestamp(input.createdAt, 'SUPPORT_NOTE_INVALID');
 		const insert = this.database.prepare(`
-			INSERT INTO support_notes (order_id, outcome, external_reference, actor, created_at)
-			VALUES (?, ?, ?, '${ACTOR}', ?)
+			INSERT INTO support_notes (order_id, outcome, note, external_reference, actor, created_at)
+			VALUES (?, ?, ?, ?, '${ACTOR}', ?)
 		`);
 		const record = this.database.transaction(() => {
 			const order = this.orders.findById(input.orderId);
 			if (!order) fail('ORDER_NOT_FOUND');
 			if (timestamp < order.updatedAt.toISOString()) fail('ORDER_TIMESTAMP_REGRESSION');
-			insert.run(input.orderId, input.outcome, input.externalReference, timestamp);
+			insert.run(input.orderId, input.outcome, input.note, input.externalReference, timestamp);
 			this.audit.append({
 				orderId: input.orderId,
 				actor: ACTOR,

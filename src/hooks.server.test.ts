@@ -15,6 +15,7 @@ describe('server application hook', () => {
 		const order: string[] = [];
 		const ready = deferred<null>();
 		const application: ApplicationLifecycle = {
+			current: () => null,
 			start: vi.fn(() => {
 				order.push('application-start');
 				return ready.promise;
@@ -46,6 +47,7 @@ describe('server application hook', () => {
 
 	it('does not resolve a request when startup readiness fails and retries startup later', async () => {
 		const application: ApplicationLifecycle = {
+			current: () => null,
 			start: vi
 				.fn<ApplicationLifecycle['start']>()
 				.mockRejectedValueOnce(new Error('STARTUP_NOT_READY'))

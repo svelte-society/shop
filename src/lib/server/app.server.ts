@@ -32,6 +32,7 @@ export type ApplicationRuntimeDependencies = {
 
 export interface ApplicationLifecycle {
 	start(options: ApplicationStartOptions): Promise<ApplicationRuntime | null>;
+	current(): ApplicationRuntime | null;
 	stop(): Promise<void>;
 }
 
@@ -129,6 +130,10 @@ export function createApplicationLifecycle(
 	};
 
 	return {
+		current(): ApplicationRuntime | null {
+			return runtime;
+		},
+
 		start(options): Promise<ApplicationRuntime | null> {
 			if (options.building || options.test) return Promise.resolve(null);
 			if (startup) return startup;

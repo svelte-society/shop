@@ -5,7 +5,15 @@ import type {
 	FulfillmentRepository,
 	SupportOutcome
 } from '$lib/server/fulfillment/repository.server';
-import { caughtToolError, toolError, toolResult } from '../result';
+import { CONCISE_SUPPORT_TEXT_PATTERN } from '$lib/domain/support';
+import {
+	caughtToolError,
+	isInvalidToolInput,
+	safeToolSchema,
+	toolError,
+	toolErrorSchema,
+	toolResult
+} from '../result';
 
 const outcomes = [
 	'return_approved',
@@ -17,26 +25,29 @@ const outcomes = [
 	'other_reviewed'
 ] as const satisfies readonly SupportOutcome[];
 
-const addressWordPattern =
-	'[Ss][Tt][Rr][Ee][Ee][Tt]|[Rr][Oo][Aa][Dd]|[Aa][Vv][Ee][Nn][Uu][Ee]|[Ll][Aa][Nn][Ee]|[Dd][Rr][Ii][Vv][Ee]|[Bb][Oo][Uu][Ll][Ee][Vv][Aa][Rr][Dd]|[Gg][Aa][Tt][Aa][Nn]?|[Vv][ÄäAa][Gg][Ee][Nn]|[Ss][Tt][Rr][Aa][Ss][Ss][Ee]';
-const conciseNonContactPattern = new RegExp(
-	`^(?!\\s)(?!.*[\\r\\n])(?!.*\\b[^\\s@]+@[^\\s@]+\\.[^\\s@]+\\b)(?!.*(?:\\+?\\d[\\d ()-]{6,}\\d))(?!.*(?:\\d.*(?:${addressWordPattern})|(?:${addressWordPattern}).*\\d)).*\\S$`
-);
-
 const exactString = (maximum: number) =>
-	v.pipe(v.string(), v.minLength(1), v.maxLength(maximum), v.regex(conciseNonContactPattern));
-const inputSchema = v.strictObject({
-	order_id: v.pipe(
-		v.string(),
-		v.minLength(1),
-		v.maxLength(200),
-		v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
-	),
-	outcome: v.picklist(outcomes),
-	note: v.optional(exactString(160)),
-	external_reference: v.optional(exactString(120))
+	v.pipe(v.string(), v.minLength(1), v.maxLength(maximum), v.regex(CONCISE_SUPPORT_TEXT_PATTERN));
+const inputSchema = safeToolSchema(
+	v.strictObject({
+		order_id: v.pipe(
+			v.string(),
+			v.minLength(1),
+			v.maxLength(200),
+			v.regex(/^(?!\s)(?!.*[\r\n]).*\S$/)
+		),
+		outcome: v.picklist(outcomes),
+		note: v.optional(exactString(160)),
+		external_reference: v.optional(exactString(120))
+	})
+);
+const outputSchema = v.strictObject({
+	order_id: v.optional(v.string()),
+	outcome: v.optional(v.picklist(outcomes)),
+	note: v.optional(v.nullable(v.string())),
+	external_reference: v.optional(v.nullable(v.string())),
+	recorded: v.optional(v.literal(true)),
+	error: toolErrorSchema
 });
-const outputSchema = v.looseObject({});
 
 export function registerRecordSupportTool(
 	server: McpServer<GenericSchema>,
@@ -59,20 +70,24 @@ export function registerRecordSupportTool(
 				openWorldHint: false
 			}
 		},
-		({ order_id, outcome, external_reference }) => {
+		(input) => {
+			if (isInvalidToolInput(input)) return toolError('INVALID_TOOL_ARGUMENTS');
+			const { order_id, outcome, note, external_reference } = input;
 			if (!dependencies.fulfillment) return toolError('MCP_FULFILLMENT_SERVICE_UNAVAILABLE');
 			try {
 				dependencies.fulfillment.recordSupportNote({
 					orderId: order_id,
 					outcome,
+					note: note ?? null,
 					externalReference: external_reference ?? null,
 					createdAt: dependencies.now()
 				});
 				return toolResult({
 					order_id,
 					outcome,
+					note: note ?? null,
 					external_reference: external_reference ?? null,
-					recorded: true
+					recorded: true as const
 				});
 			} catch (error) {
 				return caughtToolError(error, 'SUPPORT_NOTE_RECORD_FAILED');
