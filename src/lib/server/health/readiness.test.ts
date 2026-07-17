@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import type { Scheduler } from '$lib/server/jobs/scheduler.server';
 import { chmod, mkdtemp, open, readdir, rm, stat, statfs, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -16,12 +17,14 @@ let databasePath: string;
 let database: ShopDatabase;
 let detachedDatabase: ShopDatabase | undefined;
 let environment: Record<string, string | undefined>;
+let scheduler: Scheduler | null;
 
 beforeEach(async () => {
 	directory = await mkdtemp(join(tmpdir(), 'svelte-shop-readiness-'));
 	databasePath = join(directory, 'shop.sqlite');
 	database = openDatabase(databasePath);
 	migrate(database, migrationsDirectory);
+	scheduler = null;
 	environment = {
 		STOREFRONT_ENABLED: 'false',
 		CHECKOUT_ENABLED: 'false',
@@ -44,11 +47,17 @@ afterEach(async () => {
 	await rm(directory, { recursive: true, force: true });
 });
 
-function checker(overrides: Partial<ReadinessDependencies> = {}) {
-	return createReadinessChecker({
-		getRuntime: () => ({ database, databasePath, environment, migrationsDirectory }),
-		...overrides
-	});
+function checker(
+	overrides: Partial<ReadinessDependencies> = {},
+	options: { ignoreSchedulerLatch?: boolean } = {}
+) {
+	return createReadinessChecker(
+		{
+			getRuntime: () => ({ database, databasePath, environment, migrationsDirectory, scheduler }),
+			...overrides
+		},
+		options
+	);
 }
 
 const allOkay = {
@@ -73,6 +82,15 @@ function enableFulfillment(options: { mcp?: boolean; scheduler?: boolean } = {})
 		PLUNK_FROM_NAME: 'Svelte Society Shop',
 		PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 		ADMIN_EMAIL: 'shop-ops@sveltesociety.dev'
+	};
+}
+
+function runningScheduler(): Scheduler {
+	return {
+		start() {},
+		async stop() {},
+		async runOutboxOnce() {},
+		async runStyriaSyncOnce() {}
 	};
 }
 
@@ -246,6 +264,22 @@ describe('local readiness', () => {
 		expect(result.checks.configuration).toBe('failed');
 	});
 
+	it('keeps public readiness red while the required scheduler has not started', async () => {
+		enableFulfillment({ scheduler: true });
+
+		const result = await checker()();
+
+		expect(result).toEqual({ ready: false, checks: allOkay });
+	});
+
+	it('allows only the internal activation probe to ignore the scheduler-running latch', async () => {
+		enableFulfillment({ scheduler: true });
+
+		const result = await checker({}, { ignoreSchedulerLatch: true })();
+
+		expect(result).toEqual({ ready: true, checks: allOkay });
+	});
+
 	it.each(['a'.repeat(63), 'A'.repeat(64), 'g'.repeat(64)])(
 		'rejects an enabled MCP bearer that is not 64 lowercase hex characters',
 		async (token) => {
@@ -313,6 +347,7 @@ describe('local readiness', () => {
 
 	it('does not call Stripe, Styria, or Plunk during transient provider outages', async () => {
 		enableFulfillment({ mcp: true, scheduler: true });
+		scheduler = runningScheduler();
 		environment = {
 			...environment,
 			STOREFRONT_ENABLED: 'true',

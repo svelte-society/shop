@@ -33,6 +33,11 @@ type ReadinessContext = {
 	databasePath: string;
 	environment: Record<string, string | undefined>;
 	migrationsDirectory: string;
+	scheduler: ApplicationRuntime['scheduler'];
+};
+
+export type ReadinessOptions = {
+	ignoreSchedulerLatch?: boolean;
 };
 
 type ReadinessFileHandle = {
@@ -200,14 +205,16 @@ function defaultRuntime(): ReadinessContext {
 			database: runtime.database,
 			databasePath: runtime.databasePath,
 			environment: runtime.environment,
-			migrationsDirectory: runtime.migrationsDirectory
+			migrationsDirectory: runtime.migrationsDirectory,
+			scheduler: runtime.scheduler
 		};
 	}
 	return {
 		database: null,
 		databasePath: env.DATABASE_PATH ?? '',
 		environment: env,
-		migrationsDirectory: resolve('migrations')
+		migrationsDirectory: resolve('migrations'),
+		scheduler: null
 	};
 }
 
@@ -216,7 +223,8 @@ function databaseDirectory(databasePath: string): string | null {
 }
 
 export function createReadinessChecker(
-	dependencies: ReadinessDependencies
+	dependencies: ReadinessDependencies,
+	options: ReadinessOptions = {}
 ): () => Promise<ReadinessResult> {
 	const validateConfiguration =
 		dependencies.validateConfiguration ?? productionConfigurationIsValid;
@@ -338,7 +346,11 @@ export function createReadinessChecker(
 			disk
 		};
 		return {
-			ready: Object.values(checks).every((status) => status === 'ok'),
+			ready:
+				Object.values(checks).every((status) => status === 'ok') &&
+				(options.ignoreSchedulerLatch ||
+					context.environment.SCHEDULER_ENABLED !== 'true' ||
+					Boolean(context.scheduler)),
 			checks
 		};
 	};
@@ -346,15 +358,22 @@ export function createReadinessChecker(
 
 const defaultChecker = createReadinessChecker({ getRuntime: defaultRuntime });
 
-export function checkRuntimeReadiness(runtime: ApplicationRuntime): Promise<ReadinessResult> {
-	return createReadinessChecker({
-		getRuntime: () => ({
-			database: runtime.database,
-			databasePath: runtime.databasePath,
-			environment: runtime.environment,
-			migrationsDirectory: runtime.migrationsDirectory
-		})
-	})();
+export function checkRuntimeReadiness(
+	runtime: ApplicationRuntime,
+	options: ReadinessOptions = {}
+): Promise<ReadinessResult> {
+	return createReadinessChecker(
+		{
+			getRuntime: () => ({
+				database: runtime.database,
+				databasePath: runtime.databasePath,
+				environment: runtime.environment,
+				migrationsDirectory: runtime.migrationsDirectory,
+				scheduler: runtime.scheduler
+			})
+		},
+		options
+	)();
 }
 
 export function checkReadiness(): Promise<ReadinessResult> {

@@ -89,6 +89,7 @@ function createDraft(quantity: number, sessionId = SESSION_ID) {
 function webhookService(fixture: ReturnType<typeof paidCheckoutProviderFixture>) {
 	return createStripeWebhookService({
 		webhookSecret: 'whsec_test_integration',
+		checkReadiness: async () => ({ ready: true }),
 		verifier: {
 			constructEvent(rawBody, signature) {
 				if (signature !== 'sig_test') throw new Error('INVALID_SIGNATURE');

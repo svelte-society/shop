@@ -53,6 +53,7 @@ export type StripeWebhookProcessingDependencies = {
 type StripeWebhookDependencies = {
 	webhookSecret: string;
 	verifier: StripeWebhookVerifier;
+	checkReadiness: () => Promise<{ ready: boolean }>;
 	loadProcessingDependencies?: () => StripeWebhookProcessingDependencies;
 	now?: () => Date;
 } & Partial<StripeWebhookProcessingDependencies>;
@@ -160,6 +161,7 @@ export function createStripeWebhookService(
 		!dependencies ||
 		!isExactNonEmptyString(dependencies.webhookSecret) ||
 		!dependencies.verifier ||
+		typeof dependencies.checkReadiness !== 'function' ||
 		(!isProcessingDependencies(dependencies) &&
 			typeof dependencies.loadProcessingDependencies !== 'function')
 	) {
@@ -185,14 +187,21 @@ export function createStripeWebhookService(
 		processing = loaded;
 		return processing;
 	};
+	const requireReadiness = async (): Promise<void> => {
+		try {
+			if (!(await dependencies.checkReadiness()).ready) {
+				throw new Error('NOT_READY');
+			}
+		} catch {
+			throw new StripeWebhookError('STRIPE_WEBHOOK_SERVICE_NOT_READY', true);
+		}
+	};
 	const inFlight = new Map<string, Promise<{ duplicate: boolean }>>();
 	const processEvent = async (
 		event: Stripe.Event,
-		isPaidEvent: boolean,
-		isRefundEvent: boolean
+		sessionId: string | null,
+		intentId: string | null
 	): Promise<{ duplicate: boolean }> => {
-		const sessionId = isPaidEvent ? checkoutSessionId(event) : null;
-		const intentId = isRefundEvent ? paymentIntentId(event) : null;
 		const processing = loadProcessing();
 		const processedAt = now();
 		if (!(processedAt instanceof Date) || !Number.isFinite(processedAt.getTime())) {
@@ -286,13 +295,16 @@ export function createStripeWebhookService(
 			const isPaidEvent = PAID_EVENT_TYPES.has(event.type);
 			const isRefundEvent = REFUND_EVENT_TYPES.has(event.type);
 			if (!isPaidEvent && !isRefundEvent) return { duplicate: false };
+			const sessionId = isPaidEvent ? checkoutSessionId(event) : null;
+			const intentId = isRefundEvent ? paymentIntentId(event) : null;
+			await requireReadiness();
 
 			const active = inFlight.get(event.id);
 			if (active) {
 				await active;
 				return { duplicate: true };
 			}
-			const operation = processEvent(event, isPaidEvent, isRefundEvent);
+			const operation = processEvent(event, sessionId, intentId);
 			inFlight.set(event.id, operation);
 			try {
 				return await operation;

@@ -6,6 +6,7 @@ import { parsePrivateConfig } from '$lib/config/private.server';
 import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import { SqlitePaidOrderUnitOfWork } from '$lib/server/db/orders.server';
 import { SqliteStripeEventRepository } from '$lib/server/db/stripe-events.server';
+import { checkReadiness } from '$lib/server/health/readiness.server';
 import { SqliteRefundOrderUnitOfWork } from '$lib/server/orders/intake.server';
 import { createStripeClient } from '$lib/server/stripe/client.server';
 import { createStripeOrderGateway } from '$lib/server/stripe/paid-checkout';
@@ -59,6 +60,7 @@ export function _createDefaultStripeWebhookServiceFactory(
 	return createStripeWebhookService({
 		webhookSecret,
 		verifier: createStripeWebhookVerifier({ webhooks: Stripe.webhooks }),
+		checkReadiness,
 		loadProcessingDependencies() {
 			const config = parsePrivateConfig(runtimeEnv);
 			const database = applicationLifecycle.current()?.database;

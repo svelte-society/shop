@@ -56,6 +56,10 @@ function deferred<T>() {
 	return { promise, resolve, reject };
 }
 
+async function settleAsyncWork(): Promise<void> {
+	for (let index = 0; index < 5; index += 1) await Promise.resolve();
+}
+
 function timerHarness() {
 	type TimerEntry = {
 		callback: () => void;
@@ -167,18 +171,29 @@ describe('application runtime', () => {
 		expect(first?.database.open).toBe(false);
 	});
 
-	it('publishes a scheduler-free runtime and never constructs providers when local readiness is red', async () => {
+	it('retries red local readiness and activates the scheduler exactly once after it turns green', async () => {
 		closeDatabase();
-		const createScheduler = vi.fn();
+		const timers = timerHarness();
+		let ready = false;
+		const scheduler = {
+			start: vi.fn(),
+			stop: vi.fn(async () => undefined),
+			runOutboxOnce: vi.fn(async () => undefined),
+			runStyriaSyncOnce: vi.fn(async () => undefined)
+		};
+		const createScheduler = vi.fn(() => scheduler);
 		const checkReadiness = vi.fn(async (runtime) => {
 			expect(application.current()).toBe(runtime);
 			expect(runtime.scheduler).toBeNull();
-			return { ready: false };
+			return { ready };
 		});
 		const application = createApplicationLifecycle({
 			migrationsDirectory,
 			checkReadiness,
-			createScheduler
+			createScheduler,
+			scheduleSchedulerActivation: timers.schedule,
+			cancelSchedulerActivation: timers.cancel,
+			schedulerActivationRetryMs: 250
 		});
 
 		const runtime = await application.start({
@@ -191,13 +206,135 @@ describe('application runtime', () => {
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.scheduler).toBeNull();
 		expect(application.current()).toBe(runtime);
+		expect(timers.schedule).toHaveBeenCalledOnce();
+
+		ready = true;
+		timers.fire(250);
+		await settleAsyncWork();
+
+		expect(checkReadiness).toHaveBeenCalledTimes(2);
+		expect(createScheduler).toHaveBeenCalledOnce();
+		expect(scheduler.start).toHaveBeenCalledOnce();
+		expect(runtime?.scheduler).toBe(scheduler);
+		timers.fireCaptured(250);
+		await settleAsyncWork();
+		expect(checkReadiness).toHaveBeenCalledTimes(2);
+		await application.stop();
+		expect(scheduler.stop).toHaveBeenCalledOnce();
+	});
+
+	it('coalesces concurrent retry callbacks behind one activation probe', async () => {
+		closeDatabase();
+		const timers = timerHarness();
+		const retry = deferred<{ ready: boolean }>();
+		const scheduler = {
+			start: vi.fn(),
+			stop: vi.fn(async () => undefined),
+			runOutboxOnce: vi.fn(async () => undefined),
+			runStyriaSyncOnce: vi.fn(async () => undefined)
+		};
+		const checkReadiness = vi
+			.fn()
+			.mockRejectedValueOnce(new Error('temporary local readiness failure'))
+			.mockImplementationOnce(() => retry.promise);
+		const createScheduler = vi.fn(() => scheduler);
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness,
+			createScheduler,
+			scheduleSchedulerActivation: timers.schedule,
+			cancelSchedulerActivation: timers.cancel,
+			schedulerActivationRetryMs: 250
+		});
+
+		const runtime = await application.start({
+			environment: schedulerRuntimeEnvironment,
+			building: false,
+			test: false
+		});
+		timers.fireCaptured(250);
+		timers.fireCaptured(250);
+		await settleAsyncWork();
+		expect(checkReadiness).toHaveBeenCalledTimes(2);
+		expect(createScheduler).not.toHaveBeenCalled();
+
+		retry.resolve({ ready: true });
+		await settleAsyncWork();
+		expect(createScheduler).toHaveBeenCalledOnce();
+		expect(scheduler.start).toHaveBeenCalledOnce();
+		expect(runtime?.scheduler).toBe(scheduler);
+		await application.stop();
+	});
+
+	it('cancels a pending retry when stopped before readiness turns green', async () => {
+		closeDatabase();
+		const timers = timerHarness();
+		const checkReadiness = vi.fn(async () => ({ ready: false }));
+		const createScheduler = vi.fn();
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness,
+			createScheduler,
+			scheduleSchedulerActivation: timers.schedule,
+			cancelSchedulerActivation: timers.cancel,
+			schedulerActivationRetryMs: 250
+		});
+
 		await application.start({
 			environment: schedulerRuntimeEnvironment,
 			building: false,
 			test: false
 		});
-		expect(checkReadiness).toHaveBeenCalledOnce();
+		const [handle] = timers.handles(250);
+		expect(handle).toBeDefined();
+
 		await application.stop();
+		expect(handle && timers.isCancelled(handle)).toBe(true);
+		timers.fireCaptured(250);
+		await settleAsyncWork();
+		expect(checkReadiness).toHaveBeenCalledOnce();
+		expect(createScheduler).not.toHaveBeenCalled();
+	});
+
+	it('waits for an in-flight red probe before closing', async () => {
+		closeDatabase();
+		const timers = timerHarness();
+		const retry = deferred<{ ready: boolean }>();
+		const checkReadiness = vi
+			.fn()
+			.mockResolvedValueOnce({ ready: false })
+			.mockImplementationOnce(() => retry.promise);
+		const createScheduler = vi.fn();
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness,
+			createScheduler,
+			scheduleSchedulerActivation: timers.schedule,
+			cancelSchedulerActivation: timers.cancel,
+			schedulerActivationRetryMs: 250
+		});
+
+		await application.start({
+			environment: schedulerRuntimeEnvironment,
+			building: false,
+			test: false
+		});
+		timers.fireCaptured(250);
+		await settleAsyncWork();
+		let stopped = false;
+		const stopping = application.stop().then(() => {
+			stopped = true;
+		});
+		await settleAsyncWork();
+		expect(stopped).toBe(false);
+
+		retry.resolve({ ready: true });
+		await stopping;
+		expect(createScheduler).not.toHaveBeenCalled();
+		timers.fireCaptured(250);
+		await settleAsyncWork();
+		expect(checkReadiness).toHaveBeenCalledTimes(2);
+		expect(application.current()).toBeNull();
 	});
 
 	it('never starts the scheduler while one-time database bootstrap mode is active', async () => {
@@ -490,95 +627,61 @@ describe('application runtime', () => {
 		await application.stop();
 	});
 
-	it('clears a failed startup so a later request can initialize cleanly', async () => {
-		closeDatabase();
-		const scheduler = {
-			start: vi.fn<() => void>().mockImplementationOnce(() => {
-				throw new Error('SCHEDULER_START_FAILED');
-			}),
-			stop: vi.fn(async () => undefined),
-			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
-		};
-		const createScheduler = vi.fn(() => scheduler);
-		const application = createApplicationLifecycle({
-			migrationsDirectory,
-			createScheduler,
-			checkReadiness: async () => ({ ready: true })
-		});
-		const options = {
-			environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
-			building: false,
-			test: false
-		};
+	it.each(['construction', 'start'] as const)(
+		'retries scheduler %s failure without tearing down the ready runtime',
+		async (failure) => {
+			closeDatabase();
+			const timers = timerHarness();
+			const failedScheduler = {
+				start: vi.fn(() => {
+					throw new Error('SCHEDULER_START_FAILED');
+				}),
+				stop: vi.fn(async () => undefined),
+				runOutboxOnce: vi.fn(async () => undefined),
+				runStyriaSyncOnce: vi.fn(async () => undefined)
+			};
+			const runningScheduler = {
+				start: vi.fn(),
+				stop: vi.fn(async () => undefined),
+				runOutboxOnce: vi.fn(async () => undefined),
+				runStyriaSyncOnce: vi.fn(async () => undefined)
+			};
+			const createScheduler = vi
+				.fn()
+				.mockImplementationOnce(() => {
+					if (failure === 'construction') throw new Error('SCHEDULER_CONSTRUCTION_FAILED');
+					return failedScheduler;
+				})
+				.mockReturnValueOnce(runningScheduler);
+			const application = createApplicationLifecycle({
+				migrationsDirectory,
+				createScheduler,
+				checkReadiness: async () => ({ ready: true }),
+				scheduleSchedulerActivation: timers.schedule,
+				cancelSchedulerActivation: timers.cancel,
+				schedulerActivationRetryMs: 250
+			});
 
-		await expect(application.start(options)).rejects.toThrowError('SCHEDULER_START_FAILED');
-		await expect(application.start(options)).resolves.not.toBeNull();
-
-		expect(createScheduler).toHaveBeenCalledTimes(2);
-		expect(scheduler.start).toHaveBeenCalledTimes(2);
-		await application.stop();
-		expect(scheduler.stop).toHaveBeenCalledTimes(2);
-	});
-
-	it('awaits partial scheduler cleanup before closing SQLite after startup fails', async () => {
-		closeDatabase();
-		const cleanup = deferred<void>();
-		const startupFailure = new Error('SCHEDULER_START_FAILED');
-		const sequence: string[] = [];
-		let timerInstalled = false;
-		let openedDatabase: ShopDatabase | undefined;
-		const scheduler = {
-			start: vi.fn(() => {
-				timerInstalled = true;
-				throw startupFailure;
-			}),
-			stop: vi.fn(async () => {
-				sequence.push('scheduler-stop');
-				timerInstalled = false;
-				await cleanup.promise;
-				sequence.push('scheduler-stopped');
-			}),
-			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
-		};
-		const application = createApplicationLifecycle({
-			migrationsDirectory,
-			openDatabase(path) {
-				openedDatabase = openDatabase(path);
-				return openedDatabase;
-			},
-			closeDatabase() {
-				sequence.push('database-close');
-				closeDatabase();
-			},
-			createScheduler: () => scheduler,
-			checkReadiness: async () => ({ ready: true })
-		});
-
-		let startupSettled = false;
-		const startup = application
-			.start({
-				environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
+			const runtime = await application.start({
+				environment: schedulerRuntimeEnvironment,
 				building: false,
 				test: false
-			})
-			.finally(() => {
-				startupSettled = true;
 			});
-		await Promise.resolve();
 
-		expect(scheduler.stop).toHaveBeenCalledOnce();
-		expect(timerInstalled).toBe(false);
-		expect(openedDatabase?.open).toBe(true);
-		expect(startupSettled).toBe(false);
-		expect(sequence).toEqual(['scheduler-stop']);
+			expect(runtime?.database.open).toBe(true);
+			expect(runtime?.scheduler).toBeNull();
+			expect(timers.schedule).toHaveBeenCalledOnce();
+			if (failure === 'start') expect(failedScheduler.stop).toHaveBeenCalledOnce();
 
-		cleanup.resolve();
-		await expect(startup).rejects.toBe(startupFailure);
-		expect(openedDatabase?.open).toBe(false);
-		expect(sequence).toEqual(['scheduler-stop', 'scheduler-stopped', 'database-close']);
-	});
+			timers.fire(250);
+			await settleAsyncWork();
+			expect(createScheduler).toHaveBeenCalledTimes(2);
+			expect(runningScheduler.start).toHaveBeenCalledOnce();
+			expect(runtime?.scheduler).toBe(runningScheduler);
+			await application.stop();
+			expect(runningScheduler.stop).toHaveBeenCalledOnce();
+		}
+	);
 });
 
 afterEach(() => {

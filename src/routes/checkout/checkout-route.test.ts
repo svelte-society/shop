@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { CheckoutService } from '$lib/server/checkout/service.server';
 import { CheckoutError } from '$lib/server/checkout/service.server';
-import { closeDatabase } from '$lib/server/db/connection.server';
+import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
+import { migrate } from '$lib/server/db/migrate.server';
+import { createReadinessChecker } from '$lib/server/health/readiness.server';
+import type { Scheduler } from '$lib/server/jobs/scheduler.server';
 import { _createCheckoutPost } from './+server';
 
 const BASE_ENV = {
@@ -173,6 +176,59 @@ describe('POST /checkout', () => {
 		expect(readiness).toHaveBeenCalledOnce();
 		expect(fixture.serviceFactories).toBe(0);
 		expect(fixture.starts).toEqual([]);
+	});
+
+	it('does not admit checkout until a required scheduler is actually running', async () => {
+		closeDatabase();
+		const directory = await mkdtemp(join(tmpdir(), 'svelte-shop-checkout-scheduler-'));
+		const databasePath = join(directory, 'shop.sqlite');
+		const database = openDatabase(databasePath);
+		const migrationsDirectory = resolve('migrations');
+		migrate(database, migrationsDirectory);
+		const environment = {
+			...BASE_ENV,
+			MCP_ENABLED: 'false',
+			SCHEDULER_ENABLED: 'true',
+			DATABASE_BOOTSTRAP: 'false',
+			DATABASE_PATH: databasePath,
+			PLUNK_SECRET_KEY: 'plunk-checkout',
+			PLUNK_FROM_NAME: 'Svelte Society Shop',
+			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+			ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
+			STYRIA_APP_ID: 'checkout-app',
+			STYRIA_SECRET_KEY: 'checkout-secret'
+		};
+		let scheduler: Scheduler | null = null;
+		const readiness = createReadinessChecker({
+			getRuntime: () => ({
+				database,
+				databasePath,
+				environment,
+				migrationsDirectory,
+				scheduler
+			})
+		});
+		const fixture = routeFixture({ env: environment, readiness });
+
+		try {
+			const blocked = await invoke(fixture.handler, request());
+			expect(blocked.status).toBe(503);
+			await expect(responseBody(blocked)).resolves.toMatchObject({ code: 'SERVICE_NOT_READY' });
+			expect(fixture.serviceFactories).toBe(0);
+
+			scheduler = {
+				start() {},
+				async stop() {},
+				async runOutboxOnce() {},
+				async runStyriaSyncOnce() {}
+			};
+			const admitted = await invoke(fixture.handler, request());
+			expect(admitted.status).toBe(200);
+			expect(fixture.serviceFactories).toBe(1);
+		} finally {
+			closeDatabase();
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it('fails closed with SERVICE_NOT_READY when local readiness cannot complete', async () => {

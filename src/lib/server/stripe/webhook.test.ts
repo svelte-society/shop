@@ -128,6 +128,7 @@ function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 type FixtureOptions = {
 	event?: Stripe.Event;
 	verify?: StripeWebhookVerifier['constructEvent'];
+	readiness?: () => Promise<{ ready: boolean }>;
 	retrievePaidCheckout?: StripeOrderGateway['retrievePaidCheckout'];
 	retrieveRefundStatus?: StripeOrderGateway['retrieveRefundStatus'];
 	refunds?: RefundOrderUnitOfWork;
@@ -183,6 +184,7 @@ describe('Stripe webhook service', () => {
 		const verifierCalls: Array<{ rawBody: string; signature: string; secret: string }> = [];
 		const paidCalls: string[] = [];
 		const refundCalls: string[] = [];
+		let readinessCalls = 0;
 		let currentEvent = options.event ?? checkoutEvent();
 		const verifier: StripeWebhookVerifier = {
 			constructEvent(rawBody, signature, secret) {
@@ -209,6 +211,10 @@ describe('Stripe webhook service', () => {
 		const service = createStripeWebhookService({
 			webhookSecret: WEBHOOK_SECRET,
 			verifier,
+			async checkReadiness() {
+				readinessCalls += 1;
+				return options.readiness ? options.readiness() : { ready: true };
+			},
 			stripeEvents,
 			drafts,
 			stripeOrders,
@@ -222,6 +228,9 @@ describe('Stripe webhook service', () => {
 			verifierCalls,
 			paidCalls,
 			refundCalls,
+			get readinessCalls() {
+				return readinessCalls;
+			},
 			setEvent(nextEvent: Stripe.Event) {
 				currentEvent = nextEvent;
 			}
@@ -243,6 +252,7 @@ describe('Stripe webhook service', () => {
 			{ rawBody: RAW_BODY, signature: SIGNATURE, secret: WEBHOOK_SECRET }
 		]);
 		expect(route.paidCalls).toEqual([]);
+		expect(route.readinessCalls).toBe(0);
 		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
 			count: 0
 		});
@@ -252,6 +262,7 @@ describe('Stripe webhook service', () => {
 		let processingLoads = 0;
 		const service = createStripeWebhookService({
 			webhookSecret: WEBHOOK_SECRET,
+			checkReadiness: async () => ({ ready: true }),
 			verifier: {
 				constructEvent() {
 					throw new Error('invalid signature');
@@ -285,6 +296,7 @@ describe('Stripe webhook service', () => {
 	it('redacts processing initialization failures behind a stable retryable error', async () => {
 		const service = createStripeWebhookService({
 			webhookSecret: WEBHOOK_SECRET,
+			checkReadiness: async () => ({ ready: true }),
 			verifier: { constructEvent: () => checkoutEvent() },
 			loadProcessingDependencies() {
 				throw new Error('database path for private@example.test failed');
@@ -325,6 +337,49 @@ describe('Stripe webhook service', () => {
 		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
 		expect(route.paidCalls).toEqual([]);
 		expect(route.refundCalls).toEqual([]);
+		expect(route.readinessCalls).toBe(0);
+		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
+			count: 0
+		});
+	});
+
+	it('checks local readiness on every relevant event before cached processing work', async () => {
+		const readiness = vi
+			.fn<() => Promise<{ ready: boolean }>>()
+			.mockResolvedValueOnce({ ready: true })
+			.mockResolvedValueOnce({ ready: false });
+		const route = fixture({ readiness });
+
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
+		expect(route.paidCalls).toEqual(['cs_paid']);
+		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
+			count: 1
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+
+		route.setEvent(checkoutEvent('evt_paid_after_red'));
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).rejects.toEqual(
+			new StripeWebhookError('STRIPE_WEBHOOK_SERVICE_NOT_READY', true)
+		);
+		expect(readiness).toHaveBeenCalledTimes(2);
+		expect(route.paidCalls).toEqual(['cs_paid']);
+		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
+			count: 1
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+	});
+
+	it('redacts a thrown per-event readiness probe behind the stable retryable code', async () => {
+		const route = fixture({
+			readiness: async () => {
+				throw new Error('database path private@example.test became unavailable');
+			}
+		});
+
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).rejects.toEqual(
+			new StripeWebhookError('STRIPE_WEBHOOK_SERVICE_NOT_READY', true)
+		);
+		expect(route.paidCalls).toEqual([]);
 		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
 			count: 0
 		});

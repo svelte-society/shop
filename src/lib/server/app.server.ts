@@ -40,6 +40,13 @@ export type ApplicationRuntimeDependencies = {
 	migrate?: typeof migrate;
 	createScheduler?: (database: ShopDatabase, environment: RuntimeEnvironment) => Scheduler;
 	checkReadiness?: (runtime: ApplicationRuntime) => Promise<{ ready: boolean }>;
+	scheduleSchedulerActivation?: (callback: () => void, delayMs: number) => ApplicationTimerHandle;
+	cancelSchedulerActivation?: (handle: ApplicationTimerHandle) => void;
+	schedulerActivationRetryMs?: number;
+};
+
+export type ApplicationTimerHandle = {
+	unref?: () => void;
 };
 
 export interface ApplicationLifecycle {
@@ -72,7 +79,15 @@ function databaseBootstrapEnabled(environment: RuntimeEnvironment): boolean {
 
 async function checkRuntimeReadiness(runtime: ApplicationRuntime): Promise<{ ready: boolean }> {
 	const readiness = await import('$lib/server/health/readiness.server');
-	return readiness.checkRuntimeReadiness(runtime);
+	return readiness.checkRuntimeReadiness(runtime, { ignoreSchedulerLatch: true });
+}
+
+function scheduleAfter(callback: () => void, delayMs: number): ApplicationTimerHandle {
+	return setTimeout(callback, delayMs);
+}
+
+function cancelScheduled(handle: ApplicationTimerHandle): void {
+	clearTimeout(handle as ReturnType<typeof setTimeout>);
 }
 
 function optionalPositiveInteger(
@@ -150,9 +165,93 @@ export function createApplicationLifecycle(
 	const applyMigrations = dependencies.migrate ?? migrate;
 	const createScheduler = dependencies.createScheduler ?? createRuntimeScheduler;
 	const checkReadiness = dependencies.checkReadiness ?? checkRuntimeReadiness;
+	const scheduleActivation = dependencies.scheduleSchedulerActivation ?? scheduleAfter;
+	const cancelActivation = dependencies.cancelSchedulerActivation ?? cancelScheduled;
+	const activationRetryMs = dependencies.schedulerActivationRetryMs ?? 5_000;
 	let runtime: ApplicationRuntime | null = null;
 	let startup: Promise<ApplicationRuntime | null> | null = null;
 	let stopping: Promise<void> | null = null;
+	let activation: Promise<void> | null = null;
+	let activationTimer: ApplicationTimerHandle | undefined;
+	let acceptingActivation = false;
+
+	const cancelActivationTimer = (): void => {
+		if (!activationTimer) return;
+		cancelActivation(activationTimer);
+		activationTimer = undefined;
+	};
+
+	const scheduleActivationRetry = (
+		current: ApplicationRuntime,
+		environment: RuntimeEnvironment
+	): void => {
+		if (
+			!acceptingActivation ||
+			runtime !== current ||
+			current.scheduler ||
+			activation ||
+			activationTimer
+		) {
+			return;
+		}
+		const handle = scheduleActivation(() => {
+			if (activationTimer !== handle) return;
+			activationTimer = undefined;
+			void activateScheduler(current, environment);
+		}, activationRetryMs);
+		activationTimer = handle;
+		handle.unref?.();
+	};
+
+	const activateScheduler = (
+		current: ApplicationRuntime,
+		environment: RuntimeEnvironment
+	): Promise<void> => {
+		if (!acceptingActivation || runtime !== current || current.scheduler) {
+			return Promise.resolve();
+		}
+		if (activation) return activation;
+		let retry = false;
+		const operation = (async () => {
+			let ready: boolean;
+			try {
+				ready = (await checkReadiness(current)).ready;
+			} catch {
+				ready = false;
+			}
+			if (!acceptingActivation || runtime !== current || current.scheduler) return;
+			if (!ready) {
+				retry = true;
+				return;
+			}
+
+			let candidate: Scheduler | undefined;
+			try {
+				candidate = createScheduler(current.database, environment);
+				candidate.start();
+				if (!acceptingActivation || runtime !== current) {
+					await candidate.stop();
+					return;
+				}
+				current.scheduler = candidate;
+			} catch {
+				if (candidate) {
+					try {
+						await candidate.stop();
+					} catch {
+						// A later activation attempt remains the recovery path.
+					}
+				}
+				retry = acceptingActivation && runtime === current && !current.scheduler;
+			}
+		})();
+		const tracked = operation.finally(() => {
+			if (activation === tracked) activation = null;
+			if (retry) scheduleActivationRetry(current, environment);
+		});
+		activation = tracked;
+		return tracked;
+	};
 
 	const initialize = async (
 		options: ApplicationStartOptions
@@ -161,45 +260,23 @@ export function createApplicationLifecycle(
 		const bootstrap = databaseBootstrapEnabled(options.environment);
 		const enableScheduler = schedulerEnabled(options.environment);
 		const database = open(databasePath, { fileMustExist: !bootstrap });
-		let scheduler: Scheduler | null = null;
 		try {
 			applyMigrations(database, migrationsDirectory);
 			runtime = {
 				database,
-				scheduler,
+				scheduler: null,
 				databasePath,
 				migrationsDirectory,
 				environment: { ...options.environment }
 			};
-			if (enableScheduler && !bootstrap) {
-				let ready = false;
-				try {
-					ready = (await checkReadiness(runtime)).ready;
-				} catch {
-					ready = false;
-				}
-				if (ready) {
-					scheduler = createScheduler(database, options.environment);
-					runtime.scheduler = scheduler;
-					scheduler.start();
-				}
-			}
+			acceptingActivation = enableScheduler && !bootstrap;
+			if (acceptingActivation) await activateScheduler(runtime, options.environment);
 			return runtime;
 		} catch (error) {
-			let cleanupError: unknown;
-			try {
-				await scheduler?.stop();
-			} catch (stopError) {
-				cleanupError = stopError;
-			} finally {
-				runtime = null;
-				close();
-			}
-			if (cleanupError !== undefined) {
-				throw new AggregateError([error, cleanupError], 'APPLICATION_STARTUP_CLEANUP_FAILED', {
-					cause: error
-				});
-			}
+			acceptingActivation = false;
+			cancelActivationTimer();
+			runtime = null;
+			close();
 			throw error;
 		}
 	};
@@ -224,6 +301,8 @@ export function createApplicationLifecycle(
 
 		stop(): Promise<void> {
 			if (stopping) return stopping;
+			acceptingActivation = false;
+			cancelActivationTimer();
 
 			const operation = (async () => {
 				if (startup) {
@@ -233,6 +312,7 @@ export function createApplicationLifecycle(
 						return;
 					}
 				}
+				if (activation) await activation;
 				if (!runtime) return;
 				const current = runtime;
 				try {
