@@ -51,8 +51,11 @@
 		"vitest-browser-svelte": "^2.1.1"
 	},
 	"dependencies": {
+		"@tmcp/adapter-valibot": "0.1.6",
+		"@tmcp/transport-http": "0.8.6",
 		"better-sqlite3": "12.11.1",
 		"stripe": "22.3.1",
+		"tmcp": "1.19.4",
 		"valibot": "1.4.2"
 	}
 }
