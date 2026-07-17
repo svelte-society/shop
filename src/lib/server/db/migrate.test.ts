@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,26 @@ afterEach(() => {
 });
 
 describe('openDatabase', () => {
+	it('does not create a missing production database when fileMustExist is true', () => {
+		const databasePath = join(temporaryDirectory(), 'missing.sqlite');
+
+		expect(() => openDatabase(databasePath, { fileMustExist: true })).toThrow();
+		expect(existsSync(databasePath)).toBe(false);
+	});
+
+	it('opens an existing production database when fileMustExist is true', () => {
+		const databasePath = join(temporaryDirectory(), 'existing.sqlite');
+		const created = openDatabase(databasePath);
+		created.exec('CREATE TABLE persisted (id INTEGER PRIMARY KEY)');
+		closeDatabase();
+
+		const reopened = openDatabase(databasePath, { fileMustExist: true });
+
+		expect(
+			reopened.prepare("SELECT name FROM sqlite_schema WHERE name = 'persisted'").get()
+		).toEqual({ name: 'persisted' });
+	});
+
 	it('enables WAL and durable connection pragmas for file databases', () => {
 		const databasePath = join(temporaryDirectory(), 'shop.sqlite');
 		const database = openDatabase(databasePath);

@@ -1,17 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
+import Stripe from 'stripe';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { closeDatabase } from '$lib/server/db/connection.server';
 import type { StripeWebhookService } from '$lib/server/stripe/webhook.server';
 import { StripeWebhookError } from '$lib/server/stripe/webhook.server';
 import { _createStripeWebhookPost, POST } from './+server';
 
 const RAW_BODY = '{\n  "id": "evt_exact",\n  "customer_email": "private@example.test"\n}\n';
 
-function request(signature: string | null = 't=123,v1=valid'): Request {
+function request(signature: string | null = 't=123,v1=valid', rawBody = RAW_BODY): Request {
 	const headers = new Headers({ 'content-type': 'application/json' });
 	if (signature !== null) headers.set('stripe-signature', signature);
 	return new Request('https://shop.sveltesociety.dev/webhooks/stripe', {
 		method: 'POST',
 		headers,
-		body: RAW_BODY
+		body: rawBody
 	});
 }
 
@@ -51,6 +56,57 @@ describe('POST /webhooks/stripe', () => {
 		await expect(response.json()).resolves.toMatchObject({
 			code: 'STRIPE_WEBHOOK_SIGNATURE_MISSING'
 		});
+	});
+
+	it('does not silently create a missing database after a valid production signature', async () => {
+		closeDatabase();
+		const directory = await mkdtemp(join(tmpdir(), 'svelte-shop-webhook-missing-'));
+		const databasePath = join(directory, 'missing.sqlite');
+		const webhookSecret = 'whsec_missing_database';
+		const body = JSON.stringify({
+			id: 'evt_missing_database',
+			type: 'checkout.session.completed',
+			data: { object: { object: 'checkout.session', id: 'cs_missing_database' } }
+		});
+		const signature = Stripe.webhooks.generateTestHeaderString({
+			payload: body,
+			secret: webhookSecret
+		});
+		const configured = {
+			STOREFRONT_ENABLED: 'false',
+			CHECKOUT_ENABLED: 'false',
+			PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+			SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+			STRIPE_SECRET_KEY: 'sk_test_missing_database',
+			STRIPE_WEBHOOK_SECRET: webhookSecret,
+			STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
+			STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
+			DATABASE_PATH: databasePath
+		};
+
+		try {
+			const routeModule = await import('./+server');
+			const createDefault = (
+				routeModule as unknown as {
+					_createDefaultStripeWebhookServiceFactory?: (
+						environment: Record<string, string | undefined>
+					) => StripeWebhookService;
+				}
+			)._createDefaultStripeWebhookServiceFactory;
+			expect(createDefault).toBeTypeOf('function');
+			if (!createDefault) return;
+			const handler = _createStripeWebhookPost(() => createDefault(configured));
+			const response = await invoke(handler, request(signature, body));
+
+			expect(response.status).toBe(500);
+			await expect(response.json()).resolves.toMatchObject({
+				code: 'STRIPE_WEBHOOK_PROCESSING_INIT_FAILED'
+			});
+			await expect(access(databasePath)).rejects.toThrow();
+		} finally {
+			closeDatabase();
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it('rejects a missing signature before reading the body or constructing the service', async () => {

@@ -6,6 +6,10 @@ import type { ShopDatabase } from './types';
 let activeDatabase: ShopDatabase | undefined;
 let activeDatabasePath: string | undefined;
 
+export type OpenDatabaseOptions = {
+	fileMustExist?: boolean;
+};
+
 function normalizeDatabasePath(path: string): string {
 	if (path === ':memory:') return path;
 
@@ -17,14 +21,16 @@ function normalizeDatabasePath(path: string): string {
 	}
 }
 
-export function openDatabase(path: string): ShopDatabase {
+export function openDatabase(path: string, options: OpenDatabaseOptions = {}): ShopDatabase {
 	const requestedPath = normalizeDatabasePath(path);
 	if (activeDatabase?.open) {
 		if (activeDatabasePath !== requestedPath) throw new Error('DATABASE_PATH_MISMATCH');
 		return activeDatabase;
 	}
 
-	const database = new Database(path);
+	const database = new Database(path, {
+		fileMustExist: path === ':memory:' ? false : (options.fileMustExist ?? false)
+	});
 	try {
 		database.pragma('journal_mode = WAL');
 		database.pragma('foreign_keys = ON');

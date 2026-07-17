@@ -39,6 +39,7 @@ export type ApplicationRuntimeDependencies = {
 	closeDatabase?: typeof closeDatabase;
 	migrate?: typeof migrate;
 	createScheduler?: (database: ShopDatabase, environment: RuntimeEnvironment) => Scheduler;
+	checkReadiness?: (runtime: ApplicationRuntime) => Promise<{ ready: boolean }>;
 };
 
 export interface ApplicationLifecycle {
@@ -60,6 +61,18 @@ function schedulerEnabled(environment: RuntimeEnvironment): boolean {
 	if (value === undefined || value === 'false') return false;
 	if (value === 'true') return true;
 	throw new Error('APPLICATION_CONFIG_INVALID');
+}
+
+function databaseBootstrapEnabled(environment: RuntimeEnvironment): boolean {
+	const value = environment.DATABASE_BOOTSTRAP;
+	if (value === undefined || value === 'false') return false;
+	if (value === 'true') return true;
+	throw new Error('APPLICATION_CONFIG_INVALID');
+}
+
+async function checkRuntimeReadiness(runtime: ApplicationRuntime): Promise<{ ready: boolean }> {
+	const readiness = await import('$lib/server/health/readiness.server');
+	return readiness.checkRuntimeReadiness(runtime);
 }
 
 function optionalPositiveInteger(
@@ -136,6 +149,7 @@ export function createApplicationLifecycle(
 	const close = dependencies.closeDatabase ?? closeDatabase;
 	const applyMigrations = dependencies.migrate ?? migrate;
 	const createScheduler = dependencies.createScheduler ?? createRuntimeScheduler;
+	const checkReadiness = dependencies.checkReadiness ?? checkRuntimeReadiness;
 	let runtime: ApplicationRuntime | null = null;
 	let startup: Promise<ApplicationRuntime | null> | null = null;
 	let stopping: Promise<void> | null = null;
@@ -144,14 +158,12 @@ export function createApplicationLifecycle(
 		options: ApplicationStartOptions
 	): Promise<ApplicationRuntime | null> => {
 		const databasePath = requiredEnvironmentValue(options.environment, 'DATABASE_PATH');
-		const database = open(databasePath);
+		const bootstrap = databaseBootstrapEnabled(options.environment);
+		const enableScheduler = schedulerEnabled(options.environment);
+		const database = open(databasePath, { fileMustExist: !bootstrap });
 		let scheduler: Scheduler | null = null;
 		try {
 			applyMigrations(database, migrationsDirectory);
-			scheduler = schedulerEnabled(options.environment)
-				? createScheduler(database, options.environment)
-				: null;
-			scheduler?.start();
 			runtime = {
 				database,
 				scheduler,
@@ -159,6 +171,19 @@ export function createApplicationLifecycle(
 				migrationsDirectory,
 				environment: { ...options.environment }
 			};
+			if (enableScheduler && !bootstrap) {
+				let ready = false;
+				try {
+					ready = (await checkReadiness(runtime)).ready;
+				} catch {
+					ready = false;
+				}
+				if (ready) {
+					scheduler = createScheduler(database, options.environment);
+					runtime.scheduler = scheduler;
+					scheduler.start();
+				}
+			}
 			return runtime;
 		} catch (error) {
 			let cleanupError: unknown;

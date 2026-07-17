@@ -1,8 +1,8 @@
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 import Stripe from 'stripe';
+import { applicationLifecycle } from '$lib/server/app.server';
 import { parsePrivateConfig } from '$lib/config/private.server';
-import { openDatabase } from '$lib/server/db/connection.server';
 import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import { SqlitePaidOrderUnitOfWork } from '$lib/server/db/orders.server';
 import { SqliteStripeEventRepository } from '$lib/server/db/stripe-events.server';
@@ -52,15 +52,17 @@ function requiredRuntimeValue(runtimeEnv: RuntimeEnvironment, name: string): str
 	return value;
 }
 
-function defaultStripeWebhookServiceFactory(runtimeEnv: RuntimeEnvironment): StripeWebhookService {
+export function _createDefaultStripeWebhookServiceFactory(
+	runtimeEnv: RuntimeEnvironment
+): StripeWebhookService {
 	const webhookSecret = requiredRuntimeValue(runtimeEnv, 'STRIPE_WEBHOOK_SECRET');
 	return createStripeWebhookService({
 		webhookSecret,
 		verifier: createStripeWebhookVerifier({ webhooks: Stripe.webhooks }),
 		loadProcessingDependencies() {
 			const config = parsePrivateConfig(runtimeEnv);
-			const databasePath = requiredRuntimeValue(runtimeEnv, 'DATABASE_PATH');
-			const database = openDatabase(databasePath);
+			const database = applicationLifecycle.current()?.database;
+			if (!database?.open) throw new Error('APPLICATION_NOT_READY');
 			const stripeClient = createStripeClient(config.stripeSecretKey);
 			return {
 				stripeEvents: new SqliteStripeEventRepository(database),
@@ -103,5 +105,5 @@ export function _createStripeWebhookPost(
 }
 
 export const POST: RequestHandler = _createStripeWebhookPost(() =>
-	defaultStripeWebhookServiceFactory(env)
+	_createDefaultStripeWebhookServiceFactory(env)
 );

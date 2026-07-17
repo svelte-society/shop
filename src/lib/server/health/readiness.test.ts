@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
-import { mkdtemp, readdir, rm, stat, statfs, unlink } from 'node:fs/promises';
+import { chmod, mkdtemp, open, readdir, rm, stat, statfs, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createReadinessChecker, type ReadinessDependencies } from './readiness.server';
@@ -13,6 +14,7 @@ const MINIMUM_FREE_BYTES = 256 * 1024 * 1024;
 let directory: string;
 let databasePath: string;
 let database: ShopDatabase;
+let detachedDatabase: ShopDatabase | undefined;
 let environment: Record<string, string | undefined>;
 
 beforeEach(async () => {
@@ -25,6 +27,7 @@ beforeEach(async () => {
 		CHECKOUT_ENABLED: 'false',
 		MCP_ENABLED: 'false',
 		SCHEDULER_ENABLED: 'false',
+		DATABASE_BOOTSTRAP: 'false',
 		PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 		SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 		STRIPE_WEBHOOK_SECRET: 'whsec_readiness',
@@ -34,7 +37,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	if (detachedDatabase?.open) detachedDatabase.close();
+	detachedDatabase = undefined;
 	closeDatabase();
+	await chmod(databasePath, 0o600).catch(() => undefined);
 	await rm(directory, { recursive: true, force: true });
 });
 
@@ -53,12 +59,35 @@ const allOkay = {
 	disk: 'ok'
 } as const;
 
+function enableFulfillment(options: { mcp?: boolean; scheduler?: boolean } = {}): void {
+	environment = {
+		...environment,
+		MCP_ENABLED: options.mcp ? 'true' : 'false',
+		SCHEDULER_ENABLED: options.scheduler ? 'true' : 'false',
+		STRIPE_SECRET_KEY: 'sk_test_readiness',
+		MCP_BEARER_TOKEN: 'a'.repeat(64),
+		STYRIA_APP_ID: 'readiness-app',
+		STYRIA_SECRET_KEY: 'readiness-secret',
+		STYRIA_BRAND_NAME: 'Svelte Society',
+		PLUNK_SECRET_KEY: 'plunk-readiness',
+		PLUNK_FROM_NAME: 'Svelte Society Shop',
+		PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+		ADMIN_EMAIL: 'shop-ops@sveltesociety.dev'
+	};
+}
+
 describe('local readiness', () => {
 	it('reports a healthy migrated writable database with sufficient disk', async () => {
 		await expect(checker()()).resolves.toEqual({ ready: true, checks: allOkay });
 
 		const entries = await readdir(directory);
 		expect(entries.filter((name) => name.includes('readiness'))).toEqual([]);
+		expect(
+			database
+				.prepare("SELECT name FROM sqlite_schema WHERE name LIKE '_readiness_write_probe_%'")
+				.all()
+		).toEqual([]);
+		expect(database.inTransaction).toBe(false);
 	});
 
 	it('fails the database check when the configured SQLite file is missing', async () => {
@@ -81,6 +110,17 @@ describe('local readiness', () => {
 		expect(result.checks.database).toBe('ok');
 	});
 
+	it('fails migration readiness when the ledger contains an unknown migration', async () => {
+		database
+			.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)')
+			.run('9999_unknown.sql', '2026-07-17T00:00:00.000Z');
+
+		const result = await checker()();
+
+		expect(result.ready).toBe(false);
+		expect(result.checks.migrations).toBe('failed');
+	});
+
 	it('fails database readiness when PRAGMA quick_check reports corruption', async () => {
 		const quickCheck = vi.fn(() => false);
 
@@ -89,6 +129,65 @@ describe('local readiness', () => {
 		expect(quickCheck).toHaveBeenCalledWith(database);
 		expect(result.ready).toBe(false);
 		expect(result.checks.database).toBe('failed');
+	});
+
+	it('fails database readiness for a genuinely corrupt SQLite page', async () => {
+		closeDatabase();
+		const file = await open(databasePath, 'r+');
+		try {
+			await file.write(Buffer.from([0]), 0, 1, 4096);
+		} finally {
+			await file.close();
+		}
+		detachedDatabase = new Database(databasePath, { fileMustExist: true });
+		database = detachedDatabase;
+
+		const result = await checker()();
+
+		expect(result.ready).toBe(false);
+		expect(result.checks.database).toBe('failed');
+	});
+
+	it('fails database readiness for a real chmod read-only WAL database', async () => {
+		closeDatabase();
+		await chmod(databasePath, 0o444);
+		detachedDatabase = new Database(databasePath, { fileMustExist: true, readonly: true });
+		database = detachedDatabase;
+
+		const result = await checker()();
+
+		expect(result.ready).toBe(false);
+		expect(result.checks.database).toBe('failed');
+		expect(result.checks.volume).toBe('ok');
+		expect(database.inTransaction).toBe(false);
+	});
+
+	it('rolls back a failed write probe without poisoning the connection', async () => {
+		database.pragma('query_only = ON');
+
+		const failed = await checker()();
+
+		expect(failed.checks.database).toBe('failed');
+		expect(database.inTransaction).toBe(false);
+		database.pragma('query_only = OFF');
+		await expect(checker()()).resolves.toEqual({ ready: true, checks: allOkay });
+	});
+
+	it('fails a busy write probe and recovers after the competing writer releases', async () => {
+		database.pragma('busy_timeout = 1');
+		const contender = new Database(databasePath, { fileMustExist: true });
+		contender.exec('BEGIN IMMEDIATE');
+
+		try {
+			const blocked = await checker()();
+			expect(blocked.checks.database).toBe('failed');
+			expect(database.inTransaction).toBe(false);
+		} finally {
+			contender.exec('ROLLBACK');
+			contender.close();
+		}
+
+		await expect(checker()()).resolves.toEqual({ ready: true, checks: allOkay });
 	});
 
 	it('fails volume readiness when the data directory cannot create its sentinel', async () => {
@@ -138,6 +237,40 @@ describe('local readiness', () => {
 		expect(serialized).not.toContain(databasePath);
 	});
 
+	it('keeps bootstrap mode explicitly not ready until a false-mode restart', async () => {
+		environment.DATABASE_BOOTSTRAP = 'true';
+
+		const result = await checker()();
+
+		expect(result.ready).toBe(false);
+		expect(result.checks.configuration).toBe('failed');
+	});
+
+	it.each(['a'.repeat(63), 'A'.repeat(64), 'g'.repeat(64)])(
+		'rejects an enabled MCP bearer that is not 64 lowercase hex characters',
+		async (token) => {
+			enableFulfillment({ mcp: true });
+			environment.MCP_BEARER_TOKEN = token;
+
+			const result = await checker()();
+
+			expect(result.checks.configuration).toBe('failed');
+		}
+	);
+
+	it.each([
+		['SUPPORT_EMAIL', 'not-an-email'],
+		['PLUNK_FROM_EMAIL', 'sender-at-example.test'],
+		['ADMIN_EMAIL', 'ops-at-example.test']
+	])('rejects invalid bounded operational email %s', async (name, value) => {
+		enableFulfillment({ scheduler: true });
+		environment[name] = value;
+
+		const result = await checker()();
+
+		expect(result.checks.configuration).toBe('failed');
+	});
+
 	it('reports low disk below the strict 256 MiB threshold', async () => {
 		const statFileSystem = vi.fn(async () => ({
 			bavail: MINIMUM_FREE_BYTES - 1,
@@ -150,6 +283,18 @@ describe('local readiness', () => {
 
 		expect(result.ready).toBe(false);
 		expect(result.checks.disk).toBe('low');
+	});
+
+	it('reports disk okay at exactly the 256 MiB threshold', async () => {
+		const statFileSystem = vi.fn(async () => ({
+			bavail: MINIMUM_FREE_BYTES,
+			bsize: 1
+		}));
+
+		const result = await checker({ statFileSystem })();
+
+		expect(result.ready).toBe(true);
+		expect(result.checks.disk).toBe('ok');
 	});
 
 	it('reports failed disk without exposing a statfs error', async () => {
@@ -167,23 +312,13 @@ describe('local readiness', () => {
 	});
 
 	it('does not call Stripe, Styria, or Plunk during transient provider outages', async () => {
+		enableFulfillment({ mcp: true, scheduler: true });
 		environment = {
 			...environment,
 			STOREFRONT_ENABLED: 'true',
 			CHECKOUT_ENABLED: 'true',
-			MCP_ENABLED: 'true',
-			SCHEDULER_ENABLED: 'true',
-			STRIPE_SECRET_KEY: 'sk_test_readiness',
 			STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
-			STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
-			MCP_BEARER_TOKEN: 'readiness-token',
-			STYRIA_APP_ID: 'readiness-app',
-			STYRIA_SECRET_KEY: 'readiness-secret',
-			STYRIA_BRAND_NAME: 'Svelte Society',
-			PLUNK_SECRET_KEY: 'plunk-readiness',
-			PLUNK_FROM_NAME: 'Svelte Society Shop',
-			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-			ADMIN_EMAIL: 'shop-ops@sveltesociety.dev'
+			STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
 		};
 		const providerFetch = vi
 			.spyOn(globalThis, 'fetch')

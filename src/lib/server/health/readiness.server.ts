@@ -2,6 +2,7 @@ import { env } from '$env/dynamic/private';
 import { parsePublicConfig } from '$lib/config/public';
 import { applicationLifecycle, type ApplicationRuntime } from '$lib/server/app.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import * as v from 'valibot';
 import {
 	open as openFile,
 	readdir as readDirectory,
@@ -13,6 +14,8 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const MINIMUM_FREE_BYTES = 256n * 1024n * 1024n;
+const MCP_BEARER_PATTERN = /^[a-f0-9]{64}$/;
+const boundedEmailSchema = v.pipe(v.string(), v.maxLength(254), v.email());
 
 export type ReadinessResult = {
 	ready: boolean;
@@ -46,6 +49,7 @@ export type ReadinessDependencies = {
 	getRuntime: () => ReadinessContext | null;
 	validateConfiguration?: (environment: Record<string, string | undefined>) => boolean;
 	quickCheck?: (database: ShopDatabase) => boolean;
+	writeProbe?: (database: ShopDatabase, id: string) => boolean;
 	openFile?: (path: string, flags: 'wx', mode: number) => Promise<ReadinessFileHandle>;
 	readDirectory?: (path: string) => Promise<ReadinessDirectoryEntry[]>;
 	statPath?: (path: string) => Promise<{ isFile(): boolean }>;
@@ -63,6 +67,19 @@ function exactValue(environment: Record<string, string | undefined>, name: strin
 
 function exactBoolean(environment: Record<string, string | undefined>, name: string): boolean {
 	return environment[name] === 'true' || environment[name] === 'false';
+}
+
+function boundedExactValue(
+	environment: Record<string, string | undefined>,
+	name: string,
+	maximum: number
+): boolean {
+	return exactValue(environment, name) && (environment[name]?.length ?? maximum + 1) <= maximum;
+}
+
+function validEmailValue(environment: Record<string, string | undefined>, name: string): boolean {
+	const value = environment[name];
+	return exactValue(environment, name) && v.safeParse(boundedEmailSchema, value).success;
 }
 
 function optionalHttpsUrl(environment: Record<string, string | undefined>, name: string): boolean {
@@ -89,9 +106,11 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 		if (
 			!exactBoolean(environment, 'MCP_ENABLED') ||
 			!exactBoolean(environment, 'SCHEDULER_ENABLED') ||
+			environment.DATABASE_BOOTSTRAP !== 'false' ||
 			!exactValue(environment, 'DATABASE_PATH') ||
 			!isAbsolute(environment.DATABASE_PATH as string) ||
-			!exactValue(environment, 'STRIPE_WEBHOOK_SECRET')
+			!exactValue(environment, 'STRIPE_WEBHOOK_SECRET') ||
+			!validEmailValue(environment, 'SUPPORT_EMAIL')
 		) {
 			return false;
 		}
@@ -115,8 +134,8 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 				!exactValue(environment, 'STYRIA_APP_ID') ||
 				!exactValue(environment, 'STYRIA_SECRET_KEY') ||
 				!exactValue(environment, 'PLUNK_SECRET_KEY') ||
-				!exactValue(environment, 'PLUNK_FROM_NAME') ||
-				!exactValue(environment, 'PLUNK_FROM_EMAIL') ||
+				!boundedExactValue(environment, 'PLUNK_FROM_NAME', 200) ||
+				!validEmailValue(environment, 'PLUNK_FROM_EMAIL') ||
 				!optionalHttpsUrl(environment, 'STYRIA_BASE_URL') ||
 				!optionalHttpsUrl(environment, 'PLUNK_BASE_URL') ||
 				!validStyriaTimeout(environment))
@@ -126,12 +145,12 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 
 		if (
 			environment.MCP_ENABLED === 'true' &&
-			(!exactValue(environment, 'MCP_BEARER_TOKEN') ||
+			(!MCP_BEARER_PATTERN.test(environment.MCP_BEARER_TOKEN ?? '') ||
 				!exactValue(environment, 'STYRIA_BRAND_NAME'))
 		) {
 			return false;
 		}
-		if (environment.SCHEDULER_ENABLED === 'true' && !exactValue(environment, 'ADMIN_EMAIL')) {
+		if (environment.SCHEDULER_ENABLED === 'true' && !validEmailValue(environment, 'ADMIN_EMAIL')) {
 			return false;
 		}
 
@@ -144,6 +163,34 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 function defaultQuickCheck(database: ShopDatabase): boolean {
 	const rows = database.pragma('quick_check') as Array<Record<string, unknown>>;
 	return rows.length === 1 && rows[0]?.quick_check === 'ok';
+}
+
+function defaultWriteProbe(database: ShopDatabase, id: string): boolean {
+	const suffix = id.replace(/[^A-Za-z0-9]/g, '').slice(0, 64);
+	if (suffix.length === 0) return false;
+	const table = `_readiness_write_probe_${suffix}`;
+	let transactionStarted = false;
+
+	try {
+		database.exec('BEGIN IMMEDIATE');
+		transactionStarted = true;
+		database.exec(
+			`CREATE TABLE "${table}" (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+			 INSERT INTO "${table}" (value) VALUES ('probe')`
+		);
+		database.exec('ROLLBACK');
+		transactionStarted = false;
+		return true;
+	} catch {
+		if (transactionStarted) {
+			try {
+				database.exec('ROLLBACK');
+			} catch {
+				// The stable failed database check takes precedence over cleanup detail.
+			}
+		}
+		return false;
+	}
 }
 
 function defaultRuntime(): ReadinessContext {
@@ -174,6 +221,7 @@ export function createReadinessChecker(
 	const validateConfiguration =
 		dependencies.validateConfiguration ?? productionConfigurationIsValid;
 	const runQuickCheck = dependencies.quickCheck ?? defaultQuickCheck;
+	const runWriteProbe = dependencies.writeProbe ?? defaultWriteProbe;
 	const open =
 		dependencies.openFile ??
 		((path: string, flags: 'wx', mode: number) => openFile(path, flags, mode));
@@ -206,7 +254,13 @@ export function createReadinessChecker(
 		if (context.database?.open && directory !== null) {
 			try {
 				const databaseFile = await inspectPath(context.databasePath);
-				if (databaseFile.isFile() && runQuickCheck(context.database)) databaseCheck = 'ok';
+				if (
+					databaseFile.isFile() &&
+					runQuickCheck(context.database) &&
+					runWriteProbe(context.database, randomId())
+				) {
+					databaseCheck = 'ok';
+				}
 			} catch {
 				databaseCheck = 'failed';
 			}
@@ -291,6 +345,17 @@ export function createReadinessChecker(
 }
 
 const defaultChecker = createReadinessChecker({ getRuntime: defaultRuntime });
+
+export function checkRuntimeReadiness(runtime: ApplicationRuntime): Promise<ReadinessResult> {
+	return createReadinessChecker({
+		getRuntime: () => ({
+			database: runtime.database,
+			databasePath: runtime.databasePath,
+			environment: runtime.environment,
+			migrationsDirectory: runtime.migrationsDirectory
+		})
+	})();
+}
 
 export function checkReadiness(): Promise<ReadinessResult> {
 	return defaultChecker();

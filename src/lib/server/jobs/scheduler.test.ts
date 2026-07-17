@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createApplicationLifecycle,
@@ -24,6 +26,7 @@ const migrationsDirectory = resolve('migrations');
 const initialNow = new Date('2026-07-16T08:30:00.000Z');
 const schedulerRuntimeEnvironment = {
 	DATABASE_PATH: ':memory:',
+	DATABASE_BOOTSTRAP: 'false',
 	SCHEDULER_ENABLED: 'true',
 	PLUNK_SECRET_KEY: 'sk_test_scheduler',
 	ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
@@ -35,6 +38,13 @@ const schedulerRuntimeEnvironment = {
 	STYRIA_SECRET_KEY: 'scheduler-secret',
 	STYRIA_BASE_URL: 'https://styria.scheduler.test'
 };
+const runtimeTemporaryDirectories: string[] = [];
+
+function runtimeTemporaryDirectory(): string {
+	const directory = mkdtempSync(join(tmpdir(), 'svelte-shop-runtime-'));
+	runtimeTemporaryDirectories.push(directory);
+	return directory;
+}
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -112,6 +122,11 @@ describe('application runtime', () => {
 		};
 		const dependencies: ApplicationRuntimeDependencies = {
 			migrationsDirectory,
+			async checkReadiness(runtime) {
+				sequence.push('readiness-checked');
+				expect(runtime.scheduler).toBeNull();
+				return { ready: true };
+			},
 			migrate(databaseToMigrate, directory) {
 				sequence.push('migration-started');
 				migrate(databaseToMigrate, directory);
@@ -142,6 +157,7 @@ describe('application runtime', () => {
 		expect(sequence).toEqual([
 			'migration-started',
 			'migration-finished',
+			'readiness-checked',
 			'scheduler-created',
 			'scheduler-started'
 		]);
@@ -149,6 +165,141 @@ describe('application runtime', () => {
 		await application.stop();
 		expect(scheduler.stop).toHaveBeenCalledOnce();
 		expect(first?.database.open).toBe(false);
+	});
+
+	it('publishes a scheduler-free runtime and never constructs providers when local readiness is red', async () => {
+		closeDatabase();
+		const createScheduler = vi.fn();
+		const checkReadiness = vi.fn(async (runtime) => {
+			expect(application.current()).toBe(runtime);
+			expect(runtime.scheduler).toBeNull();
+			return { ready: false };
+		});
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness,
+			createScheduler
+		});
+
+		const runtime = await application.start({
+			environment: schedulerRuntimeEnvironment,
+			building: false,
+			test: false
+		});
+
+		expect(checkReadiness).toHaveBeenCalledOnce();
+		expect(createScheduler).not.toHaveBeenCalled();
+		expect(runtime?.scheduler).toBeNull();
+		expect(application.current()).toBe(runtime);
+		await application.start({
+			environment: schedulerRuntimeEnvironment,
+			building: false,
+			test: false
+		});
+		expect(checkReadiness).toHaveBeenCalledOnce();
+		await application.stop();
+	});
+
+	it('never starts the scheduler while one-time database bootstrap mode is active', async () => {
+		closeDatabase();
+		const createScheduler = vi.fn();
+		const checkReadiness = vi.fn(async () => ({ ready: true }));
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness,
+			createScheduler
+		});
+
+		const runtime = await application.start({
+			environment: { ...schedulerRuntimeEnvironment, DATABASE_BOOTSTRAP: 'true' },
+			building: false,
+			test: false
+		});
+
+		expect(runtime?.scheduler).toBeNull();
+		expect(checkReadiness).not.toHaveBeenCalled();
+		expect(createScheduler).not.toHaveBeenCalled();
+		await application.stop();
+	});
+
+	it.each([undefined, 'false'])(
+		'does not create a missing database with bootstrap %j',
+		async (mode) => {
+			closeDatabase();
+			const databasePath = join(runtimeTemporaryDirectory(), 'missing.sqlite');
+			const application = createApplicationLifecycle({ migrationsDirectory });
+
+			await expect(
+				application.start({
+					environment: {
+						DATABASE_PATH: databasePath,
+						DATABASE_BOOTSTRAP: mode,
+						SCHEDULER_ENABLED: 'false'
+					},
+					building: false,
+					test: false
+				})
+			).rejects.toThrow();
+			expect(existsSync(databasePath)).toBe(false);
+		}
+	);
+
+	it('rejects an invalid bootstrap literal without creating the database', async () => {
+		closeDatabase();
+		const databasePath = join(runtimeTemporaryDirectory(), 'invalid.sqlite');
+		const application = createApplicationLifecycle({ migrationsDirectory });
+
+		await expect(
+			application.start({
+				environment: {
+					DATABASE_PATH: databasePath,
+					DATABASE_BOOTSTRAP: 'yes',
+					SCHEDULER_ENABLED: 'false'
+				},
+				building: false,
+				test: false
+			})
+		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
+		expect(existsSync(databasePath)).toBe(false);
+	});
+
+	it('creates and migrates once in bootstrap mode, then opens only after a false-mode restart', async () => {
+		closeDatabase();
+		const databasePath = join(runtimeTemporaryDirectory(), 'shop.sqlite');
+		const bootstrap = createApplicationLifecycle({ migrationsDirectory });
+		const bootstrapRuntime = await bootstrap.start({
+			environment: {
+				DATABASE_PATH: databasePath,
+				DATABASE_BOOTSTRAP: 'true',
+				SCHEDULER_ENABLED: 'false'
+			},
+			building: false,
+			test: false
+		});
+
+		expect(existsSync(databasePath)).toBe(true);
+		expect(bootstrapRuntime?.scheduler).toBeNull();
+		expect(
+			bootstrapRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
+		).toHaveLength(3);
+		await bootstrap.stop();
+
+		const production = createApplicationLifecycle({ migrationsDirectory });
+		const productionRuntime = await production.start({
+			environment: {
+				DATABASE_PATH: databasePath,
+				DATABASE_BOOTSTRAP: 'false',
+				SCHEDULER_ENABLED: 'false'
+			},
+			building: false,
+			test: false
+		});
+
+		expect(productionRuntime?.database.open).toBe(true);
+		expect(
+			productionRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
+		).toHaveLength(3);
+		await production.stop();
 	});
 
 	it('opens and migrates SQLite without constructing a scheduler when disabled', async () => {
@@ -215,7 +366,7 @@ describe('application runtime', () => {
 			})
 		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
 		expect(createScheduler).not.toHaveBeenCalled();
-		expect(openedDatabase?.open).toBe(false);
+		expect(openedDatabase).toBeUndefined();
 	});
 
 	it.each([
@@ -227,7 +378,7 @@ describe('application runtime', () => {
 		'STRIPE_SECRET_KEY',
 		'STYRIA_APP_ID',
 		'STYRIA_SECRET_KEY'
-	])('rejects enabled production scheduler wiring without %s', async (missingName) => {
+	])('keeps scheduler off when readiness rejects missing %s', async (missingName) => {
 		closeDatabase();
 		let openedDatabase: ShopDatabase | undefined;
 		const application = createApplicationLifecycle({
@@ -238,14 +389,14 @@ describe('application runtime', () => {
 			}
 		});
 
-		await expect(
-			application.start({
-				environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
-				building: false,
-				test: false
-			})
-		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
-		expect(openedDatabase?.open).toBe(false);
+		const runtime = await application.start({
+			environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
+			building: false,
+			test: false
+		});
+		expect(runtime?.scheduler).toBeNull();
+		expect(openedDatabase?.open).toBe(true);
+		await application.stop();
 	});
 
 	it('rejects a Styria timeout that would violate the bounded 55-minute sync lease', async () => {
@@ -259,19 +410,22 @@ describe('application runtime', () => {
 			}
 		});
 
-		await expect(
-			application.start({
-				environment: { ...schedulerRuntimeEnvironment, STYRIA_TIMEOUT_MS: '10001' },
-				building: false,
-				test: false
-			})
-		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
-		expect(openedDatabase?.open).toBe(false);
+		const runtime = await application.start({
+			environment: { ...schedulerRuntimeEnvironment, STYRIA_TIMEOUT_MS: '10001' },
+			building: false,
+			test: false
+		});
+		expect(runtime?.scheduler).toBeNull();
+		expect(openedDatabase?.open).toBe(true);
+		await application.stop();
 	});
 
 	it('wires the enabled production scheduler to migrated SQLite and records its immediate run', async () => {
 		closeDatabase();
-		const application = createApplicationLifecycle({ migrationsDirectory });
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness: async () => ({ ready: true })
+		});
 
 		const runtime = await application.start({
 			environment: schedulerRuntimeEnvironment,
@@ -347,7 +501,11 @@ describe('application runtime', () => {
 			runStyriaSyncOnce: vi.fn(async () => undefined)
 		};
 		const createScheduler = vi.fn(() => scheduler);
-		const application = createApplicationLifecycle({ migrationsDirectory, createScheduler });
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			createScheduler,
+			checkReadiness: async () => ({ ready: true })
+		});
 		const options = {
 			environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
 			building: false,
@@ -394,7 +552,8 @@ describe('application runtime', () => {
 				sequence.push('database-close');
 				closeDatabase();
 			},
-			createScheduler: () => scheduler
+			createScheduler: () => scheduler,
+			checkReadiness: async () => ({ ready: true })
 		});
 
 		let startupSettled = false;
@@ -424,6 +583,9 @@ describe('application runtime', () => {
 
 afterEach(() => {
 	closeDatabase();
+	for (const directory of runtimeTemporaryDirectories.splice(0)) {
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 describe('OutboxScheduler', () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CheckoutService } from '$lib/server/checkout/service.server';
 import { CheckoutError } from '$lib/server/checkout/service.server';
+import { closeDatabase } from '$lib/server/db/connection.server';
 import { _createCheckoutPost } from './+server';
 
 const BASE_ENV = {
@@ -80,7 +84,7 @@ async function invoke(handler: ReturnType<typeof _createCheckoutPost>, checkoutR
 }
 
 describe('POST /checkout', () => {
-	it('uses the storefront guard before private config or provider construction and returns 404', async () => {
+	it('preserves the opening-soon storefront guard when readiness is green', async () => {
 		const fixture = routeFixture({
 			env: {
 				STOREFRONT_ENABLED: 'false',
@@ -102,6 +106,36 @@ describe('POST /checkout', () => {
 		});
 		expect(fixture.serviceFactories).toBe(0);
 	});
+
+	it('checks local readiness before parsing invalid public configuration', async () => {
+		const readiness = vi.fn(async () => ({ ready: false }));
+		const fixture = routeFixture({ env: {}, readiness });
+
+		const response = await invoke(fixture.handler, request());
+
+		expect(readiness).toHaveBeenCalledOnce();
+		expect(response.status).toBe(503);
+		await expect(responseBody(response)).resolves.toMatchObject({ code: 'SERVICE_NOT_READY' });
+		expect(fixture.serviceFactories).toBe(0);
+	});
+
+	it.each(['PRODUCTION_ORIGIN', 'SUPPORT_EMAIL'])(
+		'maps invalid public configuration %s to SERVICE_NOT_READY after a green probe',
+		async (name) => {
+			const readiness = vi.fn(async () => ({ ready: true }));
+			const fixture = routeFixture({
+				env: { ...BASE_ENV, [name]: undefined },
+				readiness
+			});
+
+			const response = await invoke(fixture.handler, request());
+
+			expect(readiness).toHaveBeenCalledOnce();
+			expect(response.status).toBe(503);
+			await expect(responseBody(response)).resolves.toMatchObject({ code: 'SERVICE_NOT_READY' });
+			expect(fixture.serviceFactories).toBe(0);
+		}
+	);
 
 	it('enforces the server-side checkout flag before private config or provider construction', async () => {
 		const fixture = routeFixture({
@@ -155,6 +189,43 @@ describe('POST /checkout', () => {
 		expect(JSON.parse(text)).toMatchObject({ code: 'SERVICE_NOT_READY' });
 		expect(text).not.toContain('private readiness failure');
 		expect(fixture.serviceFactories).toBe(0);
+	});
+
+	it.each([
+		'STRIPE_SECRET_KEY',
+		'STRIPE_WEBHOOK_SECRET',
+		'STRIPE_PAID_SHIPPING_RATE_ID',
+		'STRIPE_FREE_SHIPPING_RATE_ID'
+	])('maps missing enabled-checkout configuration %s to SERVICE_NOT_READY', async (name) => {
+		const fixture = routeFixture({ env: { ...BASE_ENV, [name]: undefined } });
+
+		const response = await invoke(fixture.handler, request());
+
+		expect(response.status).toBe(503);
+		await expect(responseBody(response)).resolves.toMatchObject({ code: 'SERVICE_NOT_READY' });
+		expect(fixture.serviceFactories).toBe(0);
+	});
+
+	it('does not silently create a missing database through the direct checkout factory', async () => {
+		closeDatabase();
+		const directory = await mkdtemp(join(tmpdir(), 'svelte-shop-checkout-missing-'));
+		const databasePath = join(directory, 'missing.sqlite');
+		const handler = _createCheckoutPost(
+			{ ...BASE_ENV, DATABASE_PATH: databasePath },
+			undefined,
+			async () => ({ ready: true })
+		);
+
+		try {
+			const response = await invoke(handler, request({ body: '[]' }));
+
+			expect(response.status).toBe(503);
+			await expect(responseBody(response)).resolves.toMatchObject({ code: 'SERVICE_NOT_READY' });
+			await expect(access(databasePath)).rejects.toThrow();
+		} finally {
+			closeDatabase();
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it.each([

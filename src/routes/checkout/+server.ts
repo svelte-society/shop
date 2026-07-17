@@ -8,9 +8,9 @@ import {
 	createCheckoutService,
 	type CheckoutService
 } from '$lib/server/checkout/service.server';
-import { openDatabase } from '$lib/server/db/connection.server';
 import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import { checkReadiness } from '$lib/server/health/readiness.server';
+import { applicationLifecycle } from '$lib/server/app.server';
 import { requireStorefront } from '$lib/server/storefront/guard.server';
 import { createStripeCheckoutGateway } from '$lib/server/stripe/checkout.server';
 import { createStripeClient } from '$lib/server/stripe/client.server';
@@ -48,16 +48,9 @@ function isJsonRequest(request: Request): boolean {
 	);
 }
 
-function defaultCheckoutServiceFactory(
-	config: PrivateConfig,
-	runtimeEnv: RuntimeEnvironment
-): CheckoutService {
-	const databasePath = runtimeEnv.DATABASE_PATH;
-	if (typeof databasePath !== 'string' || databasePath.trim().length === 0) {
-		throw new Error('CONFIG_PRIVATE_INVALID');
-	}
-
-	const database = openDatabase(databasePath);
+function defaultCheckoutServiceFactory(config: PrivateConfig): CheckoutService {
+	const database = applicationLifecycle.current()?.database;
+	if (!database?.open) throw new Error('APPLICATION_NOT_READY');
 	const catalog = createCatalogService(createCatalogGateway(config.stripeSecretKey));
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const stripe = createStripeCheckoutGateway(createStripeClient(config.stripeSecretKey));
@@ -91,7 +84,20 @@ export function _createCheckoutPost(
 
 	return async ({ request }) => {
 		try {
-			const publicConfig = requireStorefront(runtimeEnv, { whenDisabled: 'opening-soon' });
+			try {
+				if (!(await readiness()).ready) {
+					return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
+				}
+			} catch {
+				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
+			}
+
+			let publicConfig;
+			try {
+				publicConfig = requireStorefront(runtimeEnv, { whenDisabled: 'opening-soon' });
+			} catch {
+				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
+			}
 
 			if (!publicConfig.storefrontEnabled) {
 				return problem(404, 'Not found', 'STOREFRONT_DISABLED');
@@ -100,10 +106,9 @@ export function _createCheckoutPost(
 				return problem(503, 'Checkout unavailable', 'CHECKOUT_DISABLED');
 			}
 
+			let privateConfig: PrivateConfig;
 			try {
-				if (!(await readiness()).ready) {
-					return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
-				}
+				privateConfig = parsePrivateConfig(runtimeEnv);
 			} catch {
 				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
 			}
@@ -123,8 +128,11 @@ export function _createCheckoutPost(
 				return problem(400, 'Invalid checkout request', 'CHECKOUT_REQUEST_INVALID');
 			}
 
-			const privateConfig = parsePrivateConfig(runtimeEnv);
-			service ??= createService(privateConfig, runtimeEnv);
+			try {
+				service ??= createService(privateConfig, runtimeEnv);
+			} catch {
+				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
+			}
 			const result = await service.start(input);
 			return json(result, { headers: { 'cache-control': 'no-store' } });
 		} catch (error) {
