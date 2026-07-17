@@ -62,6 +62,34 @@ describe('redact', () => {
 		});
 	});
 
+	it('removes withdrawal customer and transport data while retaining public case metadata', () => {
+		expect(
+			redact({
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				status: 'reviewing',
+				last_error_code: 'WITHDRAWAL_DECRYPT_FAILED',
+				fullName: 'Private Customer',
+				receiptEmail: 'private.customer@example.test',
+				enteredOrderReference: 'PRIVATE-ORDER-42',
+				items: [{ description: 'Private orange hoodie', quantity: 2 }],
+				messagePreview: 'Hello Private Customer',
+				cookies: 'withdrawal_receipt_session=private',
+				requestBody: '{"receiptEmail":"private.customer@example.test"}'
+			})
+		).toEqual({
+			reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+			status: 'reviewing',
+			last_error_code: 'WITHDRAWAL_DECRYPT_FAILED',
+			fullName: '[REDACTED]',
+			receiptEmail: '[REDACTED]',
+			enteredOrderReference: '[REDACTED]',
+			items: '[REDACTED]',
+			messagePreview: '[REDACTED]',
+			cookies: '[REDACTED]',
+			requestBody: '[REDACTED]'
+		});
+	});
+
 	it.each(['/customer/person%40example.test', '/customer/46701234567'])(
 		'redacts personal data embedded in a pathname value %s',
 		(pathname) => {

@@ -19,6 +19,9 @@ import {
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { createStyriaClient, type StyriaClientOptions } from '$lib/server/styria/client.server';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
+import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
+import { parseWithdrawalDataKey } from '$lib/server/withdrawals/crypto.server';
+import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 
@@ -58,6 +61,31 @@ function defaultStripeGateway(secretKey: string): StripeFulfillmentGateway {
 	return createStripeFulfillmentGateway(createStripeClient(secretKey));
 }
 
+class RuntimeWithdrawalError extends Error {
+	constructor(readonly code: string) {
+		super(code);
+		this.name = 'RuntimeWithdrawalError';
+	}
+}
+
+function stableWithdrawalCode(error: unknown): string | undefined {
+	const candidate =
+		typeof error === 'object' && error !== null && 'code' in error
+			? error.code
+			: error instanceof Error
+				? error.message
+				: undefined;
+	return typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{0,127}$/u.test(candidate)
+		? candidate
+		: undefined;
+}
+
+function runtimeWithdrawalError(error: unknown): RuntimeWithdrawalError {
+	return new RuntimeWithdrawalError(
+		stableWithdrawalCode(error) ?? 'WITHDRAWAL_CASE_INSPECTION_FAILED'
+	);
+}
+
 export function createRuntimeMcpServices(
 	database: ShopDatabase,
 	environment: RuntimeEnvironment,
@@ -76,6 +104,39 @@ export function createRuntimeMcpServices(
 	const approvals = new SqliteApprovalRepository(database);
 	const outbox = new SqliteOutboxRepository(database);
 	const alerts = new SqliteAlertService(outbox);
+	const withdrawalRepository = new SqliteWithdrawalRepository(database);
+	const withdrawalReader = new WithdrawalCaseReader({
+		repository: withdrawalRepository,
+		dataKey: parseWithdrawalDataKey(environment.WITHDRAWAL_DATA_KEY),
+		alerts
+	});
+	const withdrawals: NonNullable<McpServices['withdrawals']> = {
+		listCases(input) {
+			return withdrawalRepository.list(input);
+		},
+		inspectCase(reference) {
+			let inspection;
+			try {
+				inspection = withdrawalReader.inspectActive(reference);
+			} catch (error) {
+				if (stableWithdrawalCode(error) === 'WITHDRAWAL_CASE_NOT_FOUND') {
+					try {
+						const unavailable = withdrawalRepository.getByReference(reference);
+						if (unavailable && unavailable.purgedAt !== null) {
+							throw new RuntimeWithdrawalError('WITHDRAWAL_PII_PURGED');
+						}
+					} catch (lookupError) {
+						throw runtimeWithdrawalError(lookupError);
+					}
+				}
+				throw runtimeWithdrawalError(error);
+			}
+			return {
+				inspection,
+				history: withdrawalRepository.getInspectionHistory(inspection.id)
+			};
+		}
+	};
 	const brandName = requiredEnvironmentValue(environment, 'STYRIA_BRAND_NAME');
 	const plunkSecretKey = requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY');
 	const plunk = dependencies.createPlunkGateway
@@ -112,6 +173,7 @@ export function createRuntimeMcpServices(
 		submission: new FulfillmentSubmissionService({ ...shared, styria, alerts }),
 		reconciliation: new StyriaReconciliationService({ fulfillment, styria }),
 		status,
-		shipping
+		shipping,
+		withdrawals
 	};
 }

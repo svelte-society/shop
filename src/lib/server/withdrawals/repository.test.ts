@@ -305,6 +305,49 @@ describe('SqliteWithdrawalRepository submissions', () => {
 		expect(Buffer.isBuffer(loaded?.encryptedPayload.ciphertext)).toBe(true);
 		expect(repository.loadEncryptedById('case_missing')).toBeNull();
 	});
+
+	it('reads validated case-scoped PII-free event and message delivery history', () => {
+		repository.createSubmission(submission());
+		database
+			.prepare(
+				`UPDATE withdrawal_messages SET attempt_count = 2,
+				 provider_delivery_id = 'delivery_123', completed_at = ?,
+				 last_error_code = NULL WHERE id = 1`
+			)
+			.run(new Date(now.getTime() + 2_000).toISOString());
+
+		const history = repository.getInspectionHistory('case_123');
+
+		expect(history).toEqual({
+			events: [
+				{
+					actor: 'customer',
+					action: 'submitted',
+					priorStatus: null,
+					nextStatus: 'submitted',
+					resultCode: 'NOTICE_RECEIVED',
+					createdAt: now
+				}
+			],
+			messages: [
+				{
+					kind: 'receipt',
+					attemptCount: 2,
+					nextAttemptAt: now,
+					providerDeliveryId: 'delivery_123',
+					completedAt: new Date(now.getTime() + 2_000),
+					lastErrorCode: null
+				}
+			]
+		});
+		const serialized = JSON.stringify(history);
+		expect(serialized).not.toMatch(
+			/case_123|withdrawal:receipt|Private Test Name|Private\.Customer@example\.com|PRIVATE-ORDER-42/iu
+		);
+		expect(() => repository.getInspectionHistory(' case_123')).toThrowError(
+			'WITHDRAWAL_CASE_ID_INVALID'
+		);
+	});
 });
 
 describe('SqliteWithdrawalRepository message claims and settlement', () => {

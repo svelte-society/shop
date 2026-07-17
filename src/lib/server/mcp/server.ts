@@ -8,7 +8,15 @@ import type { SubmissionService } from '$lib/server/fulfillment/submit.server';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { registerCheckStatusTool, type FulfillmentStatusService } from './tools/check-status';
 import { registerInspectOrderTool } from './tools/inspect-order';
+import {
+	registerInspectWithdrawalTool,
+	type InspectWithdrawalCaseService
+} from './tools/inspect-withdrawal';
 import { registerListPendingTool } from './tools/list-pending';
+import {
+	registerListWithdrawalsTool,
+	type ListWithdrawalCasesService
+} from './tools/list-withdrawals';
 import { registerPrepareStyriaTool } from './tools/prepare-styria';
 import { registerReconcileStyriaTool } from './tools/reconcile-styria';
 import { registerRecordSupportTool } from './tools/record-support';
@@ -23,17 +31,20 @@ export type McpServices = Readonly<{
 	reconciliation?: ReconciliationService;
 	status?: FulfillmentStatusService;
 	shipping?: ShippingEmailService;
+	withdrawals?: ListWithdrawalCasesService & InspectWithdrawalCaseService;
 	now?: () => Date;
 }>;
 
 export function createMcpServer(services: McpServices): McpServer<GenericSchema> {
+	const instructions = services.withdrawals
+		? 'Operate paid Svelte Society Shop orders and administer withdrawal cases. Prepare before submit; reconcile every ambiguous Styria create.'
+		: 'Operate paid Svelte Society Shop orders. Prepare before submit; reconcile every ambiguous Styria create.';
 	const server = new McpServer(
 		{ name: 'svelte-society-shop', version: '1.0.0' },
 		{
 			adapter: new ValibotJsonSchemaAdapter(),
 			capabilities: { tools: { listChanged: false } },
-			instructions:
-				'Operate paid Svelte Society Shop orders. Prepare before submit; reconcile every ambiguous Styria create.'
+			instructions
 		}
 	);
 
@@ -51,6 +62,10 @@ export function createMcpServer(services: McpServices): McpServer<GenericSchema>
 		fulfillment: services.fulfillment,
 		now: services.now ?? (() => new Date())
 	});
+	if (services.withdrawals) {
+		registerListWithdrawalsTool(server, services.withdrawals);
+		registerInspectWithdrawalTool(server, services.withdrawals);
+	}
 
 	return server;
 }

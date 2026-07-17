@@ -3,16 +3,20 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import { createLogger } from '$lib/server/logging/logger.server';
 import type { PlunkGateway } from '$lib/server/plunk/gateway';
 import type { FulfillmentDetails, StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import type { StyriaOrder } from '$lib/server/styria/types';
+import { encryptWithdrawalPayload } from '$lib/server/withdrawals/crypto.server';
+import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import { _createMcpRequestHandler } from '../../../routes/mcp/+server';
 import { createRuntimeMcpServices } from './runtime.server';
 import { createMcpResponder } from './transport.server';
 
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
 const TOKEN = 'runtime-test-token';
+const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
 const environment = {
 	PRODUCTION_ORIGIN: 'https://shop.runtime.test',
 	STRIPE_SECRET_KEY: 'sk_test_runtime',
@@ -24,7 +28,8 @@ const environment = {
 	PLUNK_SECRET_KEY: 'plunk-runtime-secret',
 	PLUNK_FROM_NAME: 'Svelte Society Shop',
 	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	WITHDRAWAL_DATA_KEY: withdrawalDataKey.toString('base64')
 };
 
 type JsonRpcResponse = {
@@ -69,6 +74,27 @@ function seedPendingOrder(database: ShopDatabase): void {
 				'{"front":"https://cdn.example.test/front.svg"}', 1, 2799, 'eur')`
 		)
 		.run();
+}
+
+function seedWithdrawal(database: ShopDatabase): void {
+	new SqliteWithdrawalRepository(database).createSubmission({
+		id: 'case_runtime_private',
+		reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR',
+		scope: 'specific_items',
+		encryptedPayload: encryptWithdrawalPayload(
+			{
+				fullName: 'Runtime Private Customer',
+				receiptEmail: 'runtime.withdrawal@example.test',
+				enteredOrderReference: 'RUNTIME-PRIVATE-ORDER',
+				items: [{ description: 'Runtime private hoodie', quantity: 1 }],
+				reconciliation: null
+			},
+			'case_runtime_private',
+			withdrawalDataKey
+		),
+		dedupeFingerprint: 'd'.repeat(64),
+		createdAt: new Date('2026-07-17T08:45:00.000Z')
+	});
 }
 
 function stripeGateway(): StripeFulfillmentGateway {
@@ -153,6 +179,7 @@ describe('runtime MCP composition', () => {
 		databases.push(database);
 		migrate(database, migrationsDirectory);
 		seedPendingOrder(database);
+		seedWithdrawal(database);
 		const stripe = stripeGateway();
 		const styria = styriaGateway();
 		const plunk = plunkGateway();
@@ -194,6 +221,7 @@ describe('runtime MCP composition', () => {
 		expect(composed?.reconciliation).toBeDefined();
 		expect(composed?.status).toBeDefined();
 		expect(composed?.shipping).toBeDefined();
+		expect(composed?.withdrawals).toBeDefined();
 		expect(createStripeGateway).toHaveBeenCalledWith('sk_test_runtime');
 		expect(createStyriaGateway).toHaveBeenCalledWith({
 			appId: 'runtime-app',
@@ -334,5 +362,155 @@ describe('runtime MCP composition', () => {
 		const persisted = JSON.stringify(database.prepare('SELECT * FROM email_deliveries').all());
 		expect(persisted).not.toContain('ada@example.test');
 		expect(persisted).not.toContain('Currentgatan');
+
+		const listedWithdrawals = await handler({
+			request: rpcRequest(
+				{
+					jsonrpc: '2.0',
+					id: 6,
+					method: 'tools/call',
+					params: { name: 'list_withdrawal_cases', arguments: {} }
+				},
+				{ sessionId }
+			)
+		} as Parameters<typeof handler>[0]);
+		const listedWithdrawalMessage = await eventData(listedWithdrawals);
+		expect(listedWithdrawalMessage.result).toMatchObject({
+			structuredContent: {
+				cases: [
+					expect.objectContaining({
+						reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR',
+						status: 'submitted'
+					})
+				]
+			}
+		});
+		expect(JSON.stringify(listedWithdrawalMessage)).not.toContain('Runtime Private Customer');
+		expect(JSON.stringify(listedWithdrawalMessage)).not.toContain(
+			'runtime.withdrawal@example.test'
+		);
+
+		const inspectedWithdrawal = await handler({
+			request: rpcRequest(
+				{
+					jsonrpc: '2.0',
+					id: 7,
+					method: 'tools/call',
+					params: {
+						name: 'inspect_withdrawal_case',
+						arguments: { reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR' }
+					}
+				},
+				{ sessionId }
+			)
+		} as Parameters<typeof handler>[0]);
+		const inspectedWithdrawalMessage = await eventData(inspectedWithdrawal);
+		expect(inspectedWithdrawalMessage.result).toMatchObject({
+			structuredContent: {
+				reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR',
+				customer: {
+					full_name: 'Runtime Private Customer',
+					receipt_email: 'runtime.withdrawal@example.test',
+					entered_order_reference: 'RUNTIME-PRIVATE-ORDER'
+				},
+				events: [expect.objectContaining({ result_code: 'NOTICE_RECEIVED' })],
+				messages: [expect.objectContaining({ kind: 'receipt', attempt_count: 0 })]
+			}
+		});
+		expect(JSON.stringify(inspectedWithdrawalMessage)).not.toContain('case_runtime_private');
+		expect(JSON.stringify(inspectedWithdrawalMessage)).not.toContain('withdrawal:receipt');
+
+		const encrypted = database
+			.prepare("SELECT encrypted_payload FROM withdrawal_cases WHERE id = 'case_runtime_private'")
+			.get() as { encrypted_payload: Buffer };
+		const tampered = Buffer.from(encrypted.encrypted_payload);
+		tampered[0] ^= 255;
+		database
+			.prepare(
+				"UPDATE withdrawal_cases SET encrypted_payload = ? WHERE id = 'case_runtime_private'"
+			)
+			.run(tampered);
+		const beforeCorruptInspection = {
+			cases: database.prepare('SELECT * FROM withdrawal_cases').all(),
+			events: database.prepare('SELECT * FROM withdrawal_case_events').all(),
+			messages: database.prepare('SELECT * FROM withdrawal_messages').all()
+		};
+		const historyRead = vi.spyOn(SqliteWithdrawalRepository.prototype, 'getInspectionHistory');
+		const corruptWithdrawal = await handler({
+			request: rpcRequest(
+				{
+					jsonrpc: '2.0',
+					id: 8,
+					method: 'tools/call',
+					params: {
+						name: 'inspect_withdrawal_case',
+						arguments: { reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR' }
+					}
+				},
+				{ sessionId }
+			)
+		} as Parameters<typeof handler>[0]);
+		const corruptWithdrawalMessage = await eventData(corruptWithdrawal);
+		expect(corruptWithdrawalMessage.result).toMatchObject({
+			isError: true,
+			structuredContent: { error: { code: 'WITHDRAWAL_DECRYPT_FAILED' } }
+		});
+		expect(historyRead).not.toHaveBeenCalled();
+		historyRead.mockRestore();
+		expect({
+			cases: database.prepare('SELECT * FROM withdrawal_cases').all(),
+			events: database.prepare('SELECT * FROM withdrawal_case_events').all(),
+			messages: database.prepare('SELECT * FROM withdrawal_messages').all()
+		}).toEqual(beforeCorruptInspection);
+		expect(
+			database
+				.prepare(
+					`SELECT alert_code, alert_subject_id FROM outbox_jobs
+					 WHERE alert_code = 'WITHDRAWAL_DATA_UNREADABLE'`
+				)
+				.all()
+		).toEqual([
+			{
+				alert_code: 'WITHDRAWAL_DATA_UNREADABLE',
+				alert_subject_id: 'WDR-RRRRRRRRRRRRRRRRRRRRRR'
+			}
+		]);
+	});
+
+	it('redacts withdrawal PII from MCP route logs while retaining public operations metadata', () => {
+		const lines: string[] = [];
+		const logger = createLogger((serialized) => lines.push(serialized));
+
+		logger({
+			level: 'warn',
+			code: 'HTTP_REQUEST_REJECTED',
+			fields: {
+				reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR',
+				status: 400,
+				last_error_code: 'WITHDRAWAL_CASE_NOT_FOUND',
+				fullName: 'Runtime Private Customer',
+				receiptEmail: 'runtime.withdrawal@example.test',
+				enteredOrderReference: 'RUNTIME-PRIVATE-ORDER',
+				items: [{ description: 'Runtime private hoodie', quantity: 1 }],
+				messagePreview: 'Private message preview',
+				cookie: 'withdrawal_receipt_session=private',
+				requestBody: '{"fullName":"Runtime Private Customer"}'
+			}
+		});
+
+		expect(JSON.parse(lines[0])).toEqual({
+			reference: 'WDR-RRRRRRRRRRRRRRRRRRRRRR',
+			status: 400,
+			last_error_code: 'WITHDRAWAL_CASE_NOT_FOUND',
+			fullName: '[REDACTED]',
+			receiptEmail: '[REDACTED]',
+			enteredOrderReference: '[REDACTED]',
+			items: '[REDACTED]',
+			messagePreview: '[REDACTED]',
+			cookie: '[REDACTED]',
+			requestBody: '[REDACTED]',
+			level: 'warn',
+			code: 'HTTP_REQUEST_REJECTED'
+		});
 	});
 });

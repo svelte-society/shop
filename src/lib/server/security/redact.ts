@@ -16,6 +16,8 @@ function isSafeKey(key: string): boolean {
 		normalized === 'countrycode' ||
 		normalized === 'durationms' ||
 		normalized === 'code' ||
+		normalized === 'reference' ||
+		normalized === 'publicreference' ||
 		normalized.endsWith('errorcode') ||
 		normalized.endsWith('count') ||
 		normalized.endsWith('id') ||
@@ -37,6 +39,12 @@ function isSensitiveKey(key: string): boolean {
 		normalized.endsWith('name') ||
 		normalized.includes('address') ||
 		normalized.includes('phone') ||
+		normalized === 'enteredorderreference' ||
+		normalized === 'internalorderreference' ||
+		normalized === 'parcelreference' ||
+		normalized === 'items' ||
+		normalized.includes('messagepreview') ||
+		normalized.includes('customerinstructions') ||
 		normalized === 'vat' ||
 		normalized.startsWith('vat') ||
 		normalized.endsWith('vat') ||

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FulfillmentStatus, OrderEvent, OrderWithLines } from '$lib/domain/orders';
+import type { WithdrawalPayloadV1, WithdrawalStatus } from '$lib/domain/withdrawals';
 import type {
 	OrderSummary,
 	OrderWithLinesAndEvents,
@@ -15,6 +16,46 @@ type RpcResult = {
 };
 
 const now = new Date('2026-07-17T10:00:00.000Z');
+const withdrawalPayload: WithdrawalPayloadV1 = {
+	fullName: 'Private Withdrawal Customer',
+	receiptEmail: 'withdrawal.private@example.test',
+	enteredOrderReference: 'PRIVATE-ORDER-WDR-42',
+	items: [{ description: 'Private orange hoodie', quantity: 2 }],
+	reconciliation: {
+		internalOrderReference: 'private-internal-order',
+		countryCode: 'SE',
+		customerInstructions: 'Private return instructions',
+		returnOutcome: null,
+		parcelReference: null
+	}
+};
+
+function withdrawalCaseFixture(
+	overrides: Partial<{
+		id: string;
+		reference: string;
+		status: WithdrawalStatus;
+		createdAt: Date;
+		updatedAt: Date;
+	}> = {}
+) {
+	return {
+		id: 'case_private_newer',
+		reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+		status: 'reviewing' as WithdrawalStatus,
+		revision: 2,
+		scope: 'specific_items' as const,
+		eligibility: 'eligible_eu' as const,
+		outcomeCode: 'RETURN_LABEL_SENT',
+		createdAt: new Date('2026-07-17T09:30:00.000Z'),
+		updatedAt: new Date('2026-07-17T09:45:00.000Z'),
+		reconciledAt: new Date('2026-07-17T09:40:00.000Z'),
+		closedAt: null,
+		piiPurgeDueAt: null,
+		purgedAt: null,
+		...overrides
+	};
+}
 
 function orderFixture(overrides: Partial<OrderWithLinesAndEvents> = {}): OrderWithLinesAndEvents {
 	const order: OrderWithLines = {
@@ -182,6 +223,48 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 			sent: true as const
 		}))
 	};
+	const withdrawalCases = [
+		withdrawalCaseFixture({
+			id: 'case_private_older',
+			reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+			status: 'submitted',
+			createdAt: new Date('2026-07-17T08:30:00.000Z'),
+			updatedAt: new Date('2026-07-17T08:30:00.000Z')
+		}),
+		withdrawalCaseFixture()
+	];
+	const withdrawals = {
+		listCases: vi.fn(({ status, limit }: { status?: WithdrawalStatus; limit: number }) =>
+			withdrawalCases
+				.filter((entry) => status === undefined || entry.status === status)
+				.slice(0, limit)
+		),
+		inspectCase: vi.fn(() => ({
+			inspection: { ...withdrawalCaseFixture(), payload: withdrawalPayload },
+			history: {
+				events: [
+					{
+						actor: 'codex-admin' as const,
+						action: 'review_started',
+						priorStatus: 'submitted' as const,
+						nextStatus: 'reviewing' as const,
+						resultCode: 'REVIEW_STARTED',
+						createdAt: new Date('2026-07-17T09:35:00.000Z')
+					}
+				],
+				messages: [
+					{
+						kind: 'receipt' as const,
+						attemptCount: 1,
+						nextAttemptAt: new Date('2026-07-17T09:31:00.000Z'),
+						providerDeliveryId: 'delivery_2042',
+						completedAt: new Date('2026-07-17T09:31:00.000Z'),
+						lastErrorCode: null
+					}
+				]
+			}
+		}))
+	};
 	const services = {
 		fulfillment,
 		stripe,
@@ -190,11 +273,21 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 		reconciliation,
 		status,
 		shipping,
+		withdrawals,
 		now: () => now
 	} satisfies McpServices;
 	return {
 		server: createMcpServer(services),
-		services: { fulfillment, stripe, preparation, submission, reconciliation, status, shipping }
+		services: {
+			fulfillment,
+			stripe,
+			preparation,
+			submission,
+			reconciliation,
+			status,
+			shipping,
+			withdrawals
+		}
 	};
 }
 
@@ -255,7 +348,9 @@ describe('fulfillment MCP protocol', () => {
 			'reconcile_styria_order',
 			'check_fulfillment_status',
 			'resend_shipping_email',
-			'record_return_or_replacement'
+			'record_return_or_replacement',
+			'list_withdrawal_cases',
+			'inspect_withdrawal_case'
 		]);
 		expect(Object.fromEntries(tools.map(({ name, annotations }) => [name, annotations]))).toEqual({
 			list_pending_orders: {
@@ -305,6 +400,18 @@ describe('fulfillment MCP protocol', () => {
 				destructiveHint: true,
 				idempotentHint: false,
 				openWorldHint: false
+			},
+			list_withdrawal_cases: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			inspect_withdrawal_case: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false
 			}
 		});
 		for (const tool of tools) {
@@ -326,12 +433,61 @@ describe('fulfillment MCP protocol', () => {
 		expect(pendingItem?.properties).not.toHaveProperty('styria_order_id');
 		expect(pendingItem?.properties).not.toHaveProperty('styria_status');
 		expect(pendingItem?.properties).not.toHaveProperty('tracking_number');
+
+		const withdrawalList = tools.find((tool) => tool.name === 'list_withdrawal_cases');
+		expect(withdrawalList?.inputSchema).toMatchObject({
+			type: 'object',
+			additionalProperties: false,
+			properties: { status: expect.any(Object), limit: expect.any(Object) }
+		});
+		const withdrawalListItem = (
+			withdrawalList?.outputSchema?.properties as {
+				cases?: {
+					items?: { additionalProperties?: boolean; properties?: Record<string, unknown> };
+				};
+			}
+		)?.cases?.items;
+		expect(withdrawalListItem?.additionalProperties).toBe(false);
+		expect(Object.keys(withdrawalListItem?.properties ?? {})).toEqual([
+			'reference',
+			'status',
+			'scope',
+			'eligibility',
+			'outcome_code',
+			'created_at',
+			'updated_at',
+			'closed_at',
+			'purged_at'
+		]);
+
+		const withdrawalInspection = tools.find((tool) => tool.name === 'inspect_withdrawal_case');
+		expect(withdrawalInspection?.inputSchema).toMatchObject({
+			type: 'object',
+			additionalProperties: false,
+			required: ['reference'],
+			properties: { reference: expect.any(Object) }
+		});
+		expect(withdrawalInspection?.outputSchema?.properties).toMatchObject({
+			reference: expect.any(Object),
+			customer: expect.any(Object),
+			events: expect.any(Object),
+			messages: expect.any(Object),
+			error: expect.any(Object)
+		});
 	});
 
 	it.each([
 		['list_pending_orders', { limit: 0 }],
 		['list_pending_orders', { limit: 101 }],
 		['list_pending_orders', { limit: 1.5 }],
+		['list_withdrawal_cases', { limit: 0 }],
+		['list_withdrawal_cases', { limit: 101 }],
+		['list_withdrawal_cases', { limit: 1.5 }],
+		['list_withdrawal_cases', { status: 'unknown' }],
+		['list_withdrawal_cases', { extra: true }],
+		['inspect_withdrawal_case', { reference: '' }],
+		['inspect_withdrawal_case', { reference: ' WDR-AAAAAAAAAAAAAAAAAAAAAA' }],
+		['inspect_withdrawal_case', { reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA', extra: true }],
 		['inspect_order', { order_id: '' }],
 		['inspect_order', { order_id: ' order_2042' }],
 		['inspect_order', { order_id: 'order_2042', include_shipping_details: 'yes' }],
@@ -414,6 +570,135 @@ describe('fulfillment MCP protocol', () => {
 		expect(serialized).not.toContain('styria-private');
 		expect(serialized).not.toContain('provider-private');
 		expect(serialized).not.toContain('tracking-private');
+	});
+
+	it('lists withdrawal cases newest first with default limit and no PII or decryption', async () => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'list_withdrawal_cases', {});
+
+		expectMirrored(result);
+		expect(fixture.services.withdrawals.listCases).toHaveBeenCalledWith({ limit: 50 });
+		expect(fixture.services.withdrawals.inspectCase).not.toHaveBeenCalled();
+		expect(result.structuredContent).toEqual({
+			cases: [
+				{
+					reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+					status: 'reviewing',
+					scope: 'specific_items',
+					eligibility: 'eligible_eu',
+					outcome_code: 'RETURN_LABEL_SENT',
+					created_at: '2026-07-17T09:30:00.000Z',
+					updated_at: '2026-07-17T09:45:00.000Z',
+					closed_at: null,
+					purged_at: null
+				},
+				expect.objectContaining({ reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA' })
+			]
+		});
+		const serialized = JSON.stringify(result);
+		for (const forbidden of [
+			'"fullName"',
+			'"receiptEmail"',
+			'"enteredOrderReference"',
+			'"items"',
+			'Private Withdrawal Customer',
+			'withdrawal.private@example.test',
+			'PRIVATE-ORDER-WDR-42',
+			'Private orange hoodie',
+			'case_private',
+			'encryptedPayload'
+		]) {
+			expect(serialized).not.toContain(forbidden);
+		}
+	});
+
+	it.each([
+		'submitted',
+		'reviewing',
+		'awaiting_return',
+		'ineligible',
+		'support_handling',
+		'closed'
+	] as WithdrawalStatus[])(
+		'passes the %s withdrawal status filter with an explicit limit',
+		async (status) => {
+			const fixture = setup();
+
+			await callTool(fixture.server, 'list_withdrawal_cases', { status, limit: 17 });
+
+			expect(fixture.services.withdrawals.listCases).toHaveBeenCalledWith({ status, limit: 17 });
+		}
+	);
+
+	it('inspects one active withdrawal with decrypted customer data and PII-free history', async () => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'inspect_withdrawal_case', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB'
+		});
+
+		expectMirrored(result);
+		expect(fixture.services.withdrawals.inspectCase).toHaveBeenCalledWith(
+			'WDR-BBBBBBBBBBBBBBBBBBBBBB'
+		);
+		expect(result.structuredContent).toMatchObject({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			status: 'reviewing',
+			revision: 2,
+			customer: {
+				full_name: 'Private Withdrawal Customer',
+				receipt_email: 'withdrawal.private@example.test',
+				entered_order_reference: 'PRIVATE-ORDER-WDR-42',
+				items: [{ description: 'Private orange hoodie', quantity: 2 }]
+			},
+			events: [
+				{
+					actor: 'codex-admin',
+					action: 'review_started',
+					prior_status: 'submitted',
+					next_status: 'reviewing',
+					result_code: 'REVIEW_STARTED',
+					created_at: '2026-07-17T09:35:00.000Z'
+				}
+			],
+			messages: [
+				{
+					kind: 'receipt',
+					attempt_count: 1,
+					next_attempt_at: '2026-07-17T09:31:00.000Z',
+					provider_delivery_id: 'delivery_2042',
+					completed_at: '2026-07-17T09:31:00.000Z',
+					last_error_code: null
+				}
+			]
+		});
+		const serialized = JSON.stringify(result);
+		expect(serialized).not.toContain('case_private_newer');
+		expect(serialized).not.toContain('idempotency');
+	});
+
+	it.each([
+		['WITHDRAWAL_CASE_NOT_FOUND', 'WITHDRAWAL_CASE_NOT_FOUND'],
+		['WITHDRAWAL_PII_PURGED', 'WITHDRAWAL_PII_PURGED'],
+		['WITHDRAWAL_DECRYPT_FAILED', 'WITHDRAWAL_DECRYPT_FAILED'],
+		['private database failure', 'WITHDRAWAL_CASE_INSPECTION_FAILED']
+	])('returns only stable inspection error %s', async (failure, expected) => {
+		const fixture = setup();
+		fixture.services.withdrawals.inspectCase.mockImplementationOnce(() => {
+			throw Object.assign(new Error(`private detail: ${failure}`), {
+				code: /^[A-Z][A-Z0-9_]+$/u.test(failure) ? failure : undefined
+			});
+		});
+
+		const result = await callTool(fixture.server, 'inspect_withdrawal_case', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB'
+		});
+
+		expect(result).toEqual({
+			isError: true,
+			content: [{ type: 'text', text: JSON.stringify({ error: { code: expected } }) }],
+			structuredContent: { error: { code: expected } }
+		});
+		expect(JSON.stringify(result)).not.toContain('private detail');
 	});
 
 	it('inspects local summaries without retrieving or returning contact data by default', async () => {

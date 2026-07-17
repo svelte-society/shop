@@ -59,6 +59,25 @@ export type WithdrawalMessage = {
 	lastErrorCode: string | null;
 };
 
+export type WithdrawalCaseEventMetadata = {
+	actor: 'customer' | 'codex-admin' | 'system';
+	action: string;
+	priorStatus: WithdrawalStatus | null;
+	nextStatus: WithdrawalStatus;
+	resultCode: string;
+	createdAt: Date;
+};
+
+export type WithdrawalMessageDeliveryMetadata = Pick<
+	WithdrawalMessage,
+	'kind' | 'attemptCount' | 'nextAttemptAt' | 'providerDeliveryId' | 'completedAt' | 'lastErrorCode'
+>;
+
+export type WithdrawalInspectionHistory = {
+	events: WithdrawalCaseEventMetadata[];
+	messages: WithdrawalMessageDeliveryMetadata[];
+};
+
 export type CreateSubmissionResult = {
 	created: boolean;
 	case: WithdrawalCaseRecord;
@@ -100,6 +119,15 @@ type MessageRow = {
 	last_error_code: unknown;
 };
 
+type CaseEventRow = {
+	actor: unknown;
+	action: unknown;
+	prior_status: unknown;
+	next_status: unknown;
+	result_code: unknown;
+	created_at: unknown;
+};
+
 const CASE_ID_PATTERN = /^[A-Za-z0-9_-]{1,200}$/u;
 const REFERENCE_PATTERN = /^WDR-[A-Za-z0-9_-]{22}$/u;
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u;
@@ -128,6 +156,12 @@ const messageKinds = new Set<WithdrawalMessageKind>([
 	'support_handoff',
 	'resend'
 ]);
+const eventActors = new Set<WithdrawalCaseEventMetadata['actor']>([
+	'customer',
+	'codex-admin',
+	'system'
+]);
+const EVENT_ACTION_PATTERN = /^[a-z][a-z0-9_]{0,127}$/u;
 
 class WithdrawalRepositoryError extends Error {
 	readonly code: string;
@@ -316,6 +350,39 @@ function mapMessage(row: MessageRow): WithdrawalMessage {
 	};
 }
 
+function mapCaseEvent(row: CaseEventRow): WithdrawalCaseEventMetadata {
+	if (
+		typeof row.actor !== 'string' ||
+		!eventActors.has(row.actor as WithdrawalCaseEventMetadata['actor']) ||
+		typeof row.action !== 'string' ||
+		!EVENT_ACTION_PATTERN.test(row.action) ||
+		(row.prior_status !== null && !isStatus(row.prior_status)) ||
+		!isStatus(row.next_status) ||
+		!isStableErrorCode(row.result_code)
+	) {
+		fail('WITHDRAWAL_EVENT_ROW_INVALID');
+	}
+	return {
+		actor: row.actor as WithdrawalCaseEventMetadata['actor'],
+		action: row.action,
+		priorStatus: row.prior_status as WithdrawalStatus | null,
+		nextStatus: row.next_status,
+		resultCode: row.result_code,
+		createdAt: dateFromIso(row.created_at, 'WITHDRAWAL_EVENT_ROW_INVALID')
+	};
+}
+
+function messageDeliveryMetadata(message: WithdrawalMessage): WithdrawalMessageDeliveryMetadata {
+	return {
+		kind: message.kind,
+		attemptCount: message.attemptCount,
+		nextAttemptAt: message.nextAttemptAt,
+		providerDeliveryId: message.providerDeliveryId,
+		completedAt: message.completedAt,
+		lastErrorCode: message.lastErrorCode
+	};
+}
+
 function validateEncryptedPayload(value: EncryptedWithdrawalPayload): void {
 	if (
 		!value ||
@@ -358,8 +425,20 @@ function validateExpectedAttempt(expectedAttemptCount: number): void {
 }
 
 function summary(record: WithdrawalCaseRecord): WithdrawalCaseSummary {
-	const { id: _id, ...safe } = record;
-	return safe;
+	return {
+		reference: record.reference,
+		status: record.status,
+		revision: record.revision,
+		scope: record.scope,
+		eligibility: record.eligibility,
+		outcomeCode: record.outcomeCode,
+		createdAt: record.createdAt,
+		updatedAt: record.updatedAt,
+		reconciledAt: record.reconciledAt,
+		closedAt: record.closedAt,
+		piiPurgeDueAt: record.piiPurgeDueAt,
+		purgedAt: record.purgedAt
+	};
 }
 
 export class SqliteWithdrawalRepository {
@@ -518,6 +597,27 @@ export class SqliteWithdrawalRepository {
 						.all(input.status, input.limit)
 		) as CaseRow[];
 		return rows.map(mapCase).map(summary);
+	}
+
+	getInspectionHistory(caseId: string): WithdrawalInspectionHistory {
+		if (!isCaseId(caseId)) fail('WITHDRAWAL_CASE_ID_INVALID');
+		const eventRows = this.database
+			.prepare(
+				`SELECT actor, action, prior_status, next_status, result_code, created_at
+				 FROM withdrawal_case_events WHERE case_id = ? ORDER BY id`
+			)
+			.all(caseId) as CaseEventRow[];
+		const messageRows = this.database
+			.prepare(
+				`SELECT id, case_id, kind, resend_of_message_id, idempotency_key,
+				 attempt_count, next_attempt_at, provider_delivery_id, completed_at, last_error_code
+				 FROM withdrawal_messages WHERE case_id = ? ORDER BY id`
+			)
+			.all(caseId) as MessageRow[];
+		return {
+			events: eventRows.map(mapCaseEvent),
+			messages: messageRows.map(mapMessage).map(messageDeliveryMetadata)
+		};
 	}
 
 	getMessage(id: number): WithdrawalMessage | null {
