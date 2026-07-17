@@ -159,7 +159,7 @@ describe('withdrawal page', () => {
 			)
 			.toBeVisible();
 		await expect
-			.element(page.getByText('Email my withdrawal receipt to ada@example.test', { exact: true }))
+			.element(page.getByText('Email my withdrawal receipt to ada@example.test.', { exact: true }))
 			.toBeVisible();
 		await expect
 			.element(

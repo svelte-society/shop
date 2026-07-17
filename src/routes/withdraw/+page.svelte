@@ -311,7 +311,7 @@
 							value={row.description}
 						/><input type="hidden" name="itemQuantity" value={row.quantity} />{/each}
 					<div class="confirmation">
-						<p>Email my withdrawal receipt to {form.review.receiptEmail}</p>
+						<p>Email my withdrawal receipt to {form.review.receiptEmail}.</p>
 						<p>I confirm that I want to withdraw from this purchase.</p>
 						<p>Submitting this notice does not confirm eligibility, approval, or a refund.</p>
 					</div>

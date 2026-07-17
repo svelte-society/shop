@@ -72,7 +72,7 @@ test('enhancement preserves multiple items through confirmation and signed recei
 	await expect(page.getByText('1 × Community Tee', { exact: true })).toBeVisible();
 	await expect(page.getByText('1 × Society Cap', { exact: true })).toBeVisible();
 	await expect(
-		page.getByText('Email my withdrawal receipt to ada@example.test', { exact: true })
+		page.getByText('Email my withdrawal receipt to ada@example.test.', { exact: true })
 	).toBeVisible();
 	await expect(
 		page.getByText('I confirm that I want to withdraw from this purchase.', { exact: true })
