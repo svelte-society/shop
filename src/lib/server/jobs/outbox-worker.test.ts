@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
-import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
+import { SqliteOutboxRepository, type OutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import { createPlunkClient } from '$lib/server/plunk/client.server';
 import { PlunkError } from '$lib/server/plunk/gateway';
@@ -512,6 +512,92 @@ describe('shipping email outbox', () => {
 				completed_at: null,
 				last_error_code: 'SHIPPING_EMAIL_FAILED'
 			}
+		]);
+	});
+
+	it('waits for every claimed job before surfacing a stable recovery failure', async () => {
+		for (const id of ['settlement_a', 'settlement_fail', 'settlement_c']) {
+			insertOrder(database, {
+				id,
+				quantities: [1],
+				fulfillmentStatus: 'shipped',
+				trackingNumber: `TRACK-${id}`
+			});
+			outbox.enqueue({
+				kind: 'shipping-email',
+				idempotencyKey: `shipping:${id}:TRACK-${id}`,
+				orderId: id,
+				nextAttemptAt: now
+			});
+		}
+		let release!: () => void;
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const sender: ShippingEmailSender = {
+			send: vi.fn(async (input) => {
+				if (input.trackingNumber === 'TRACK-settlement_fail') {
+					throw new PlunkError('PLUNK_UNAVAILABLE');
+				}
+				await barrier;
+				return { deliveryId: `plunk_${input.trackingNumber}` };
+			})
+		};
+		const recoveryFailureOutbox: OutboxRepository = {
+			enqueue: outbox.enqueue.bind(outbox),
+			ensureShipping: outbox.ensureShipping.bind(outbox),
+			claimDue: outbox.claimDue.bind(outbox),
+			complete: outbox.complete.bind(outbox),
+			reschedule() {
+				throw new Error('simulated SQLite recovery contention');
+			},
+			beginEmailDelivery: outbox.beginEmailDelivery.bind(outbox),
+			completeEmailDelivery: outbox.completeEmailDelivery.bind(outbox)
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox: recoveryFailureOutbox,
+			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender })
+		});
+		let drainSettled = false;
+		const draining = worker.drain(now, 3).finally(() => {
+			drainSettled = true;
+		});
+		void draining.catch(() => undefined);
+
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(sender.send).toHaveBeenCalledTimes(3);
+		expect(drainSettled).toBe(false);
+		expect(
+			database
+				.prepare('SELECT COUNT(*) AS count FROM email_deliveries WHERE completed_at IS NOT NULL')
+				.get()
+		).toEqual({ count: 0 });
+
+		release();
+		await expect(draining).rejects.toMatchObject({ code: 'OUTBOX_JOB_SETTLEMENT_FAILED' });
+		expect(drainSettled).toBe(true);
+		expect(
+			database
+				.prepare(
+					`SELECT order_id, provider_delivery_id, completed_at
+					FROM email_deliveries ORDER BY order_id`
+				)
+				.all()
+		).toEqual([
+			{
+				order_id: 'settlement_a',
+				provider_delivery_id: 'plunk_TRACK-settlement_a',
+				completed_at: now.toISOString()
+			},
+			{
+				order_id: 'settlement_c',
+				provider_delivery_id: 'plunk_TRACK-settlement_c',
+				completed_at: now.toISOString()
+			},
+			{ order_id: 'settlement_fail', provider_delivery_id: null, completed_at: null }
 		]);
 	});
 

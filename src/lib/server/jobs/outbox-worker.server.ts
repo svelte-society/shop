@@ -51,6 +51,7 @@ type PaidOrderAlert = {
 class OutboxWorkerError extends Error {
 	constructor(
 		readonly code:
+			| 'OUTBOX_JOB_SETTLEMENT_FAILED'
 			| 'OUTBOX_JOB_KIND_UNSUPPORTED'
 			| 'PAID_ORDER_ALERT_JOB_INVALID'
 			| 'PAID_ORDER_ALERT_DATA_INVALID'
@@ -143,7 +144,7 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 		limit = DEFAULT_BATCH_LIMIT
 	): Promise<{ completed: number; rescheduled: number }> {
 		const jobs = this.dependencies.outbox.claimDue(now, limit);
-		const outcomes = await Promise.all(
+		const settlements = await Promise.allSettled(
 			jobs.map(async (job): Promise<'completed' | 'rescheduled'> => {
 				try {
 					if (job.kind === 'shipping-email') {
@@ -164,6 +165,18 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 				}
 			})
 		);
+		const outcomes: Array<'completed' | 'rescheduled'> = [];
+		let settlementFailed = false;
+		for (const settlement of settlements) {
+			if (settlement.status === 'fulfilled') {
+				outcomes.push(settlement.value);
+			} else {
+				settlementFailed = true;
+			}
+		}
+		if (settlementFailed) {
+			throw new OutboxWorkerError('OUTBOX_JOB_SETTLEMENT_FAILED');
+		}
 
 		return {
 			completed: outcomes.filter((outcome) => outcome === 'completed').length,
