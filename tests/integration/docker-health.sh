@@ -2,11 +2,9 @@
 set -euo pipefail
 
 IMAGE="${IMAGE:-svelte-society-shop:test}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUFFIX="$$"
 PRIMARY_VOLUME="svelte-society-shop-data-${SUFFIX}"
 SAFETY_VOLUME="svelte-society-shop-safety-${SUFFIX}"
-NETWORK="svelte-society-shop-network-${SUFFIX}"
 SAFETY_CONTAINER="svelte-society-shop-safety-${SUFFIX}"
 BOOTSTRAP_CONTAINER="svelte-society-shop-bootstrap-${SUFFIX}"
 SHUTDOWN_CONTAINER="svelte-society-shop-shutdown-${SUFFIX}"
@@ -20,22 +18,14 @@ CONTAINERS=(
 	"$PERSISTENCE_CONTAINER"
 )
 VOLUMES=("$PRIMARY_VOLUME" "$SAFETY_VOLUME")
-PROVIDER_LOG="/tmp/svelte-society-shop-provider-${SUFFIX}.log"
-PROVIDER_PID=""
 
 cleanup() {
-	if [[ -n "$PROVIDER_PID" ]]; then
-		kill "$PROVIDER_PID" >/dev/null 2>&1 || true
-		wait "$PROVIDER_PID" >/dev/null 2>&1 || true
-	fi
-	rm -f "$PROVIDER_LOG"
 	for container in "${CONTAINERS[@]}"; do
 		docker rm --force "$container" >/dev/null 2>&1 || true
 	done
 	for volume in "${VOLUMES[@]}"; do
 		docker volume rm "$volume" >/dev/null 2>&1 || true
 	done
-	docker network rm "$NETWORK" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
@@ -50,18 +40,15 @@ if {
 fi
 docker volume create "$PRIMARY_VOLUME" >/dev/null
 docker volume create "$SAFETY_VOLUME" >/dev/null
-docker network create "$NETWORK" >/dev/null
 
 start_container() {
 	local name="$1"
 	local volume="$2"
 	local bootstrap="$3"
 	local scheduler="$4"
-	local plunk_base_url="${5:-https://next-api.useplunk.com}"
 	local arguments=(
 		docker run --detach
 		--name "$name"
-		--network "$NETWORK"
 		--publish 127.0.0.1::3000
 		--volume "$volume:/data"
 		--env "DATABASE_BOOTSTRAP=$bootstrap"
@@ -83,18 +70,10 @@ start_container() {
 			--env STYRIA_SECRET_KEY=docker-health
 			--env STYRIA_BASE_URL=https://styriashirts.eu
 			--env PLUNK_SECRET_KEY=docker-health
-			--env "PLUNK_BASE_URL=$plunk_base_url"
 			--env "PLUNK_FROM_NAME=Svelte Society Shop"
 			--env PLUNK_FROM_EMAIL=merch@sveltesociety.dev
 			--env ADMIN_EMAIL=merch@sveltesociety.dev
 		)
-		if [[ "$plunk_base_url" != https://next-api.useplunk.com ]]; then
-			arguments+=(
-				--add-host blocked-provider:host-gateway
-				--volume "$ROOT/tests/fixtures/provider-cert.pem:/fixtures/provider-cert.pem:ro"
-				--env NODE_EXTRA_CA_CERTS=/fixtures/provider-cert.pem
-			)
-		fi
 	fi
 	arguments+=("$IMAGE")
 	"${arguments[@]}" >/dev/null
@@ -157,35 +136,6 @@ stop_within_timeout() {
 		printf 'SIGTERM shutdown took %ss, expected less than SHUTDOWN_TIMEOUT=30\n' "$elapsed" >&2
 		return 1
 	fi
-}
-
-stop_within_seconds() {
-	local name="$1"
-	local maximum="$2"
-	local started finished elapsed
-	started="$(date +%s)"
-	docker stop --time 31 "$name" >/dev/null
-	finished="$(date +%s)"
-	elapsed=$((finished - started))
-	if ((elapsed >= maximum)); then
-		printf 'SIGTERM shutdown took %ss, expected less than %ss\n' "$elapsed" "$maximum" >&2
-		docker logs "$name" >&2 || true
-		[[ ! -f "$PROVIDER_LOG" ]] || cat "$PROVIDER_LOG" >&2
-		return 1
-	fi
-}
-
-wait_for_file_log() {
-	local token="$1"
-	for _ in $(seq 1 60); do
-		if [[ -f "$PROVIDER_LOG" ]] && grep -F "$token" "$PROVIDER_LOG" >/dev/null; then
-			return 0
-		fi
-		sleep 1
-	done
-	printf 'Provider did not log %s\n' "$token" >&2
-	[[ ! -f "$PROVIDER_LOG" ]] || cat "$PROVIDER_LOG" >&2
-	return 1
 }
 
 assert_quick_check() {
@@ -282,12 +232,6 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 			"ord_docker_persist", 0, "prod_docker", "price_docker", "Svelte Society Tee",
 			"M", "TEE-M", "STYRIA-TEE", "design-docker", "{}", 1, 2500, "eur"
 		);
-		database.prepare(`INSERT INTO outbox_jobs (
-			kind, idempotency_key, order_id, next_attempt_at
-		) VALUES (?, ?, ?, ?)`).run(
-			"paid-order-alert", "paid-order-alert:ord_docker_persist",
-			"ord_docker_persist", "2020-01-01T00:00:00.000Z"
-		);
 	});
 	insert.immediate();
 	database.close();
@@ -296,44 +240,27 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 stop_within_timeout "$BOOTSTRAP_CONTAINER"
 assert_shutdown_logs "$BOOTSTRAP_CONTAINER" false
 
-# A trusted test TLS fixture accepts the scheduler's Plunk request but never returns
-# response headers. Provider-observed socket close proves SIGTERM aborts real in-flight
-# I/O rather than racing SQLite close against detached background work.
-node "$ROOT/tests/integration/blocked-provider.mjs" >"$PROVIDER_LOG" 2>&1 &
-PROVIDER_PID="$!"
-wait_for_file_log BLOCKED_PROVIDER_LISTENING
-PROVIDER_PORT="$(sed -n 's/^BLOCKED_PROVIDER_LISTENING=//p' "$PROVIDER_LOG" | tail -n 1)"
-start_container \
-	"$SHUTDOWN_CONTAINER" \
-	"$PRIMARY_VOLUME" \
-	false \
-	true \
-	"https://blocked-provider:$PROVIDER_PORT"
-wait_http_status "$SHUTDOWN_CONTAINER" /health/live 200
-wait_http_status "$SHUTDOWN_CONTAINER" /health/ready 200
-wait_for_file_log BLOCKED_PROVIDER_ACCEPTED
-stop_within_seconds "$SHUTDOWN_CONTAINER" 5
-wait_for_file_log BLOCKED_PROVIDER_ABORTED
-assert_shutdown_logs "$SHUTDOWN_CONTAINER" true
-[[ "$(docker inspect --format '{{.State.ExitCode}}' "$SHUTDOWN_CONTAINER")" == 0 ]]
+# Docker verifies a normal scheduler-enabled shutdown with no due work. The stalled
+# provider cancellation proof runs entirely on host loopback in process-shutdown.mjs.
 docker run --rm --volume "$PRIMARY_VOLUME:/data" --entrypoint node "$IMAGE" \
 	--input-type=module --eval '
 		import Database from "better-sqlite3";
 		const database = new Database("/data/shop.sqlite", { readonly: true, fileMustExist: true });
-		const job = database.prepare(`SELECT attempt_count, completed_at, last_error_code
-			FROM outbox_jobs WHERE idempotency_key = ?`).get("paid-order-alert:ord_docker_persist");
-		const leases = database.prepare("SELECT COUNT(*) AS count FROM job_leases").get();
-		const run = database.prepare(`SELECT result, finished_at FROM job_runs
-			WHERE name = ? ORDER BY id DESC LIMIT 1`).get("outbox");
+		const due = database.prepare(`SELECT COUNT(*) AS count FROM outbox_jobs
+			WHERE completed_at IS NULL AND next_attempt_at <= ?`).get(new Date().toISOString());
 		database.close();
-		if (!job || job.attempt_count !== 1 || job.completed_at !== null || job.last_error_code !== "PLUNK_UNAVAILABLE") process.exit(1);
-		if (!leases || leases.count !== 0) process.exit(1);
-		if (!run || run.result !== "completed" || run.finished_at === null) process.exit(1);
+		if (!due || due.count !== 0) process.exit(1);
 	'
+start_container "$SHUTDOWN_CONTAINER" "$PRIMARY_VOLUME" false true
+wait_http_status "$SHUTDOWN_CONTAINER" /health/live 200
+wait_http_status "$SHUTDOWN_CONTAINER" /health/ready 200
+stop_within_timeout "$SHUTDOWN_CONTAINER"
+assert_shutdown_logs "$SHUTDOWN_CONTAINER" true
+[[ "$(docker inspect --format '{{.State.ExitCode}}' "$SHUTDOWN_CONTAINER")" == 0 ]]
 assert_quick_check
 
-# The same volume becomes ready only after bootstrap is turned off. The destructive
-# provider test already exercised the scheduler, so routine image checks keep it off.
+# The same volume becomes ready only after bootstrap is turned off. The stalled-provider
+# proof is host-only, so routine image checks keep the scheduler off.
 start_container "$NORMAL_CONTAINER" "$PRIMARY_VOLUME" false false
 wait_http_status "$NORMAL_CONTAINER" /health/live 200
 wait_http_status "$NORMAL_CONTAINER" /health/ready 200

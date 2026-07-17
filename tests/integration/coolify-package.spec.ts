@@ -84,12 +84,50 @@ describe('Coolify production package', () => {
 		for (const token of [
 			'SHOP_BUILD_SECRET_CANARY',
 			'docker history --no-trunc',
-			'BLOCKED_PROVIDER_ACCEPTED',
 			'--filter "volume=$PRIMARY_VOLUME"',
 			'docker top'
 		]) {
 			expect(script).toContain(token);
 		}
+	});
+
+	it('keeps the stalled-provider SIGTERM proof on host loopback and outside Docker networking', async () => {
+		const packageJson = JSON.parse(await text('package.json')) as {
+			scripts?: Record<string, string>;
+		};
+		const dockerScript = await text('tests/integration/docker-health.sh');
+
+		expect(packageJson.scripts?.['test:shutdown']).toBe(
+			'pnpm build && node tests/integration/process-shutdown.mjs'
+		);
+		expect(packageJson.scripts?.test).toContain('test:shutdown');
+		const processScript = await text('tests/integration/process-shutdown.mjs');
+		for (const token of [
+			"listen(0, '127.0.0.1',",
+			"spawn(process.execPath, ['build']",
+			"child.kill('SIGTERM')",
+			'APPLICATION_SCHEDULER_STOPPED',
+			'APPLICATION_DATABASE_CLOSED',
+			"database.pragma('quick_check')",
+			'outbox_jobs',
+			'job_leases',
+			'job_runs'
+		]) {
+			expect(processScript).toContain(token);
+		}
+		for (const token of [
+			'blocked-provider',
+			'BLOCKED_PROVIDER_',
+			'--add-host',
+			'NODE_EXTRA_CA_CERTS',
+			'PROVIDER_PID'
+		]) {
+			expect(dockerScript).not.toContain(token);
+		}
+		expect(dockerScript).toContain(
+			'start_container "$SHUTDOWN_CONTAINER" "$PRIMARY_VOLUME" false true'
+		);
+		expect(dockerScript).toContain('WHERE completed_at IS NULL AND next_attempt_at <= ?');
 	});
 
 	it('documents the verified Coolify and proxy handoff without a static CSP override', async () => {
