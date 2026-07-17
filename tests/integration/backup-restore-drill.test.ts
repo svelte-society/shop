@@ -1,14 +1,22 @@
 import Database from 'better-sqlite3';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+	copyFile,
+	mkdir,
+	readFile,
+	rename as fsRename,
+	rm,
+	stat,
+	writeFile
+} from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SqliteBackupService } from '$lib/server/backups/service.server';
-import { createS3BackupStore, type BackupStore } from '$lib/server/backups/s3.server';
+import type { BackupStore } from '$lib/server/backups/s3.server';
 import { backupChecksum, encryptBackup } from '$lib/server/backups/format';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
@@ -129,6 +137,59 @@ function createCurrentDatabase(): void {
 	current.exec('CREATE TABLE current_only (marker TEXT NOT NULL)');
 	current.prepare('INSERT INTO current_only (marker) VALUES (?)').run('pre-restore current row');
 	closeDatabase();
+}
+
+function preRestoreArtifacts(): string[] {
+	return readdirSync(dataDirectory)
+		.filter((name) => name.startsWith('shop.pre-restore.'))
+		.sort();
+}
+
+function expectPriorDatabase(path: string): void {
+	const prior = new Database(path, { readonly: true, fileMustExist: true });
+	try {
+		expect(prior.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
+		expect(prior.prepare('SELECT marker FROM current_only').get()).toEqual({
+			marker: 'pre-restore current row'
+		});
+		expect(
+			prior
+				.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'restore_proof'")
+				.get()
+		).toEqual({ count: 0 });
+	} finally {
+		prior.close();
+	}
+}
+
+function expectRestoredDatabase(path: string): void {
+	const restored = new Database(path, { readonly: true, fileMustExist: true });
+	try {
+		expect(restored.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
+		expect(restored.prepare('SELECT COUNT(*) AS count FROM restore_proof').get()).toEqual({
+			count: 3
+		});
+		expect(
+			restored
+				.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'current_only'")
+				.get()
+		).toEqual({ count: 0 });
+	} finally {
+		restored.close();
+	}
+}
+
+async function backupCurrentWithActiveSidecars(source: string, destination: string): Promise<void> {
+	const current = new Database(source, { fileMustExist: true });
+	try {
+		await current.backup(destination);
+	} finally {
+		current.close();
+	}
+	await Promise.all([
+		writeFile(`${source}-wal`, new Uint8Array(), { mode: 0o600 }),
+		writeFile(`${source}-shm`, new Uint8Array(), { mode: 0o600 })
+	]);
 }
 
 async function createCrashLeftWalDatabase(): Promise<void> {
@@ -358,6 +419,100 @@ describe('offline restore command safety', () => {
 		);
 		expect(readFileSync(databasePath)).toEqual(before);
 	}, 10_000);
+
+	it('does not publish a canonical rollback artifact when the current database is corrupt', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		await writeFile(databasePath, Buffer.from('corrupt current SQLite'), { mode: 0o600 });
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow
+			})
+		).rejects.toThrowError(/^RESTORE_FAILED$/);
+
+		expect(preRestoreArtifacts()).toEqual([]);
+		expect(readFileSync(databasePath)).toEqual(Buffer.from('corrupt current SQLite'));
+	});
+
+	it('cleans noncanonical rollback temps when current-database backup fails', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				backupCurrent: async () => {
+					throw new Error('private current-backup detail');
+				}
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_FAILED$/);
+
+		expect(preRestoreArtifacts()).toEqual([]);
+		expectPriorDatabase(databasePath);
+	});
+
+	it('cleans noncanonical rollback temps when copied-current verification fails', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				backupCurrent: async (_source: string, destination: string) => {
+					await writeFile(destination, Buffer.from('corrupt copied current'), { mode: 0o600 });
+				}
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_INTEGRITY_FAILED$/);
+
+		expect(preRestoreArtifacts()).toEqual([]);
+		expectPriorDatabase(databasePath);
+	});
+
+	it.each(['file', 'publication-directory'] as const)(
+		'removes every rollback candidate when %s synchronization fails',
+		async (failurePoint) => {
+			const key = await createEncryptedBackup();
+			createCurrentDatabase();
+
+			await expect(
+				restoreBackup({
+					key,
+					encryptionKeyBase64: encryptionKey,
+					dataDirectory,
+					store: transport,
+					now: () => restoreNow,
+					syncFile:
+						failurePoint === 'file'
+							? async () => {
+									throw new Error('private file-sync detail');
+								}
+							: undefined,
+					syncDirectory:
+						failurePoint === 'publication-directory'
+							? async () => {
+									throw new Error('private directory-sync detail');
+								}
+							: undefined
+				} as Parameters<typeof restoreBackup>[0])
+			).rejects.toThrowError(/^RESTORE_FAILED$/);
+
+			expect(preRestoreArtifacts()).toEqual([]);
+			expectPriorDatabase(databasePath);
+		}
+	);
 });
 
 describe('production-shaped backup and restore drill', () => {
@@ -490,7 +645,7 @@ describe('production-shaped backup and restore drill', () => {
 		}
 	});
 
-	it('syncs the materialized pre-restore copy and data directory before returning success', async () => {
+	it('syncs each materialized file and commit directory before returning success', async () => {
 		const key = await createEncryptedBackup();
 		createCurrentDatabase();
 		const syncedFiles: string[] = [];
@@ -510,16 +665,131 @@ describe('production-shaped backup and restore drill', () => {
 			}
 		} as Parameters<typeof restoreBackup>[0]);
 
-		expect(syncedFiles).toContain(join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite'));
-		expect(syncedDirectories).toEqual([dataDirectory, dataDirectory]);
+		expect(
+			syncedFiles.some((path) =>
+				path.includes('shop.pre-restore.20260717T040506Z.sqlite.building-')
+			)
+		).toBe(true);
+		expect(syncedFiles.some((path) => path.includes('shop.prior-install.'))).toBe(true);
+		expect(syncedDirectories).toEqual([dataDirectory, dataDirectory, dataDirectory]);
+	});
+
+	it('rolls back sidecar quarantine failure and leaves the prior logical database installed', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		const canonical = join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite');
+		const renameFile = async (source: string, destination: string): Promise<void> => {
+			if (source === `${databasePath}-shm` && destination.includes('.restore-quarantine-')) {
+				throw new Error('private quarantine detail');
+			}
+			await fsRename(source, destination);
+		};
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				backupCurrent: backupCurrentWithActiveSidecars,
+				renameFile
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_FAILED$/);
+
+		expect(existsSync(`${databasePath}-wal`)).toBe(true);
+		expect(existsSync(`${databasePath}-shm`)).toBe(true);
+		expectPriorDatabase(databasePath);
+		expectPriorDatabase(canonical);
+	});
+
+	it('keeps the standalone prior database and canonical copy when quarantine removal fails', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		const canonical = join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite');
+		const removeFile = async (path: string, options?: { force?: boolean }): Promise<void> => {
+			if (path.includes('.restore-quarantine-')) {
+				throw new Error('private quarantine-removal detail');
+			}
+			await rm(path, options);
+		};
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				backupCurrent: backupCurrentWithActiveSidecars,
+				removeFile
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_CLEANUP_FAILED$/);
+
+		expectPriorDatabase(databasePath);
+		expectPriorDatabase(canonical);
+		expect(
+			readdirSync(dataDirectory).filter((name) => name.includes('.restore-quarantine-'))
+		).toHaveLength(2);
+	});
+
+	it('leaves the prior database installed when the final restore rename fails', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		const canonical = join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite');
+		const renameFile = async (source: string, destination: string): Promise<void> => {
+			if (source === join(dataDirectory, 'shop.restore.tmp')) {
+				throw new Error('private restore-rename detail');
+			}
+			await fsRename(source, destination);
+		};
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				renameFile
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_FAILED$/);
+
+		expectPriorDatabase(databasePath);
+		expectPriorDatabase(canonical);
+		expect(existsSync(join(dataDirectory, 'shop.restore.tmp'))).toBe(false);
+	});
+
+	it('returns RESTORE_STATE_UNCERTAIN and retains both exact states after post-rename sync failure', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		const canonical = join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite');
+		let directorySyncs = 0;
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				syncDirectory: async () => {
+					directorySyncs += 1;
+					if (directorySyncs === 3) throw new Error('private post-rename sync detail');
+				}
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_STATE_UNCERTAIN$/);
+
+		expect(directorySyncs).toBe(3);
+		expectRestoredDatabase(databasePath);
+		expectPriorDatabase(canonical);
+		expect(existsSync(join(dataDirectory, 'shop.restore.tmp'))).toBe(false);
 	});
 });
 
 describe('real S3-compatible HTTPS production path', () => {
 	it('backs up and restores through real signed S3Client PUT, GET, paginated LIST, and pair DELETE requests', async () => {
 		const fixture = await S3HttpsFixture.start();
-		const previousTlsOverride = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-		process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 		const bucket = 'restore-backups';
 		const prefix = 'drill-bucket';
 		const oldBase = `${prefix}/2026/06/01/shop-20260601T000000Z.sqlite.ssbk`;
@@ -531,16 +801,58 @@ describe('real S3-compatible HTTPS production path', () => {
 			new Date('2026-06-01')
 		);
 		try {
-			const configuration = {
-				endpoint: fixture.endpoint,
-				region: 'eu-north-1',
-				bucket,
-				accessKeyId: 'fixture-access-key',
-				secretAccessKey: 'fixture-secret-key',
-				forcePathStyle: true
-			};
-			const backupStore = createS3BackupStore(configuration);
-			const key = await createEncryptedBackup(backupStore, prefix);
+			const childEnvironment = { ...process.env };
+			delete childEnvironment.NODE_TLS_REJECT_UNAUTHORIZED;
+			Object.assign(childEnvironment, {
+				NODE_EXTRA_CA_CERTS: resolve('tests/fixtures/provider-cert.pem'),
+				REAL_S3_DRILL_ROOT: root,
+				REAL_S3_ENDPOINT: fixture.endpoint,
+				REAL_S3_ENCRYPTION_KEY: encryptionKey,
+				FORCE_COLOR: '0'
+			});
+			const child = spawn(
+				'pnpm',
+				[
+					'exec',
+					'vitest',
+					'run',
+					'--config',
+					'tests/fixtures/real-s3-drill-child.vitest.config.ts'
+				],
+				{
+					cwd: resolve('.'),
+					env: childEnvironment,
+					stdio: ['ignore', 'pipe', 'pipe']
+				}
+			);
+			let stdout = '';
+			let stderr = '';
+			child.stdout.setEncoding('utf8');
+			child.stderr.setEncoding('utf8');
+			child.stdout.on('data', (chunk: string) => {
+				stdout += chunk;
+			});
+			child.stderr.on('data', (chunk: string) => {
+				stderr += chunk;
+			});
+			const exitCode = await new Promise<number | null>((resolvePromise, reject) => {
+				const timer = setTimeout(() => {
+					child.kill('SIGKILL');
+					reject(new Error('TEST_REAL_S3_CHILD_TIMEOUT'));
+				}, 10_000);
+				child.once('error', (error) => {
+					clearTimeout(timer);
+					reject(error);
+				});
+				child.once('exit', (code) => {
+					clearTimeout(timer);
+					resolvePromise(code);
+				});
+			});
+			expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+			expect(`${stdout}\n${stderr}`).not.toContain('NODE_TLS_REJECT_UNAUTHORIZED');
+
+			const key = canonicalBackupKey;
 			const encrypted = fixture.object(bucket, key);
 			const companion = fixture.object(bucket, `${key}.sha256`);
 			expect(encrypted?.contentType).toBe('application/octet-stream');
@@ -550,55 +862,6 @@ describe('real S3-compatible HTTPS production path', () => {
 			);
 			expect(fixture.object(bucket, oldBase)).toBeUndefined();
 			expect(fixture.object(bucket, `${oldBase}.sha256`)).toBeUndefined();
-
-			const restoreStore = createRestoreStoreFromEnvironment({
-				S3_ENDPOINT: fixture.endpoint,
-				S3_BUCKET: bucket,
-				S3_REGION: configuration.region,
-				S3_ACCESS_KEY_ID: configuration.accessKeyId,
-				S3_SECRET_ACCESS_KEY: configuration.secretAccessKey,
-				S3_FORCE_PATH_STYLE: 'true'
-			});
-			createCurrentDatabase();
-			await restoreBackup({
-				key,
-				encryptionKeyBase64: encryptionKey,
-				dataDirectory,
-				store: restoreStore,
-				now: () => restoreNow
-			});
-
-			const restored = new Database(databasePath, { fileMustExist: true });
-			try {
-				migrate(restored, migrationsDirectory);
-				expect(restored.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
-				expect(restored.prepare('SELECT COUNT(*) AS count FROM restore_proof').get()).toEqual({
-					count: 3
-				});
-				expect(restored.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-					count: 3
-				});
-				const readiness = await checkRuntimeReadiness({
-					database: restored,
-					scheduler: null,
-					databasePath,
-					migrationsDirectory,
-					environment: {
-						STOREFRONT_ENABLED: 'false',
-						CHECKOUT_ENABLED: 'false',
-						MCP_ENABLED: 'false',
-						SCHEDULER_ENABLED: 'false',
-						DATABASE_BOOTSTRAP: 'false',
-						PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
-						SUPPORT_EMAIL: 'merch@sveltesociety.dev',
-						STRIPE_WEBHOOK_SECRET: 'whsec_real_s3_drill',
-						DATABASE_PATH: databasePath
-					}
-				});
-				expect(readiness.ready).toBe(true);
-			} finally {
-				restored.close();
-			}
 
 			const puts = fixture.requests.filter((request) => request.method === 'PUT');
 			const gets = fixture.requests.filter((request) => request.method === 'GET');
@@ -613,10 +876,8 @@ describe('real S3-compatible HTTPS production path', () => {
 				expect(request.authorization).toMatch(/^AWS4-HMAC-SHA256 /);
 			}
 		} finally {
-			if (previousTlsOverride === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-			else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTlsOverride;
 			await fixture.close();
 		}
 		expect(fixture.listening).toBe(false);
-	}, 10_000);
+	}, 15_000);
 });

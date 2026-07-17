@@ -1,7 +1,7 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import Database from 'better-sqlite3';
-import { chmod, open, rename, rm } from 'node:fs/promises';
-import { createDecipheriv, createHash, timingSafeEqual } from 'node:crypto';
+import { chmod, copyFile, open, rename, rm } from 'node:fs/promises';
+import { createDecipheriv, createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -22,6 +22,7 @@ const SAFE_ERROR_CODES = new Set([
 	'RESTORE_DECRYPT_FAILED',
 	'RESTORE_INTEGRITY_FAILED',
 	'RESTORE_CLEANUP_FAILED',
+	'RESTORE_STATE_UNCERTAIN',
 	'RESTORE_FAILED'
 ]);
 
@@ -232,36 +233,182 @@ async function syncPath(path) {
 	}
 }
 
+/** @param {string} path */
+async function pathExists(path) {
+	let handle;
+	try {
+		handle = await open(path, 'r');
+		return true;
+	} catch (error) {
+		if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return false;
+		throw error;
+	} finally {
+		await handle?.close();
+	}
+}
+
+/** @param {string} databasePath @param {string} destination */
+async function backupCurrent(databasePath, destination) {
+	let current;
+	try {
+		current = new Database(databasePath, { fileMustExist: true });
+		await current.backup(destination);
+	} finally {
+		if (current?.open) current.close();
+	}
+}
+
 /**
  * @param {string} databasePath
  * @param {string} preRestorePath
+ * @param {string} buildingPath
  * @param {string} dataDirectory
  * @param {(path: string, options?: { force?: boolean }) => Promise<void>} removeFile
  * @param {(path: string) => Promise<void>} syncFile
  * @param {(path: string) => Promise<void>} syncDirectory
+ * @param {(databasePath: string, destination: string) => Promise<void>} createBackup
+ * @param {(source: string, destination: string) => Promise<void>} renameFile
  */
 async function materializeCurrentDatabase(
 	databasePath,
 	preRestorePath,
+	buildingPath,
 	dataDirectory,
 	removeFile,
 	syncFile,
-	syncDirectory
+	syncDirectory,
+	createBackup,
+	renameFile
 ) {
-	const reservation = await open(preRestorePath, 'wx', 0o600);
-	await reservation.close();
-	let current;
+	let canonicalCreated = false;
+	let failure;
 	try {
-		current = new Database(databasePath, { fileMustExist: true });
-		await current.backup(preRestorePath);
-	} finally {
-		if (current?.open) current.close();
+		if (await pathExists(preRestorePath)) throw new Error('RESTORE_FAILED');
+		await createBackup(databasePath, buildingPath);
+		await chmod(buildingPath, 0o600);
+		quickCheck(buildingPath);
+		await removeRequired([`${buildingPath}-shm`, `${buildingPath}-wal`], removeFile);
+		await syncFile(buildingPath);
+		await renameFile(buildingPath, preRestorePath);
+		canonicalCreated = true;
+		await syncDirectory(dataDirectory);
+		return;
+	} catch (error) {
+		failure = error;
 	}
-	await chmod(preRestorePath, 0o600);
-	quickCheck(preRestorePath);
-	await removeRequired([`${preRestorePath}-shm`, `${preRestorePath}-wal`], removeFile);
-	await syncFile(preRestorePath);
-	await syncDirectory(dataDirectory);
+	try {
+		await removeRequired(
+			[
+				buildingPath,
+				`${buildingPath}-shm`,
+				`${buildingPath}-wal`,
+				...(canonicalCreated
+					? [preRestorePath, `${preRestorePath}-shm`, `${preRestorePath}-wal`]
+					: [])
+			],
+			removeFile
+		);
+		if (canonicalCreated) {
+			try {
+				await syncDirectory(dataDirectory);
+			} catch {
+				// The stable materialization failure still takes precedence after physical cleanup.
+			}
+		}
+	} catch {
+		throw new Error('RESTORE_CLEANUP_FAILED');
+	}
+	throw failure;
+}
+
+/**
+ * @param {Array<{ active: string; quarantine: string }>} sidecars
+ * @param {(source: string, destination: string) => Promise<void>} renameFile
+ */
+async function quarantineSidecars(sidecars, renameFile) {
+	/** @type {Array<{ active: string; quarantine: string }>} */
+	const moved = [];
+	try {
+		for (const sidecar of sidecars) {
+			try {
+				await renameFile(sidecar.active, sidecar.quarantine);
+				moved.push(sidecar);
+			} catch (error) {
+				if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') throw error;
+			}
+		}
+		return moved;
+	} catch (error) {
+		let rollbackFailed = false;
+		for (const sidecar of moved.reverse()) {
+			try {
+				await renameFile(sidecar.quarantine, sidecar.active);
+			} catch {
+				rollbackFailed = true;
+			}
+		}
+		if (rollbackFailed) throw new Error('RESTORE_STATE_UNCERTAIN', { cause: error });
+		throw error;
+	}
+}
+
+/**
+ * @param {Array<{ active: string; quarantine: string }>} sidecars
+ * @param {(source: string, destination: string) => Promise<void>} renameFile
+ */
+async function restoreQuarantinedSidecars(sidecars, renameFile) {
+	let failed = false;
+	for (const sidecar of [...sidecars].reverse()) {
+		try {
+			await renameFile(sidecar.quarantine, sidecar.active);
+		} catch {
+			failed = true;
+		}
+	}
+	if (failed) throw new Error('RESTORE_STATE_UNCERTAIN');
+}
+
+/**
+ * @param {string} databasePath
+ * @param {string} preRestorePath
+ * @param {string} priorInstallPath
+ * @param {string} dataDirectory
+ * @param {Array<{ active: string; quarantine: string }>} sidecars
+ * @param {(path: string, options?: { force?: boolean }) => Promise<void>} removeFile
+ * @param {(path: string) => Promise<void>} syncFile
+ * @param {(path: string) => Promise<void>} syncDirectory
+ * @param {(source: string, destination: string) => Promise<void>} renameFile
+ */
+async function installPriorDatabase(
+	databasePath,
+	preRestorePath,
+	priorInstallPath,
+	dataDirectory,
+	sidecars,
+	removeFile,
+	syncFile,
+	syncDirectory,
+	renameFile
+) {
+	const quarantined = await quarantineSidecars(sidecars, renameFile);
+	let priorRenamed = false;
+	try {
+		await copyFile(preRestorePath, priorInstallPath);
+		await chmod(priorInstallPath, 0o600);
+		quickCheck(priorInstallPath);
+		await removeRequired([`${priorInstallPath}-shm`, `${priorInstallPath}-wal`], removeFile);
+		await syncFile(priorInstallPath);
+		await renameFile(priorInstallPath, databasePath);
+		priorRenamed = true;
+		await syncDirectory(dataDirectory);
+	} catch (error) {
+		if (!priorRenamed) await restoreQuarantinedSidecars(quarantined, renameFile);
+		throw error;
+	}
+	await removeRequired(
+		quarantined.map((sidecar) => sidecar.quarantine),
+		removeFile
+	);
 }
 
 /**
@@ -274,6 +421,8 @@ async function materializeCurrentDatabase(
  *   removeFile?: (path: string, options?: { force?: boolean }) => Promise<void>;
  *   syncFile?: (path: string) => Promise<void>;
  *   syncDirectory?: (path: string) => Promise<void>;
+ *   backupCurrent?: (databasePath: string, destination: string) => Promise<void>;
+ *   renameFile?: (source: string, destination: string) => Promise<void>;
  * }} options
  */
 export async function restoreBackup(options) {
@@ -287,12 +436,24 @@ export async function restoreBackup(options) {
 		dataDirectory,
 		`shop.pre-restore.${timestamp((options.now ?? (() => new Date()))())}.sqlite`
 	);
+	const transactionId = randomUUID();
+	const buildingPath = `${preRestorePath}.building-${transactionId}`;
+	const priorInstallPath = join(dataDirectory, `shop.prior-install.${transactionId}.tmp`);
+	const sidecars = ['wal', 'shm'].map((suffix) => ({
+		active: `${databasePath}-${suffix}`,
+		quarantine: `${databasePath}-${suffix}.restore-quarantine-${transactionId}`
+	}));
 	const removeFile = options.removeFile ?? rm;
 	const syncFile = options.syncFile ?? syncPath;
 	const syncDirectory = options.syncDirectory ?? syncPath;
+	const createBackup = options.backupCurrent ?? backupCurrent;
+	const renameFile = options.renameFile ?? rename;
 	let plaintext;
 	let result;
 	let failure;
+	let materializationStarted = false;
+	let priorInstallStarted = false;
+	let finalRenameCompleted = false;
 
 	try {
 		await removeRestoreTemps(restorePath, removeFile);
@@ -311,29 +472,55 @@ export async function restoreBackup(options) {
 		await writeSynced(restorePath, plaintext);
 		quickCheck(restorePath);
 		await removeRequired([`${restorePath}-shm`, `${restorePath}-wal`], removeFile);
+		materializationStarted = true;
 		await materializeCurrentDatabase(
 			databasePath,
 			preRestorePath,
+			buildingPath,
 			dataDirectory,
 			removeFile,
 			syncFile,
-			syncDirectory
+			syncDirectory,
+			createBackup,
+			renameFile
 		);
-		await removeRequired([`${databasePath}-shm`, `${databasePath}-wal`], removeFile);
-		await rename(restorePath, databasePath);
+		priorInstallStarted = true;
+		await installPriorDatabase(
+			databasePath,
+			preRestorePath,
+			priorInstallPath,
+			dataDirectory,
+			sidecars,
+			removeFile,
+			syncFile,
+			syncDirectory,
+			renameFile
+		);
+		await renameFile(restorePath, databasePath);
+		finalRenameCompleted = true;
 		await syncDirectory(dataDirectory);
 		result = { databasePath, preRestorePath };
 	} catch (error) {
-		failure =
-			error instanceof Error && SAFE_ERROR_CODES.has(error.message)
+		failure = finalRenameCompleted
+			? new Error('RESTORE_STATE_UNCERTAIN')
+			: error instanceof Error && SAFE_ERROR_CODES.has(error.message)
 				? error
 				: new Error('RESTORE_FAILED');
 	} finally {
 		plaintext?.fill(0);
 		try {
-			await removeRestoreTemps(restorePath, removeFile);
+			const cleanupPaths = [restorePath, `${restorePath}-shm`, `${restorePath}-wal`];
+			if (materializationStarted) {
+				cleanupPaths.push(buildingPath, `${buildingPath}-shm`, `${buildingPath}-wal`);
+			}
+			if (priorInstallStarted) {
+				cleanupPaths.push(priorInstallPath, `${priorInstallPath}-shm`, `${priorInstallPath}-wal`);
+			}
+			await removeRequired(cleanupPaths, removeFile);
 		} catch {
-			failure = new Error('RESTORE_CLEANUP_FAILED');
+			if (failure?.message !== 'RESTORE_STATE_UNCERTAIN') {
+				failure = new Error('RESTORE_CLEANUP_FAILED');
+			}
 		}
 	}
 	if (failure) throw failure;

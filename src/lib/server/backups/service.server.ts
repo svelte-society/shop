@@ -228,6 +228,8 @@ export class SqliteBackupService implements BackupService {
 			}
 			verified = true;
 
+			await removeLocalArtifacts(localFiles, runDirectory, this.options.removeFile ?? rm);
+
 			checkAborted(signal);
 			const cutoff = new Date(now.getTime() - RETENTION_MS);
 			const retainedListing = await this.options.store.list(`${this.prefix}/`, signal);

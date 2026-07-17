@@ -79,13 +79,32 @@ docker run --rm \
 ```
 
 The command downloads the encrypted object and checksum, verifies SHA-256, authenticates and
-decrypts into `/data/shop.restore.tmp`, runs `PRAGMA quick_check`, closes SQLite, copies the current
-database's complete logical state (including committed pages in a crash-left WAL) through SQLite
-online backup to `/data/shop.pre-restore.<timestamp>.sqlite`, and runs `PRAGMA quick_check` against
-that materialized copy. Only after the copy is synchronized does it remove the stopped database's
-stale WAL/SHM files, atomically rename the verified restore over `/data/shop.sqlite`, and synchronize
-the data directory. Any failed check leaves the current logical state recoverable and removes
-restore temporary files. Success emits only `{"event":"restore_completed"}`.
+decrypts into `/data/shop.restore.tmp`, runs `PRAGMA quick_check`, and closes SQLite. It copies the
+current database's complete logical state (including committed pages in a crash-left WAL) through
+SQLite online backup to a unique noncanonical `shop.pre-restore.<timestamp>.sqlite.building-*`
+file. Only after chmod `0600`, `quick_check`, sidecar cleanup, and file synchronization succeed is
+that file atomically renamed to `/data/shop.pre-restore.<timestamp>.sqlite` and the directory
+synchronized. A failure before that boundary removes both the building file and any canonical
+candidate, so an invalid rollback artifact is never advertised.
+
+Before committing the restore, the command atomically quarantines active WAL/SHM files, with
+rollback if either quarantine rename fails. It copies the verified canonical pre-restore database
+through a synchronized prior-install temporary file, atomically installs that standalone prior
+logical state at `/data/shop.sqlite`, synchronizes the directory, and then removes quarantined
+sidecars. The final commit boundary is the atomic rename of the verified restore over
+`/data/shop.sqlite` followed by a data-directory sync. An ordinary precommit quarantine, removal,
+or final-rename failure therefore leaves `shop.sqlite` opening as the prior logical database and
+retains the verified canonical pre-restore copy. Success emits only
+`{"event":"restore_completed"}`.
+
+If the final rename succeeds but its directory sync fails, the command emits
+`{"event":"restore_failed","error_code":"RESTORE_STATE_UNCERTAIN"}`. This state requires operator
+action: keep the application stopped, do not retry the restore or restart the application, inspect
+both `/data/shop.sqlite` and the retained canonical pre-restore database with `quick_check` and
+reviewed aggregate queries, and then perform the rollback procedure below. The rollback is
+mandatory even if the restored rows appear present, because the final directory entry was not
+durably confirmed. Preserve all files for incident analysis until rollback and readiness checks
+complete.
 
 5. Before restarting, verify the restored file with a one-shot container:
 
@@ -168,15 +187,22 @@ docker run --rm \
 `tests/integration/backup-restore-drill.test.ts` is the self-cleaning production-shaped drill. Its
 failure cases use a temporary file transport, and its full path uses a bounded host-local
 S3-compatible HTTPS server with the production `createS3BackupStore` and
-`createRestoreStoreFromEnvironment` factories and real signed AWS SDK requests. The drill proves:
+`createRestoreStoreFromEnvironment` factories and real signed AWS SDK requests. The real-client
+portion runs in an isolated child process which trusts only the fixture certificate through
+`NODE_EXTRA_CA_CERTS`; it never disables TLS verification or mutates the parent process TLS
+environment. The drill proves:
 
 - SQLite online backup of a migrated WAL database;
 - exact encryption/checksum compatibility with the offline restore program;
 - checksum and authenticated-decryption corruption rejection without replacement;
 - both destructive confirmation gates before any store construction;
-- `quick_check`, prior-database copy, atomic replacement, and temporary-file cleanup;
-- committed crash-left WAL recovery into the standalone prior-database copy, stale-sidecar removal,
-  and a clean restored restart;
+- noncanonical pre-copy construction, `quick_check`, chmod/fsync-before-publication, and cleanup on
+  injected backup, verification, and sync failures;
+- committed crash-left WAL recovery into the standalone prior-database copy, atomic sidecar
+  quarantine/rollback, deterministic prior-state installation before the final rename, and a clean
+  restored restart;
+- exact prior/restored file states after sidecar cleanup failure, final-rename failure, and a
+  post-rename sync failure reported as `RESTORE_STATE_UNCERTAIN`;
 - real PUT/GET bodies, paginated LIST, encrypted/checksum pair deletion, and HTTPS fixture teardown;
 - restored migration ledger and exact row-count assertions; and
 - application readiness against the restored `/data/shop.sqlite` analogue.

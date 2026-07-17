@@ -203,6 +203,69 @@ describe('SqliteBackupService', () => {
 		expect(store.objects.has(`${boundaryBase}.sha256`)).toBe(true);
 	});
 
+	it('finishes verified local cleanup before retention listing or deletion', async () => {
+		const oldBase = 'shop-backups/2026/06/01/shop-20260601T000000Z.sqlite.ssbk';
+		for (const key of [oldBase, `${oldBase}.sha256`]) {
+			store.objects.set(key, {
+				body: new Uint8Array(),
+				contentType: 'application/octet-stream',
+				lastModified: new Date('2026-06-01T00:00:00.000Z')
+			});
+		}
+		const removeFile = async (
+			path: string,
+			options?: { force?: boolean; recursive?: boolean }
+		): Promise<void> => {
+			store.events.push(`cleanup:${path.endsWith('.sqlite.ssbk') ? 'encrypted' : 'artifact'}`);
+			await rm(path, options);
+		};
+
+		await service(encryptionKey, join(directory, 'backup-temp'), { removeFile }).run(now);
+
+		const verificationList = store.events.indexOf('list:shop-backups/');
+		const firstCleanup = store.events.findIndex((event) => event.startsWith('cleanup:'));
+		const retentionList = store.events.indexOf('list:shop-backups/', verificationList + 1);
+		const retentionDelete = store.events.findIndex(
+			(event) => event === `delete:${oldBase},${oldBase}.sha256`
+		);
+		expect([verificationList, firstCleanup, retentionList, retentionDelete]).toEqual([
+			2,
+			expect.any(Number),
+			expect.any(Number),
+			expect.any(Number)
+		]);
+		expect(verificationList).toBeLessThan(firstCleanup);
+		expect(firstCleanup).toBeLessThan(retentionList);
+		expect(retentionList).toBeLessThan(retentionDelete);
+	});
+
+	it('does not start retention when mandatory local cleanup fails', async () => {
+		const oldBase = 'shop-backups/2026/06/01/shop-20260601T000000Z.sqlite.ssbk';
+		store.objects.set(oldBase, {
+			body: new Uint8Array(),
+			contentType: 'application/octet-stream',
+			lastModified: new Date('2026-06-01T00:00:00.000Z')
+		});
+		const removeFile = async (
+			path: string,
+			options?: { force?: boolean; recursive?: boolean }
+		): Promise<void> => {
+			store.events.push(`cleanup:${path}`);
+			if (path.endsWith('.sqlite.ssbk')) throw new Error('private cleanup detail');
+			await rm(path, options);
+		};
+
+		await expect(
+			service(encryptionKey, join(directory, 'backup-temp'), { removeFile }).run(now)
+		).rejects.toThrowError(/^BACKUP_FAILED$/);
+
+		expect(store.events.filter((event) => event === 'list:shop-backups/')).toHaveLength(1);
+		expect(store.events.some((event) => event.startsWith('delete:'))).toBe(false);
+		expect(store.events.findIndex((event) => event.startsWith('cleanup:'))).toBeGreaterThan(
+			store.events.indexOf('list:shop-backups/')
+		);
+	});
+
 	it('uses one authoritative age for each pair and handles orphans without splitting companions', async () => {
 		const retainedBase = 'shop-backups/2026/06/17/shop-20260617T023045Z.sqlite.ssbk';
 		const expiredBase = 'shop-backups/2026/06/17/shop-20260617T023044Z.sqlite.ssbk';
