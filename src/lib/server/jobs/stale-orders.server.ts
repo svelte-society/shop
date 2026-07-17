@@ -20,6 +20,7 @@ export interface OperationalChecksJob {
 		backupMissed: boolean;
 		diskLow: boolean;
 		sqliteNotReady: boolean;
+		retryAt?: Date | null;
 	}>;
 }
 
@@ -51,6 +52,19 @@ function subjectIds(rows: SubjectRow[]): string[] {
 function throwIfAborted(signal?: AbortSignal): void {
 	if (!signal?.aborted) return;
 	throw signal.reason instanceof Error ? signal.reason : new Error('OPERATIONAL_CHECK_ABORTED');
+}
+
+function retryDate(value: unknown, now: Date): Date {
+	if (typeof value !== 'string') fail('OPERATIONAL_CHECK_ROW_INVALID');
+	const parsed = new Date(value);
+	if (
+		!Number.isFinite(parsed.getTime()) ||
+		parsed.toISOString() !== value ||
+		parsed.getTime() <= now.getTime()
+	) {
+		fail('OPERATIONAL_CHECK_ROW_INVALID');
+	}
+	return parsed;
 }
 
 function latestBackupCadence(now: Date): Date {
@@ -133,7 +147,7 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 			.get(backupCadence.toISOString(), nextBackupCadence.toISOString(), now.toISOString());
 		const activeBackup = this.dependencies.database
 			.prepare(
-				`SELECT 1 FROM job_runs jr
+				`SELECT jl.expires_at FROM job_runs jr
 				 JOIN job_leases jl ON jl.name = jr.name AND jl.owner_id = jr.owner_id
 				 WHERE jr.name = 'backup'
 				 AND jr.started_at >= ? AND jr.started_at < ? AND jr.started_at <= ?
@@ -146,7 +160,11 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 				nextBackupCadence.toISOString(),
 				now.toISOString(),
 				now.toISOString()
-			);
+			) as { expires_at: unknown } | undefined;
+		const retryAt =
+			completedBackup === undefined && activeBackup !== undefined
+				? retryDate(activeBackup.expires_at, now)
+				: null;
 		const graceElapsed = now.getTime() >= backupCadence.getTime() + BACKUP_CADENCE_GRACE_MS;
 		const backupMissed =
 			graceElapsed && completedBackup === undefined && activeBackup === undefined;
@@ -173,7 +191,8 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 			shippingUnsent: shippingUnsent.length,
 			backupMissed,
 			diskLow,
-			sqliteNotReady
+			sqliteNotReady,
+			retryAt
 		};
 	}
 }

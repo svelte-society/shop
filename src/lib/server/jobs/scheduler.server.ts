@@ -84,6 +84,8 @@ export class OutboxScheduler implements Scheduler {
 	private styriaTimer: SchedulerTimerHandle | undefined;
 	private backupTimer: SchedulerTimerHandle | undefined;
 	private operationalChecksTimer: SchedulerTimerHandle | undefined;
+	private operationalRetryTimer: SchedulerTimerHandle | undefined;
+	private operationalRetryAt: number | undefined;
 	private activeRun: Promise<void> | undefined;
 	private activeStyriaRun: Promise<void> | undefined;
 	private activeBackupRun: Promise<void> | undefined;
@@ -153,6 +155,7 @@ export class OutboxScheduler implements Scheduler {
 			this.cancel(this.operationalChecksTimer);
 			this.operationalChecksTimer = undefined;
 		}
+		this.cancelOperationalRetry();
 
 		const activeRun = this.activeRun;
 		const activeStyriaRun = this.activeStyriaRun;
@@ -341,6 +344,53 @@ export class OutboxScheduler implements Scheduler {
 		void run.catch(() => this.reportError(OPERATIONAL_CHECKS_ERROR_CODE));
 	}
 
+	private scheduleOperationalRetry(retryAt: Date): void {
+		if (!this.acceptingScheduledRuns || !this.options.operationalChecks) return;
+		if (!(retryAt instanceof Date) || !Number.isFinite(retryAt.getTime())) {
+			throw new Error('OPERATIONAL_CHECK_RETRY_INVALID');
+		}
+		const retryTimestamp = retryAt.getTime();
+		if (
+			this.operationalRetryTimer &&
+			this.operationalRetryAt !== undefined &&
+			this.operationalRetryAt <= retryTimestamp
+		) {
+			return;
+		}
+		this.cancelOperationalRetry();
+		const delayMs = Math.max(0, retryTimestamp - this.clock().getTime());
+		const handle = this.scheduleOperationalChecks(() => {
+			if (this.operationalRetryTimer !== handle) return;
+			this.operationalRetryTimer = undefined;
+			this.operationalRetryAt = undefined;
+			if (!this.acceptingScheduledRuns) return;
+			if (!this.operationalChecksCatchUpDue(this.clock())) return;
+			this.launchScheduledOperationalChecksRun();
+		}, delayMs);
+		this.operationalRetryTimer = handle;
+		this.operationalRetryAt = retryTimestamp;
+		handle.unref?.();
+	}
+
+	private cancelOperationalRetry(): void {
+		if (this.operationalRetryTimer) this.cancel(this.operationalRetryTimer);
+		this.operationalRetryTimer = undefined;
+		this.operationalRetryAt = undefined;
+	}
+
+	private retryAfterOperationalLease(now: Date): Date {
+		const row = this.options.database
+			.prepare('SELECT expires_at FROM job_leases WHERE name = ?')
+			.get(OPERATIONAL_CHECKS_JOB_NAME) as { expires_at: unknown } | undefined;
+		if (!row) return new Date(now.getTime() + 1);
+		if (typeof row.expires_at !== 'string') throw new Error('OPERATIONAL_CHECK_LEASE_INVALID');
+		const expiresAt = new Date(row.expires_at);
+		if (!Number.isFinite(expiresAt.getTime()) || expiresAt.toISOString() !== row.expires_at) {
+			throw new Error('OPERATIONAL_CHECK_LEASE_INVALID');
+		}
+		return expiresAt > now ? expiresAt : new Date(now.getTime() + 1);
+	}
+
 	private operationalChecksCatchUpDue(now: Date): boolean {
 		const cadence = new Date(
 			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 0, 0, 0)
@@ -362,25 +412,7 @@ export class OutboxScheduler implements Scheduler {
 				nextCadence.toISOString(),
 				now.toISOString()
 			);
-		if (completed !== undefined) return false;
-		const active = this.options.database
-			.prepare(
-				`SELECT 1 FROM job_runs jr
-				 JOIN job_leases jl ON jl.name = jr.name AND jl.owner_id = jr.owner_id
-				 WHERE jr.name = ?
-				 AND jr.started_at >= ? AND jr.started_at < ? AND jr.started_at <= ?
-				 AND jr.finished_at IS NULL AND jr.result IS NULL
-				 AND jl.expires_at > ?
-				 LIMIT 1`
-			)
-			.get(
-				OPERATIONAL_CHECKS_JOB_NAME,
-				cadence.toISOString(),
-				nextCadence.toISOString(),
-				now.toISOString(),
-				now.toISOString()
-			);
-		return active === undefined;
+		return completed === undefined;
 	}
 
 	private async executeRun(now: Date, signal: AbortSignal): Promise<void> {
@@ -499,6 +531,7 @@ export class OutboxScheduler implements Scheduler {
 				OPERATIONAL_CHECKS_LEASE_TTL_MS
 			)
 		) {
+			this.scheduleOperationalRetry(this.retryAfterOperationalLease(now));
 			return;
 		}
 
@@ -511,8 +544,22 @@ export class OutboxScheduler implements Scheduler {
 				)
 				.run(OPERATIONAL_CHECKS_JOB_NAME, this.options.ownerId, now.toISOString());
 			runId = Number(insert.lastInsertRowid);
-			await this.options.operationalChecks?.run(now, signal);
-			this.finishRun(runId, this.clock(), 'completed', null);
+			const result = await this.options.operationalChecks?.run(now, signal);
+			const retryAt = result?.retryAt ?? null;
+			if (retryAt !== null) {
+				if (
+					!(retryAt instanceof Date) ||
+					!Number.isFinite(retryAt.getTime()) ||
+					retryAt.getTime() <= now.getTime()
+				) {
+					throw new Error('OPERATIONAL_CHECK_RETRY_INVALID');
+				}
+				this.finishRun(runId, this.clock(), 'deferred', null);
+				this.scheduleOperationalRetry(retryAt);
+			} else {
+				this.finishRun(runId, this.clock(), 'completed', null);
+				this.cancelOperationalRetry();
+			}
 		} catch (error) {
 			if (runId !== undefined) {
 				this.finishRun(runId, this.clock(), 'failed', OPERATIONAL_CHECKS_ERROR_CODE);
@@ -534,7 +581,7 @@ export class OutboxScheduler implements Scheduler {
 	private finishRun(
 		runId: number,
 		finishedAt: Date,
-		result: 'completed' | 'failed',
+		result: 'completed' | 'deferred' | 'failed',
 		errorCode: string | null
 	): void {
 		this.options.database

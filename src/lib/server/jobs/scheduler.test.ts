@@ -15,7 +15,7 @@ import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
-import type { OperationalChecksJob } from './stale-orders.server';
+import { SqliteOperationalChecksJob, type OperationalChecksJob } from './stale-orders.server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import { SqliteLeaseRepository } from './leases.server';
@@ -1544,6 +1544,269 @@ describe('OutboxScheduler', () => {
 		expect(secondChecks.run).not.toHaveBeenCalled();
 		expect(secondTimers.handles(22 * 60 * 60_000)).toHaveLength(1);
 		await second.stop();
+	});
+
+	it.each(['orphan-lease', 'active-run'] as const)(
+		'retries a cold operational catch-up at durable lease expiry for an %s',
+		async (state) => {
+			let current = new Date('2026-07-17T05:00:00.000Z');
+			const expiresAt = new Date('2026-07-17T05:15:00.000Z');
+			if (state === 'active-run') {
+				database
+					.prepare(
+						`INSERT INTO job_runs (name, owner_id, started_at)
+						 VALUES ('operational-checks', 'prior-owner', ?)`
+					)
+					.run('2026-07-17T04:55:00.000Z');
+			}
+			database
+				.prepare(
+					`INSERT INTO job_leases (name, owner_id, expires_at)
+					 VALUES ('operational-checks', 'prior-owner', ?)`
+				)
+				.run(expiresAt.toISOString());
+			const timers = timerHarness();
+			const checks: OperationalChecksJob = {
+				run: vi.fn(async () => ({
+					pendingReview: 0,
+					reviewRequired: 0,
+					shippingUnsent: 0,
+					backupMissed: false,
+					diskLow: false,
+					sqliteNotReady: false
+				}))
+			};
+			const scheduler = new OutboxScheduler({
+				database,
+				leases: new SqliteLeaseRepository(database),
+				worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+				operationalChecks: checks,
+				enabled: true,
+				ownerId: `scheduler-retry-${state}`,
+				clock: () => current,
+				schedule: timers.schedule,
+				scheduleOperationalChecks: timers.schedule,
+				cancel: timers.cancel
+			});
+
+			scheduler.start();
+			await settleAsyncWork();
+			expect(checks.run).not.toHaveBeenCalled();
+			expect(timers.handles(15 * 60_000)).toHaveLength(1);
+
+			current = expiresAt;
+			timers.fire(15 * 60_000);
+			await vi.waitFor(() => expect(checks.run).toHaveBeenCalledOnce());
+			await settleAsyncWork();
+			expect(
+				database
+					.prepare(
+						`SELECT result FROM job_runs
+						 WHERE name = 'operational-checks' AND result = 'completed'`
+					)
+					.all()
+			).toEqual([{ result: 'completed' }]);
+			await scheduler.stop();
+		}
+	);
+
+	it('records an active backup check as deferred and completes without alert after backup recovery', async () => {
+		let current = new Date('2026-07-17T03:00:00.000Z');
+		const backupExpiresAt = new Date('2026-07-17T04:30:00.000Z');
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at)
+				 VALUES ('backup', 'backup-owner', ?)`
+			)
+			.run('2026-07-17T02:30:00.000Z');
+		database
+			.prepare(
+				`INSERT INTO job_leases (name, owner_id, expires_at)
+				 VALUES ('backup', 'backup-owner', ?)`
+			)
+			.run(backupExpiresAt.toISOString());
+		const timers = timerHarness();
+		const checks = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			readiness: async () => ({
+				ready: true,
+				checks: { configuration: 'ok', database: 'ok', migrations: 'ok', volume: 'ok', disk: 'ok' }
+			})
+		});
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks: checks,
+			enabled: true,
+			ownerId: 'scheduler-backup-recovers',
+			clock: () => current,
+			schedule: timers.schedule,
+			scheduleOperationalChecks: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		await vi.waitFor(() =>
+			expect(
+				database.prepare("SELECT result FROM job_runs WHERE name = 'operational-checks'").all()
+			).toEqual([{ result: 'deferred' }])
+		);
+		expect(timers.handles(90 * 60_000)).toHaveLength(1);
+		database
+			.prepare(
+				`UPDATE job_runs SET finished_at = ?, result = 'completed'
+				 WHERE name = 'backup' AND owner_id = 'backup-owner'`
+			)
+			.run('2026-07-17T03:30:00.000Z');
+		database.prepare("DELETE FROM job_leases WHERE name = 'backup'").run();
+
+		current = backupExpiresAt;
+		timers.fire(90 * 60_000);
+		await vi.waitFor(() =>
+			expect(
+				database.prepare("SELECT result FROM job_runs WHERE name = 'operational-checks'").all()
+			).toEqual([{ result: 'deferred' }, { result: 'completed' }])
+		);
+		expect(
+			database
+				.prepare(
+					"SELECT * FROM outbox_jobs WHERE kind = 'operational-alert' AND alert_code = 'BACKUP_MISSED'"
+				)
+				.all()
+		).toEqual([]);
+		await scheduler.stop();
+	});
+
+	it('alerts when a deferred active backup lease expires', async () => {
+		let current = new Date('2026-07-17T03:00:00.000Z');
+		const backupExpiresAt = new Date('2026-07-17T04:30:00.000Z');
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at)
+				 VALUES ('backup', 'abandoned-owner', ?)`
+			)
+			.run('2026-07-17T02:30:00.000Z');
+		database
+			.prepare(
+				`INSERT INTO job_leases (name, owner_id, expires_at)
+				 VALUES ('backup', 'abandoned-owner', ?)`
+			)
+			.run(backupExpiresAt.toISOString());
+		const timers = timerHarness();
+		const checks = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			readiness: async () => ({
+				ready: true,
+				checks: { configuration: 'ok', database: 'ok', migrations: 'ok', volume: 'ok', disk: 'ok' }
+			})
+		});
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks: checks,
+			enabled: true,
+			ownerId: 'scheduler-backup-abandoned',
+			clock: () => current,
+			schedule: timers.schedule,
+			scheduleOperationalChecks: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		await vi.waitFor(() => expect(timers.handles(90 * 60_000)).toHaveLength(1));
+		current = backupExpiresAt;
+		timers.fire(90 * 60_000);
+		await vi.waitFor(() =>
+			expect(
+				database
+					.prepare(
+						"SELECT alert_code FROM outbox_jobs WHERE kind = 'operational-alert' AND alert_code = 'BACKUP_MISSED'"
+					)
+					.all()
+			).toEqual([{ alert_code: 'BACKUP_MISSED' }])
+		);
+		await scheduler.stop();
+	});
+
+	it('recreates a deferred backup retry after process restart and cancels it on stop', async () => {
+		let current = new Date('2026-07-17T03:00:00.000Z');
+		const backupExpiresAt = new Date('2026-07-17T04:30:00.000Z');
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at)
+				 VALUES ('backup', 'restart-owner', ?)`
+			)
+			.run('2026-07-17T02:30:00.000Z');
+		database
+			.prepare(
+				`INSERT INTO job_leases (name, owner_id, expires_at)
+				 VALUES ('backup', 'restart-owner', ?)`
+			)
+			.run(backupExpiresAt.toISOString());
+		const createChecks = () =>
+			new SqliteOperationalChecksJob({
+				database,
+				alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+				readiness: async () => ({
+					ready: true,
+					checks: {
+						configuration: 'ok',
+						database: 'ok',
+						migrations: 'ok',
+						volume: 'ok',
+						disk: 'ok'
+					}
+				})
+			});
+		const firstTimers = timerHarness();
+		const first = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks: createChecks(),
+			enabled: true,
+			ownerId: 'scheduler-deferred-first',
+			clock: () => current,
+			schedule: firstTimers.schedule,
+			scheduleOperationalChecks: firstTimers.schedule,
+			cancel: firstTimers.cancel
+		});
+
+		first.start();
+		await vi.waitFor(() => expect(firstTimers.handles(90 * 60_000)).toHaveLength(1));
+		const firstRetry = firstTimers.handles(90 * 60_000)[0];
+		await first.stop();
+		expect(firstTimers.isCancelled(firstRetry)).toBe(true);
+
+		current = new Date('2026-07-17T03:15:00.000Z');
+		const secondTimers = timerHarness();
+		const second = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks: createChecks(),
+			enabled: true,
+			ownerId: 'scheduler-deferred-second',
+			clock: () => current,
+			schedule: secondTimers.schedule,
+			scheduleOperationalChecks: secondTimers.schedule,
+			cancel: secondTimers.cancel
+		});
+
+		second.start();
+		await vi.waitFor(() =>
+			expect(
+				database.prepare("SELECT result FROM job_runs WHERE name = 'operational-checks'").all()
+			).toEqual([{ result: 'deferred' }, { result: 'deferred' }])
+		);
+		expect(secondTimers.handles(75 * 60_000)).toHaveLength(1);
+		const secondRetry = secondTimers.handles(75 * 60_000)[0];
+		await second.stop();
+		expect(secondTimers.isCancelled(secondRetry)).toBe(true);
 	});
 
 	it('runs daily operational checks at 03:00 UTC under one lease and recalculates across rollover', async () => {

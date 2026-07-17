@@ -183,12 +183,46 @@ describe('daily operational checks', () => {
 			.prepare(`INSERT INTO job_leases (name, owner_id, expires_at) VALUES ('backup', ?, ?)`)
 			.run('active-owner', '2026-07-17T04:30:00.000Z');
 
-		await job.run(NOW);
+		const activeResult = await job.run(NOW);
 		expect(alertKeys()).not.toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+		expect(activeResult.retryAt).toEqual(new Date('2026-07-17T04:30:00.000Z'));
 
-		database.prepare("UPDATE job_leases SET expires_at = '2026-07-17T02:59:59.999Z'").run();
-		await job.run(NOW);
+		await job.run(new Date('2026-07-17T04:30:00.000Z'));
 		expect(alertKeys()).toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+	});
+
+	it('suppresses a deferred backup alert when the active run completes before lease expiry', async () => {
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			readiness: async () => ({
+				ready: true,
+				checks: { configuration: 'ok', database: 'ok', migrations: 'ok', volume: 'ok', disk: 'ok' }
+			})
+		});
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at)
+				 VALUES ('backup', 'active-owner', ?)`
+			)
+			.run('2026-07-17T02:30:00.000Z');
+		database
+			.prepare(`INSERT INTO job_leases (name, owner_id, expires_at) VALUES ('backup', ?, ?)`)
+			.run('active-owner', '2026-07-17T04:30:00.000Z');
+
+		const deferred = await job.run(NOW);
+		expect(deferred.retryAt).toEqual(new Date('2026-07-17T04:30:00.000Z'));
+		database
+			.prepare(
+				`UPDATE job_runs SET finished_at = ?, result = 'completed'
+				 WHERE name = 'backup' AND owner_id = 'active-owner'`
+			)
+			.run('2026-07-17T03:15:00.000Z');
+		database.prepare("DELETE FROM job_leases WHERE name = 'backup'").run();
+
+		const completed = await job.run(new Date('2026-07-17T04:30:00.000Z'));
+		expect(completed.retryAt).toBeNull();
+		expect(alertKeys()).not.toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
 	});
 
 	it('allows the explicit 30-minute backup grace before reporting a missing cadence', async () => {
