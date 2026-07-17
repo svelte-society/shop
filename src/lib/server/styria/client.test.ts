@@ -198,6 +198,25 @@ describe('Styria client failures', () => {
 		expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
 	});
 
+	it('forwards a caller abort into an active provider request', async () => {
+		let requestSignal: AbortSignal | null = null;
+		const fetch: typeof globalThis.fetch = (_input, init) =>
+			new Promise((_resolve, reject) => {
+				requestSignal = init?.signal as AbortSignal;
+				requestSignal.addEventListener('abort', () => reject(new Error('caller aborted')));
+			});
+		const client = createStyriaClient({ ...credentials, fetch });
+		const caller = new AbortController();
+
+		const result = client.get('1042', caller.signal).catch((error: unknown) => error);
+		caller.abort();
+
+		await expect(result).resolves.toEqual(
+			expect.objectContaining({ code: 'STYRIA_UNAVAILABLE', message: 'STYRIA_UNAVAILABLE' })
+		);
+		expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
+	});
+
 	it('keeps the timeout active while reading a success response body', async () => {
 		vi.useFakeTimers();
 		let requestSignal: AbortSignal | null = null;

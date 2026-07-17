@@ -33,15 +33,19 @@ function sessionFixture() {
 }
 
 class ContractStripeClient implements StripeFulfillmentClient {
-	readonly calls: Array<{ id: string; params: unknown }> = [];
+	readonly calls: Array<{ id: string; params: unknown; options: unknown }> = [];
 	failure: unknown;
 
 	constructor(readonly session: ReturnType<typeof sessionFixture>) {}
 
 	readonly checkout = {
 		sessions: {
-			retrieve: async (id: string, params?: unknown): Promise<unknown> => {
-				this.calls.push({ id, params: structuredClone(params) });
+			retrieve: async (id: string, params?: unknown, options?: unknown): Promise<unknown> => {
+				this.calls.push({
+					id,
+					params: structuredClone(params),
+					options: structuredClone(options)
+				});
 				if (this.failure !== undefined) throw this.failure;
 				return structuredClone(this.session);
 			}
@@ -80,7 +84,25 @@ describe('Stripe fulfillment details', () => {
 			},
 			email: 'ada@example.test'
 		});
-		expect(client.calls).toEqual([{ id: 'cs_test_fulfillment', params: { expand: ['customer'] } }]);
+		expect(client.calls).toEqual([
+			{ id: 'cs_test_fulfillment', params: { expand: ['customer'] }, options: undefined }
+		]);
+	});
+
+	it('uses a shutdown-safe five-second no-retry request when given a scheduler signal', async () => {
+		const client = new ContractStripeClient(sessionFixture());
+		const signal = new AbortController().signal;
+
+		await createStripeFulfillmentGateway(client).retrieveFulfillmentDetails(
+			'cs_test_fulfillment',
+			signal
+		);
+
+		expect(client.calls[0]).toEqual({
+			id: 'cs_test_fulfillment',
+			params: { expand: ['customer'] },
+			options: { maxNetworkRetries: 0, timeout: 5_000 }
+		});
 	});
 
 	it('normalizes absent optional company, address line two, and non-US state', async () => {

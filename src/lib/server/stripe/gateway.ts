@@ -53,5 +53,8 @@ export type FulfillmentDetails = {
 };
 
 export interface StripeFulfillmentGateway {
-	retrieveFulfillmentDetails(checkoutSessionId: string): Promise<FulfillmentDetails>;
+	retrieveFulfillmentDetails(
+		checkoutSessionId: string,
+		signal?: AbortSignal
+	): Promise<FulfillmentDetails>;
 }

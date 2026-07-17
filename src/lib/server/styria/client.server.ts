@@ -1,3 +1,4 @@
+import { nodeFetch } from '$lib/server/http/node-fetch.server';
 import type { StyriaGateway } from './gateway';
 import { StyriaError } from './gateway';
 import { signGet, signPost } from './signing';
@@ -196,13 +197,24 @@ class HttpStyriaClient implements StyriaGateway {
 			invalidRequest();
 		}
 		this.baseUrl = baseUrl;
-		this.fetch = options.fetch ?? globalThis.fetch;
+		this.fetch = options.fetch ?? nodeFetch;
 		this.timeoutMs = options.timeoutMs ?? STYRIA_DEFAULT_TIMEOUT_MS;
 	}
 
-	private async requestJson(url: string, init: RequestInit): Promise<unknown> {
+	private async requestJson(
+		url: string,
+		init: RequestInit,
+		signal?: AbortSignal
+	): Promise<unknown> {
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+		let timedOut = false;
+		const abortFromCaller = (): void => controller.abort(signal?.reason);
+		if (signal?.aborted) abortFromCaller();
+		else signal?.addEventListener('abort', abortFromCaller, { once: true });
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, this.timeoutMs);
 		timeout.unref?.();
 
 		try {
@@ -210,19 +222,18 @@ class HttpStyriaClient implements StyriaGateway {
 			try {
 				response = await this.fetch(url, { ...init, signal: controller.signal });
 			} catch {
-				throw new StyriaError(controller.signal.aborted ? 'STYRIA_TIMEOUT' : 'STYRIA_UNAVAILABLE');
+				throw new StyriaError(timedOut ? 'STYRIA_TIMEOUT' : 'STYRIA_UNAVAILABLE');
 			}
 			if (!response.ok) throw httpError(response.status);
 
 			try {
 				return await response.json();
 			} catch {
-				throw new StyriaError(
-					controller.signal.aborted ? 'STYRIA_TIMEOUT' : 'STYRIA_RESPONSE_INVALID'
-				);
+				throw new StyriaError(timedOut ? 'STYRIA_TIMEOUT' : 'STYRIA_RESPONSE_INVALID');
 			}
 		} finally {
 			clearTimeout(timeout);
+			signal?.removeEventListener('abort', abortFromCaller);
 		}
 	}
 
@@ -240,7 +251,11 @@ class HttpStyriaClient implements StyriaGateway {
 		)}`;
 	}
 
-	async searchByExternalId(externalId: string, createdAfter: Date): Promise<StyriaOrder[]> {
+	async searchByExternalId(
+		externalId: string,
+		createdAfter: Date,
+		signal?: AbortSignal
+	): Promise<StyriaOrder[]> {
 		if (
 			!isExactString(externalId, 200) ||
 			!(createdAfter instanceof Date) ||
@@ -258,7 +273,8 @@ class HttpStyriaClient implements StyriaGateway {
 					limit: '250',
 					page: String(page)
 				}),
-				{ method: 'GET' }
+				{ method: 'GET' },
+				signal
 			);
 			const orders = normalizeOrderList(payload);
 			if (orders === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
@@ -269,7 +285,7 @@ class HttpStyriaClient implements StyriaGateway {
 		throw new StyriaError('STYRIA_RESPONSE_INVALID');
 	}
 
-	async create(payload: StyriaOrderPayload): Promise<StyriaOrder> {
+	async create(payload: StyriaOrderPayload, signal?: AbortSignal): Promise<StyriaOrder> {
 		let body: string;
 		try {
 			body = JSON.stringify(payload);
@@ -286,18 +302,20 @@ class HttpStyriaClient implements StyriaGateway {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body
-			}
+			},
+			signal
 		);
 		const order = normalizeOrder(response);
 		if (order === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
 		return order;
 	}
 
-	async get(orderId: string): Promise<StyriaOrder> {
+	async get(orderId: string, signal?: AbortSignal): Promise<StyriaOrder> {
 		if (!isExactString(orderId, 200)) invalidRequest();
 		const response = await this.requestJson(
 			this.signedGetUrl('/api/order.php', { format: 'json', id: orderId }),
-			{ method: 'GET' }
+			{ method: 'GET' },
+			signal
 		);
 		const order = normalizeOrder(response);
 		if (order === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');

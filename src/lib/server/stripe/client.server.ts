@@ -5,6 +5,7 @@ import type { FulfillmentDetails, StripeFulfillmentGateway } from './gateway';
 import type { StripeOrderClient } from './paid-checkout';
 
 const STRIPE_TIMEOUT_MS = 10_000;
+export const STRIPE_SCHEDULER_TIMEOUT_MS = 5_000;
 const CHECKOUT_SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]+$/;
 
 type UnknownRecord = Record<string, unknown>;
@@ -14,7 +15,8 @@ export type StripeFulfillmentClient = {
 		sessions: {
 			retrieve(
 				checkoutSessionId: string,
-				params?: Stripe.Checkout.SessionRetrieveParams
+				params?: Stripe.Checkout.SessionRetrieveParams,
+				options?: Stripe.RequestOptions
 			): Promise<unknown>;
 		};
 	};
@@ -127,21 +129,28 @@ export function createStripeFulfillmentGateway(
 	client: StripeFulfillmentClient
 ): StripeFulfillmentGateway {
 	return {
-		async retrieveFulfillmentDetails(checkoutSessionId: string): Promise<FulfillmentDetails> {
+		async retrieveFulfillmentDetails(
+			checkoutSessionId: string,
+			signal?: AbortSignal
+		): Promise<FulfillmentDetails> {
 			if (
 				!isExactString(checkoutSessionId, 200) ||
 				!CHECKOUT_SESSION_ID_PATTERN.test(checkoutSessionId)
 			) {
 				fail('STRIPE_FULFILLMENT_SESSION_INVALID');
 			}
+			if (signal?.aborted) fail('STRIPE_FULFILLMENT_RETRIEVAL_FAILED');
 			let session: unknown;
 			try {
-				session = await client.checkout.sessions.retrieve(checkoutSessionId, {
-					expand: ['customer']
-				});
+				session = await client.checkout.sessions.retrieve(
+					checkoutSessionId,
+					{ expand: ['customer'] },
+					signal ? { maxNetworkRetries: 0, timeout: STRIPE_SCHEDULER_TIMEOUT_MS } : undefined
+				);
 			} catch {
 				fail('STRIPE_FULFILLMENT_RETRIEVAL_FAILED');
 			}
+			if (signal?.aborted) fail('STRIPE_FULFILLMENT_RETRIEVAL_FAILED');
 			return normalizeFulfillmentDetails(checkoutSessionId, session);
 		}
 	};

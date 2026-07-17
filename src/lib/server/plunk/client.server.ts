@@ -1,3 +1,4 @@
+import { nodeFetch } from '$lib/server/http/node-fetch.server';
 import type { PlunkGateway, PlunkSendInput } from './gateway';
 import { PlunkError } from './gateway';
 
@@ -44,13 +45,20 @@ class HttpPlunkClient implements PlunkGateway {
 
 	constructor(private readonly options: PlunkClientOptions) {
 		this.endpoint = `${(options.baseUrl ?? PLUNK_DEFAULT_BASE_URL).replace(/\/+$/, '')}/v1/send`;
-		this.fetch = options.fetch ?? globalThis.fetch;
+		this.fetch = options.fetch ?? nodeFetch;
 		this.timeoutMs = options.timeoutMs ?? PLUNK_DEFAULT_TIMEOUT_MS;
 	}
 
-	async send(input: PlunkSendInput): Promise<{ deliveryId: string }> {
+	async send(input: PlunkSendInput, signal?: AbortSignal): Promise<{ deliveryId: string }> {
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+		let timedOut = false;
+		const abortFromCaller = (): void => controller.abort(signal?.reason);
+		if (signal?.aborted) abortFromCaller();
+		else signal?.addEventListener('abort', abortFromCaller, { once: true });
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, this.timeoutMs);
 		timeout.unref?.();
 
 		try {
@@ -72,7 +80,7 @@ class HttpPlunkClient implements PlunkGateway {
 					signal: controller.signal
 				});
 			} catch {
-				throw new PlunkError(controller.signal.aborted ? 'PLUNK_TIMEOUT' : 'PLUNK_UNAVAILABLE');
+				throw new PlunkError(timedOut ? 'PLUNK_TIMEOUT' : 'PLUNK_UNAVAILABLE');
 			}
 
 			if (!response.ok) throw httpError(response.status);
@@ -81,15 +89,14 @@ class HttpPlunkClient implements PlunkGateway {
 			try {
 				payload = await response.json();
 			} catch {
-				throw new PlunkError(
-					controller.signal.aborted ? 'PLUNK_TIMEOUT' : 'PLUNK_RESPONSE_INVALID'
-				);
+				throw new PlunkError(timedOut ? 'PLUNK_TIMEOUT' : 'PLUNK_RESPONSE_INVALID');
 			}
 
 			if (!isSendResponse(payload)) throw new PlunkError('PLUNK_RESPONSE_INVALID');
 			return { deliveryId: payload.data.emails[0].email };
 		} finally {
 			clearTimeout(timeout);
+			signal?.removeEventListener('abort', abortFromCaller);
 		}
 	}
 }

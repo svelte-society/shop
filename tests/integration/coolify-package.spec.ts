@@ -68,7 +68,7 @@ describe('Coolify production package', () => {
 		for (const token of [
 			'--env "DATABASE_BOOTSTRAP=$bootstrap"',
 			'start_container "$BOOTSTRAP_CONTAINER" "$PRIMARY_VOLUME" true true',
-			'start_container "$NORMAL_CONTAINER" "$PRIMARY_VOLUME" false true',
+			'start_container "$NORMAL_CONTAINER" "$PRIMARY_VOLUME" false false',
 			'/health/live',
 			'/health/ready',
 			'10001:10001',
@@ -78,6 +78,15 @@ describe('Coolify production package', () => {
 			'content-security-policy',
 			'SELECT COUNT(*) AS count FROM orders',
 			'docker stop'
+		]) {
+			expect(script).toContain(token);
+		}
+		for (const token of [
+			'SHOP_BUILD_SECRET_CANARY',
+			'docker history --no-trunc',
+			'BLOCKED_PROVIDER_ACCEPTED',
+			'--filter "volume=$PRIMARY_VOLUME"',
+			'docker top'
 		]) {
 			expect(script).toContain(token);
 		}
@@ -106,5 +115,36 @@ describe('Coolify production package', () => {
 		}
 		expect(runbook).toContain('nonce');
 		expect(runbook).not.toMatch(/middlewares\.[^.]+\.headers\.contentSecurityPolicy/u);
+	});
+
+	it('documents runtime-only secrets and a stop-first immutable-image deployment', async () => {
+		const runbook = await text('docs/operations/coolify.md');
+		for (const name of [
+			'STRIPE_SECRET_KEY',
+			'STRIPE_WEBHOOK_SECRET',
+			'STYRIA_APP_ID',
+			'STYRIA_SECRET_KEY',
+			'PLUNK_SECRET_KEY',
+			'MCP_BEARER_TOKEN',
+			'S3_ACCESS_KEY_ID',
+			'S3_SECRET_ACCESS_KEY',
+			'BACKUP_ENCRYPTION_KEY_BASE64'
+		]) {
+			expect(runbook).toMatch(new RegExp(`\\| ${name} \\| Secret \\| OFF \\| ON \\|`));
+		}
+		for (const token of [
+			'Build Secrets',
+			'BuildKit',
+			'automatic deployments',
+			'webhook deployments',
+			'immutable image',
+			'Advanced',
+			'Operations',
+			'45 seconds',
+			'docker ps --filter "volume=$VOLUME_NAME"',
+			'exactly one'
+		]) {
+			expect(runbook).toContain(token);
+		}
 	});
 });

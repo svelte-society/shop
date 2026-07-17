@@ -749,7 +749,7 @@ describe('OutboxScheduler', () => {
 		await scheduler.runOutboxOnce();
 
 		expect(worker.drain).toHaveBeenCalledOnce();
-		expect(worker.drain).toHaveBeenCalledWith(initialNow, 3);
+		expect(worker.drain).toHaveBeenCalledWith(initialNow, 3, expect.any(AbortSignal));
 		expect(timers.handles(60_000)).toHaveLength(1);
 		expect(timers.handles(60_000)[0].unref).toHaveBeenCalledOnce();
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
@@ -1045,6 +1045,52 @@ describe('OutboxScheduler', () => {
 		timers.fireCaptured();
 		await Promise.resolve();
 		expect(worker.drain).toHaveBeenCalledOnce();
+	});
+
+	it('atomically rejects new runs, aborts active provider work, and waits for settlement', async () => {
+		const timers = timerHarness();
+		let receivedSignal: AbortSignal | undefined;
+		let providerSettled = false;
+		const worker: OutboxWorker = {
+			drain: vi.fn(
+				(_now: Date, _limit?: number, signal?: AbortSignal) =>
+					new Promise<{ completed: number; rescheduled: number }>((resolve) => {
+						receivedSignal = signal;
+						signal?.addEventListener(
+							'abort',
+							() => {
+								providerSettled = true;
+								resolve({ completed: 0, rescheduled: 1 });
+							},
+							{ once: true }
+						);
+					})
+			)
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			enabled: true,
+			ownerId: 'scheduler-aborts',
+			clock: () => initialNow,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+		const stopping = scheduler.stop();
+		await expect(scheduler.runOutboxOnce()).resolves.toBeUndefined();
+
+		expect(receivedSignal?.aborted).toBe(true);
+		await stopping;
+		expect(providerSettled).toBe(true);
+		expect(worker.drain).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(database.prepare('SELECT result FROM job_runs').all()).toEqual([
+			{ result: 'completed' }
+		]);
 	});
 
 	it('runs Styria sync immediately and hourly under a separate 55-minute lease', async () => {

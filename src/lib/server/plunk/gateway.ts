@@ -7,7 +7,7 @@ export type PlunkSendInput = {
 };
 
 export interface PlunkGateway {
-	send(input: PlunkSendInput): Promise<{ deliveryId: string }>;
+	send(input: PlunkSendInput, signal?: AbortSignal): Promise<{ deliveryId: string }>;
 }
 
 export type PlunkErrorCode =

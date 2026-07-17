@@ -1,9 +1,13 @@
 import type { StyriaOrder, StyriaOrderPayload } from './types';
 
 export interface StyriaGateway {
-	searchByExternalId(externalId: string, createdAfter: Date): Promise<StyriaOrder[]>;
-	create(payload: StyriaOrderPayload): Promise<StyriaOrder>;
-	get(orderId: string): Promise<StyriaOrder>;
+	searchByExternalId(
+		externalId: string,
+		createdAfter: Date,
+		signal?: AbortSignal
+	): Promise<StyriaOrder[]>;
+	create(payload: StyriaOrderPayload, signal?: AbortSignal): Promise<StyriaOrder>;
+	get(orderId: string, signal?: AbortSignal): Promise<StyriaOrder>;
 }
 
 export type StyriaErrorCode =

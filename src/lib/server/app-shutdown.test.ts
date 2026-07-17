@@ -78,4 +78,33 @@ describe('application shutdown', () => {
 			'database_closed'
 		]);
 	});
+
+	it('keeps SQLite open when scheduler settlement cannot be proven', async () => {
+		const closeDatabase = vi.fn();
+		const scheduler = {
+			start: vi.fn(),
+			stop: vi.fn(async () => {
+				throw new Error('scheduler settlement failed');
+			}),
+			runOutboxOnce: vi.fn(async () => undefined),
+			runStyriaSyncOnce: vi.fn(async () => undefined)
+		};
+		const application = createApplicationLifecycle({
+			migrationsDirectory: 'migrations',
+			openDatabase: vi.fn(() => ({ open: true }) as never),
+			migrate: vi.fn(),
+			closeDatabase,
+			checkReadiness: vi.fn(async () => ({ ready: true })),
+			createScheduler: vi.fn(() => scheduler)
+		});
+		await application.start({
+			environment: { DATABASE_PATH: '/data/shop.sqlite', SCHEDULER_ENABLED: 'true' },
+			building: false,
+			test: false
+		});
+
+		await expect(application.stop()).rejects.toThrow('scheduler settlement failed');
+		expect(closeDatabase).not.toHaveBeenCalled();
+		expect(application.current()).not.toBeNull();
+	});
 });

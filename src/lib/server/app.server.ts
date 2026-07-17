@@ -358,21 +358,18 @@ export function createApplicationLifecycle(
 				if (!runtime) return;
 				const current = runtime;
 				const schedulerActive = current.scheduler !== null;
+				await current.scheduler?.stop();
 				try {
-					await current.scheduler?.stop();
-					try {
-						reportShutdown('scheduler_stopped', { schedulerActive });
-					} catch {
-						// Observability must not block shutdown.
-					}
-				} finally {
-					close();
-					runtime = null;
-					try {
-						reportShutdown('database_closed', { schedulerActive });
-					} catch {
-						// Observability must not block shutdown.
-					}
+					reportShutdown('scheduler_stopped', { schedulerActive });
+				} catch {
+					// Observability must not block shutdown.
+				}
+				close();
+				runtime = null;
+				try {
+					reportShutdown('database_closed', { schedulerActive });
+				} catch {
+					// Observability must not block shutdown.
 				}
 			})();
 			const trackedStop = operation.finally(() => {

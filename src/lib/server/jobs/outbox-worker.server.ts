@@ -13,7 +13,11 @@ const DEFAULT_BATCH_LIMIT = 25;
 const PAID_ORDER_ALERT_SUBJECT = 'Svelte Society Shop: paid order awaiting review';
 
 export interface OutboxWorker {
-	drain(now: Date, limit?: number): Promise<{ completed: number; rescheduled: number }>;
+	drain(
+		now: Date,
+		limit?: number,
+		signal?: AbortSignal
+	): Promise<{ completed: number; rescheduled: number }>;
 }
 
 export type PaidOrderAlertEmailConfig = {
@@ -126,6 +130,11 @@ function shippingReference(job: OutboxJob, trackingNumber: string) {
 	};
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error ? signal.reason : new Error('OUTBOX_DRAIN_ABORTED');
+}
+
 function paidOrderAlertHtml(order: PaidOrderAlert): string {
 	return (
 		`<p>Internal order ID: ${order.id}</p>` +
@@ -141,16 +150,19 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 
 	async drain(
 		now: Date,
-		limit = DEFAULT_BATCH_LIMIT
+		limit = DEFAULT_BATCH_LIMIT,
+		signal?: AbortSignal
 	): Promise<{ completed: number; rescheduled: number }> {
+		throwIfAborted(signal);
 		const jobs = this.dependencies.outbox.claimDue(now, limit);
 		const settlements = await Promise.allSettled(
 			jobs.map(async (job): Promise<'completed' | 'rescheduled'> => {
 				try {
+					throwIfAborted(signal);
 					if (job.kind === 'shipping-email') {
-						await this.sendShipping(job, now);
+						await this.sendShipping(job, now, signal);
 					} else {
-						await this.sendPaidOrderAlert(job, now);
+						await this.sendPaidOrderAlert(job, now, signal);
 					}
 					return 'completed';
 				} catch (error) {
@@ -184,19 +196,22 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 		};
 	}
 
-	private async sendPaidOrderAlert(job: OutboxJob, now: Date): Promise<void> {
+	private async sendPaidOrderAlert(job: OutboxJob, now: Date, signal?: AbortSignal): Promise<void> {
 		const order = loadPaidOrderAlert(this.dependencies.database, job);
-		await this.dependencies.plunk.send({
+		const message = {
 			to: this.dependencies.alertEmail.to,
 			from: this.dependencies.alertEmail.from,
 			replyTo: this.dependencies.alertEmail.replyTo,
 			subject: PAID_ORDER_ALERT_SUBJECT,
 			html: paidOrderAlertHtml(order)
-		});
+		};
+		if (signal) await this.dependencies.plunk.send(message, signal);
+		else await this.dependencies.plunk.send(message);
+		throwIfAborted(signal);
 		this.dependencies.outbox.complete(job.id, now);
 	}
 
-	private async sendShipping(job: OutboxJob, now: Date): Promise<void> {
+	private async sendShipping(job: OutboxJob, now: Date, signal?: AbortSignal): Promise<void> {
 		const shipping = this.dependencies.shipping;
 		if (!shipping) throw new OutboxWorkerError('SHIPPING_EMAIL_SERVICE_UNAVAILABLE');
 		if (job.orderId === null) throw new OutboxWorkerError('SHIPPING_EMAIL_JOB_INVALID');
@@ -208,13 +223,20 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 		}
 		// Stripe remains the source of truth. Retrieve the current address object only at send time,
 		// use its email, and discard the rest without persisting it.
-		const details = await shipping.stripe.retrieveFulfillmentDetails(order.checkoutSessionId);
-		const delivery = await shipping.sender.send({
+		const details = signal
+			? await shipping.stripe.retrieveFulfillmentDetails(order.checkoutSessionId, signal)
+			: await shipping.stripe.retrieveFulfillmentDetails(order.checkoutSessionId);
+		throwIfAborted(signal);
+		const message = {
 			recipientEmail: details.email,
 			productSummary: order.productSummary,
 			trackingNumber: order.trackingNumber,
 			supportEmail: shipping.supportEmail
-		});
+		};
+		const delivery = signal
+			? await shipping.sender.send(message, signal)
+			: await shipping.sender.send(message);
+		throwIfAborted(signal);
 		this.dependencies.outbox.completeEmailDelivery(reference, delivery.deliveryId, now, job.id);
 	}
 }

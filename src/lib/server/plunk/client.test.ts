@@ -147,6 +147,25 @@ describe('createPlunkClient', () => {
 		expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
 	});
 
+	it('forwards a caller abort into an active provider request', async () => {
+		let requestSignal: AbortSignal | null = null;
+		const fetch: typeof globalThis.fetch = (_input, init) =>
+			new Promise((_resolve, reject) => {
+				requestSignal = init?.signal as AbortSignal;
+				requestSignal.addEventListener('abort', () => reject(new Error('caller aborted')));
+			});
+		const client = createPlunkClient({ secretKey: 'sk_test_secret', fetch });
+		const caller = new AbortController();
+
+		const result = client.send(sendInput, caller.signal).catch((error: unknown) => error);
+		caller.abort();
+
+		await expect(result).resolves.toEqual(
+			expect.objectContaining({ code: 'PLUNK_UNAVAILABLE', message: 'PLUNK_UNAVAILABLE' })
+		);
+		expect((requestSignal as AbortSignal | null)?.aborted).toBe(true);
+	});
+
 	it('enforces the exact ten-second default used by the scheduler drain bound', async () => {
 		vi.useFakeTimers();
 		let requestSignal: AbortSignal | null = null;

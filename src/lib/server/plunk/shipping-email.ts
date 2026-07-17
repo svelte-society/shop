@@ -15,7 +15,7 @@ export type ShippingEmailInput = {
 };
 
 export interface ShippingEmailSender {
-	send(input: ShippingEmailInput): Promise<{ deliveryId: string }>;
+	send(input: ShippingEmailInput, signal?: AbortSignal): Promise<{ deliveryId: string }>;
 }
 
 export type ShippingOrderDetails = {
@@ -103,8 +103,9 @@ export function createShippingEmailSender(
 	from: { name: string; email: string }
 ): ShippingEmailSender {
 	return {
-		send(input) {
-			return plunk.send(shippingEmailMessage(input, from));
+		send(input, signal) {
+			const message = shippingEmailMessage(input, from);
+			return signal ? plunk.send(message, signal) : plunk.send(message);
 		}
 	};
 }

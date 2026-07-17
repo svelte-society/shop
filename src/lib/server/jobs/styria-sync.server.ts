@@ -11,7 +11,10 @@ import { StyriaError, type StyriaGateway } from '$lib/server/styria/gateway';
 const SYNC_LIMIT = 100;
 
 export interface StyriaSyncJob {
-	run(now?: Date): Promise<{ checked: number; updated: number; shippingQueued: number }>;
+	run(
+		now?: Date,
+		signal?: AbortSignal
+	): Promise<{ checked: number; updated: number; shippingQueued: number }>;
 }
 
 export type StyriaStatusResult = {
@@ -49,6 +52,11 @@ function isTerminal(status: unknown): boolean {
 	return status === 'shipped' || status === 'cancelled';
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	throw signal.reason instanceof Error ? signal.reason : new Error('STYRIA_SYNC_ABORTED');
+}
+
 export class SqliteStyriaSyncJob implements StyriaSyncJob {
 	private readonly clock: () => Date;
 
@@ -57,9 +65,11 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 	}
 
 	async run(
-		now = this.clock()
+		now = this.clock(),
+		signal?: AbortSignal
 	): Promise<{ checked: number; updated: number; shippingQueued: number }> {
 		if (!(now instanceof Date) || !Number.isFinite(now.getTime())) fail('STYRIA_SYNC_TIME_INVALID');
+		throwIfAborted(signal);
 		const candidates = this.dependencies.database
 			.prepare(
 				`SELECT o.id, o.fulfillment_status, o.tracking_number
@@ -85,6 +95,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		let shippingQueued = 0;
 
 		for (const candidate of candidates) {
+			throwIfAborted(signal);
 			if (
 				!exactString(candidate.id) ||
 				!exactString(candidate.fulfillment_status) ||
@@ -99,10 +110,11 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 				continue;
 			}
 			try {
-				const result = await this.check(candidate.id, now);
+				const result = await this.check(candidate.id, now, signal);
 				if (result.updated) updated += 1;
 				if (result.shippingQueued) shippingQueued += 1;
 			} catch (error) {
+				throwIfAborted(signal);
 				// Provider failures retain fulfillment state; a later fair rotation tries again.
 				if (error instanceof StyriaError) {
 					if (this.recordHandled(candidate.id, candidate.tracking_number, now)) {
@@ -117,11 +129,17 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		return { checked: candidates.length, updated, shippingQueued };
 	}
 
-	async check(orderId: string, now = this.clock()): Promise<StyriaStatusResult> {
+	async check(
+		orderId: string,
+		now = this.clock(),
+		signal?: AbortSignal
+	): Promise<StyriaStatusResult> {
+		throwIfAborted(signal);
 		const before = this.dependencies.fulfillment.inspect(orderId);
 		if (!before) fail('ORDER_NOT_FOUND');
 		if (before.styriaOrderId === null) fail('STYRIA_ORDER_NOT_RECORDED');
-		const provider = await this.dependencies.styria.get(before.styriaOrderId);
+		const provider = await this.dependencies.styria.get(before.styriaOrderId, signal);
+		throwIfAborted(signal);
 		if (provider.id !== before.styriaOrderId) throw new StyriaError('STYRIA_RESPONSE_INVALID');
 		const update = {
 			status: provider.status,
@@ -137,6 +155,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 			update.deleted;
 		let shippingQueued = false;
 
+		throwIfAborted(signal);
 		const apply = this.dependencies.database.transaction(() => {
 			if (changed) this.dependencies.fulfillment.applyStyriaStatus(orderId, update, now);
 			if (trackingNumber !== null) {

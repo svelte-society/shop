@@ -2,22 +2,30 @@
 
 This service runs as one adapter-node process and one Coolify replica. SQLite is
 the fulfillment system of record, so two application processes must never share
-the volume. Deploy with the Dockerfile build pack and keep rolling/multi-replica
-deployment disabled.
+the volume. Coolify application deployments normally use a rolling overlap when
+health checks pass; there is no rolling-update toggle assumed by this runbook.
+Production therefore uses the stop-first immutable-image procedure below.
 
 The relevant current Coolify references are the official guides for the
 [Dockerfile build pack](https://coolify.io/docs/applications/build-packs/dockerfile),
+[environment variables](https://coolify.io/docs/knowledge-base/environment-variables),
 [persistent storage](https://coolify.io/docs/knowledge-base/persistent-storage),
 [health checks](https://coolify.io/docs/knowledge-base/health-checks), and
+[rolling updates](https://coolify.io/docs/knowledge-base/rolling-updates), and
 [Traefik custom middlewares](https://coolify.io/docs/knowledge-base/proxy/traefik/custom-middlewares).
 
 ## Resource settings
 
-- Source: the shop repository and release branch, with `/` as the base directory.
-- Build pack: `Dockerfile`.
+- Build recipe: the reviewed repository `Dockerfile`, built and published by the
+  release pipeline before the production outage.
+- Production resource type: `Docker Image`, pinned to the reviewed immutable tag
+  and recorded registry digest.
 - Domain: `https://shop.sveltesociety.dev` with Coolify-managed HTTPS.
 - Container port: `3000`. Do not publish it directly on the host.
 - Replicas: exactly `1`; do not use a second worker or process manager.
+- In **Advanced → Operations**, set **Stop Grace Period** to **45 seconds**.
+  Adapter-node has `SHUTDOWN_TIMEOUT=30`, so Coolify leaves 15 seconds of
+  platform headroom after the application deadline.
 - Persistent storage: one named volume with destination path `/data`.
 - Container health: the image healthcheck calls `GET /health/live`. Coolify gives
   a Dockerfile healthcheck precedence over a UI healthcheck.
@@ -40,9 +48,43 @@ test ! -w /app
 
 ## Environment
 
-Store secret values as Coolify secrets. Do not set secrets as Docker build
-arguments or include them in deployment commands. Keep `.env.example` as the
+Store secret values as locked Coolify secrets. Coolify enables both Build
+Variable and Runtime Variable for new values by default, so explicitly change
+every row below to runtime-only in Normal view. Keep `.env.example` as the
 authoritative name inventory.
+
+| Name | Storage | Build Variable | Runtime Variable | Purpose |
+| --- | --- | --- | --- | --- |
+| STRIPE_SECRET_KEY | Secret | OFF | ON | Stripe server API |
+| STRIPE_WEBHOOK_SECRET | Secret | OFF | ON | Stripe webhook verification |
+| STYRIA_APP_ID | Secret | OFF | ON | Styria API identity |
+| STYRIA_SECRET_KEY | Secret | OFF | ON | Styria request signing |
+| PLUNK_SECRET_KEY | Secret | OFF | ON | Plunk email API |
+| MCP_BEARER_TOKEN | Secret | OFF | ON | Internal MCP bearer authentication |
+| S3_ACCESS_KEY_ID | Secret | OFF | ON | Future backup storage |
+| S3_SECRET_ACCESS_KEY | Secret | OFF | ON | Future backup storage |
+| BACKUP_ENCRYPTION_KEY_BASE64 | Secret | OFF | ON | Future backup encryption |
+
+Never pass a real secret with `--build-arg`; Coolify documents that build args
+can be recorded in image metadata. This application does not need secrets while
+building. If a future build genuinely needs one, enable Coolify **Build Secrets**
+with Docker **BuildKit**, consume the ephemeral secret mount, and keep Runtime
+Variable off unless the running application also needs it. Do not fall back to
+build args if BuildKit is unavailable.
+
+Before publishing an image, run the non-secret canary check below. The same
+check is automated by `tests/integration/docker-health.sh`:
+
+```sh
+IMAGE=shop-build-canary:test
+SHOP_BUILD_SECRET_CANARY=not-a-secret-build-canary-value
+docker build --build-arg SHOP_BUILD_SECRET_CANARY="$SHOP_BUILD_SECRET_CANARY" -t "$IMAGE" .
+if { docker image inspect "$IMAGE"; docker history --no-trunc "$IMAGE"; } |
+  grep -F "$SHOP_BUILD_SECRET_CANARY"; then
+  echo 'Build canary leaked into image config or history' >&2
+  exit 1
+fi
+```
 
 ### Runtime, routing, and feature flags
 
@@ -227,20 +269,52 @@ placeholder above.
 
 ## Deploy and rollback
 
-1. Run automated checks and take the required encrypted off-host backup before
-   a migration-bearing release.
-2. Build the image before stopping the live process. Keep feature flags off for
-   the first production deployment.
-3. Stop the existing container before attaching `/data` to the replacement.
-   Do not use a rolling overlap: even with one configured replica, overlap would
-   briefly create two writers.
-4. Deploy with `DATABASE_BOOTSTRAP=false`. Require container health and
-   `/health/ready = 200`, then run the HTTPS/header checks.
-5. Enable features only in the controlled launch order.
+Coolify's documented rolling update starts the replacement before stopping the
+old container. That is unsafe for this SQLite volume. Use this operator-owned
+workflow for every production deployment:
+
+1. Disable **Auto Deploy** in **Advanced**. Disable any Git-provider or manually
+   configured webhook deployments as well, and verify the deployment queue is
+   empty. Keep automatic deployments and webhook deployments off for this resource.
+2. From the reviewed commit, run all checks, build the Dockerfile, publish an
+   immutable image such as `ghcr.io/svelte-society/shop:<full-git-sha>`, record
+   its registry digest, and complete any required encrypted off-host backup.
+   Do this before the outage window. Never deploy a mutable `latest` tag.
+3. Configure/select that exact reviewed immutable image in the production
+   Docker Image resource, but do not start a deployment yet. Keep exactly one
+   replica and `DATABASE_BOOTSTRAP=false`.
+4. Use Coolify **Stop** on the current resource. On the Docker host, set the
+   actual named volume and verify no running or stopped container still owns it:
+
+   ```sh
+   VOLUME_NAME=<coolify-generated-volume-name>
+   docker ps --filter "volume=$VOLUME_NAME" --format '{{.ID}} {{.Names}}'
+   docker ps -a --filter "volume=$VOLUME_NAME" --format '{{.ID}} {{.Names}} {{.Status}}'
+   test -z "$(docker ps -aq --filter "volume=$VOLUME_NAME")"
+   ```
+
+   Both listings must be empty. If a stopped old container remains, confirm its
+   Coolify resource labels and remove that exact old container before proceeding.
+   Do not start the replacement while any old container or process mounts `/data`.
+5. Deploy the recorded digest/tag. Require container health and
+   `/health/ready = 200`, then prove exactly one running container with exactly
+   one application process mounts the volume:
+
+   ```sh
+   ids="$(docker ps -q --filter "volume=$VOLUME_NAME")"
+   test "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1
+   container_id="$ids"
+   docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$container_id"
+   test "$(docker top "$container_id" -eo pid,comm | awk 'NR > 1 { n++ } END { print n + 0 }')" -eq 1
+   ```
+
+   Run the public HTTPS/header checks and only then reopen traffic or enable
+   features in the controlled launch order.
 
 For rollback, turn checkout off, stop the current container, select the reviewed
-previous image, and attach the same `/data` volume with
-`DATABASE_BOOTSTRAP=false`. Confirm the older image supports the applied schema,
+previous immutable image, repeat the zero-container volume check, and attach the
+same `/data` volume with `DATABASE_BOOTSTRAP=false`. Confirm the older image
+supports the applied schema,
 then require readiness and the HTTPS checks. If it does not support the current
 schema, follow the reviewed restore procedure instead of starting it. A missing
 database is a restore/volume incident; bootstrap is not rollback recovery.
