@@ -814,6 +814,9 @@ describe('support-note mutation', () => {
 		'ada@example.test',
 		'Call +46 70 123 45 67',
 		'Send to Currentgatan 9',
+		'123 Main St',
+		'10 Downing Rd',
+		'PO Box 123',
 		'Line one\nLine two'
 	])('rejects contact-like support note text before persistence: %s', (note) => {
 		seedOrder(database, { status: 'shipped' });

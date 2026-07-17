@@ -577,6 +577,9 @@ describe('fulfillment MCP protocol', () => {
 		['email', { note: 'Contact ada@example.test' }],
 		['phone', { note: 'Call +46 70 123 45 67' }],
 		['address', { note: 'Send to Currentgatan 9' }],
+		['abbreviated street', { note: '123 Main St' }],
+		['abbreviated road', { note: '10 Downing Rd' }],
+		['PO box', { note: 'PO Box 123' }],
 		['external reference PII', { external_reference: 'ada@example.test' }],
 		['external reference too long', { external_reference: 'x'.repeat(121) }]
 	])('rejects support %s before writing', async (_label, unsafe) => {
