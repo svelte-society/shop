@@ -9,7 +9,18 @@ const SHARED_FIXTURE_ENV = {
 	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
+	SELLER_LEGAL_NAME: 'Svelte School AB',
+	SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
+	SELLER_VAT_NUMBER: 'reviewed-vat-number',
+	SELLER_ADDRESS_LINE1: 'Reviewed street 1',
+	SELLER_POSTAL_CODE: '123 45',
+	SELLER_CITY: 'Reviewed city',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merchant@example.com',
+	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
+	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
 } as const;
 
 function fixtureServer(

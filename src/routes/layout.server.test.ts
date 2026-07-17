@@ -5,7 +5,18 @@ const disabledStorefrontEnv = {
 	STOREFRONT_ENABLED: 'false',
 	CHECKOUT_ENABLED: 'false',
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	SELLER_LEGAL_NAME: 'Svelte School AB',
+	SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
+	SELLER_VAT_NUMBER: 'reviewed-vat-number',
+	SELLER_ADDRESS_LINE1: 'Reviewed street 1',
+	SELLER_POSTAL_CODE: '123 45',
+	SELLER_CITY: 'Reviewed city',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merchant@example.com',
+	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
+	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
 };
 
 async function loadRoute(routeId: string, storefrontEnabled = false) {
@@ -25,12 +36,13 @@ describe('public layout feature gate', () => {
 				storefrontEnabled: false,
 				checkoutEnabled: false,
 				showOpeningSoon: true,
+				policyDocument: null,
 				umami: null
 			});
 		}
 	);
 
-	it.each(['/shipping', '/returns', '/privacy', '/terms', '/health/live'])(
+	it.each(['/shipping', '/returns', '/privacy', '/terms', '/about', '/health/live'])(
 		'leaves non-commerce route %s available while the storefront is disabled',
 		async (routeId) => {
 			await expect(loadRoute(routeId)).resolves.toMatchObject({ showOpeningSoon: false });
@@ -42,6 +54,7 @@ describe('public layout feature gate', () => {
 			storefrontEnabled: true,
 			checkoutEnabled: false,
 			showOpeningSoon: false,
+			policyDocument: null,
 			umami: null
 		});
 	});

@@ -1,4 +1,6 @@
 import { env } from '$env/dynamic/private';
+import { createPolicyDocuments, type PolicyDocuments } from '$lib/content/policies';
+import { parseSellerPolicyConfig } from '$lib/config/private.server';
 import { parsePublicConfig } from '$lib/config/public';
 import type { LayoutServerLoad } from './$types';
 
@@ -20,6 +22,15 @@ function isCommerceRoute(routeId: string | null): boolean {
 		routeId === '/checkout' ||
 		routeId.startsWith('/checkout/')
 	);
+}
+
+function policyRoute(routeId: string | null): keyof PolicyDocuments | null {
+	if (routeId === '/shipping') return 'shipping';
+	if (routeId === '/returns') return 'returns';
+	if (routeId === '/privacy') return 'privacy';
+	if (routeId === '/terms') return 'terms';
+	if (routeId === '/about') return 'about';
+	return null;
 }
 
 function httpsScriptUrl(value: string | undefined): string | null {
@@ -83,11 +94,19 @@ export function _createLayoutServerLoad(
 ): LayoutServerLoad {
 	return ({ route }) => {
 		const config = parsePublicConfig(runtimeEnv);
+		const requestedPolicy = policyRoute(route.id);
+		const policyDocument = requestedPolicy
+			? createPolicyDocuments({
+					...parseSellerPolicyConfig(runtimeEnv),
+					supportEmail: config.supportEmail
+				})[requestedPolicy]
+			: null;
 
 		return {
 			storefrontEnabled: config.storefrontEnabled,
 			checkoutEnabled: config.checkoutEnabled,
 			showOpeningSoon: !config.storefrontEnabled && isCommerceRoute(route.id),
+			policyDocument,
 			umami: umamiConfig(runtimeEnv)
 		};
 	};

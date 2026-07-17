@@ -32,7 +32,18 @@ function disabledStorefrontEnvironment(): NodeJS.ProcessEnv {
 		STOREFRONT_ENABLED: 'false',
 		CHECKOUT_ENABLED: 'false',
 		PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
-		SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+		SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+		SELLER_LEGAL_NAME: 'Svelte School AB',
+		SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
+		SELLER_VAT_NUMBER: 'reviewed-vat-number',
+		SELLER_ADDRESS_LINE1: 'Reviewed street 1',
+		SELLER_POSTAL_CODE: '123 45',
+		SELLER_CITY: 'Reviewed city',
+		SELLER_COUNTRY: 'Sweden',
+		SELLER_EMAIL: 'merchant@example.com',
+		DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
+		DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+		POLICY_EFFECTIVE_DATE: '2026-07-17'
 	};
 
 	delete testEnv.STRIPE_SECRET_KEY;
@@ -111,12 +122,26 @@ describe('disabled storefront request gate', () => {
 		expect(rootHtml).toContain('The collection is getting ready.');
 	});
 
-	it('leaves an unimplemented policy route unaffected', async () => {
-		const response = await fetch(new URL('/privacy', baseUrl), { redirect: 'manual' });
+	it.each([
+		['/shipping', 'Shipping'],
+		['/returns', 'Returns and withdrawal'],
+		['/privacy', 'Privacy'],
+		['/terms', 'Terms of sale'],
+		['/about', 'About the Society Shop']
+	])(
+		'serves configured information route %s while the storefront is disabled',
+		async (path, title) => {
+			const response = await fetch(new URL(path, baseUrl), { redirect: 'manual' });
+			const html = await response.text();
 
-		expect(response.status).toBe(404);
-		expect(response.headers.get('location')).toBeNull();
-	});
+			expect(response.status).toBe(200);
+			expect(response.headers.get('location')).toBeNull();
+			expect(html).toContain(title);
+			for (const destination of ['shipping', 'returns', 'privacy', 'terms', 'about']) {
+				expect(html).toMatch(new RegExp(`href="(?:\\./|/)${destination}"`, 'u'));
+			}
+		}
+	);
 
 	it('serves static liveness while the storefront is disabled', async () => {
 		const response = await fetch(new URL('/health/live', baseUrl));

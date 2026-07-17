@@ -9,8 +9,23 @@ const validPublicEnv = {
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
 };
 
+const validPolicyEnv = {
+	SELLER_LEGAL_NAME: 'Svelte School AB',
+	SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
+	SELLER_VAT_NUMBER: 'reviewed-vat-number',
+	SELLER_ADDRESS_LINE1: 'Reviewed street 1',
+	SELLER_POSTAL_CODE: '123 45',
+	SELLER_CITY: 'Reviewed city',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merchant@example.com',
+	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
+	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
+};
+
 const validPrivateEnv = {
 	...validPublicEnv,
+	...validPolicyEnv,
 	STRIPE_SECRET_KEY: 'sk_test_private_value',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_private_value',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
@@ -52,6 +67,50 @@ describe('parsePublicConfig', () => {
 });
 
 describe('parsePrivateConfig', () => {
+	it.each([
+		'SELLER_LEGAL_NAME',
+		'SELLER_REGISTRATION_NUMBER',
+		'SELLER_VAT_NUMBER',
+		'SELLER_ADDRESS_LINE1',
+		'SELLER_POSTAL_CODE',
+		'SELLER_CITY',
+		'SELLER_COUNTRY',
+		'SELLER_EMAIL',
+		'DELIVERY_ESTIMATE_EU',
+		'DELIVERY_ESTIMATE_US',
+		'POLICY_EFFECTIVE_DATE'
+	])('rejects checkout-enabled production without complete %s policy configuration', (name) => {
+		expect(() =>
+			parsePrivateConfig({
+				...validPrivateEnv,
+				NODE_ENV: 'production',
+				CHECKOUT_ENABLED: 'true',
+				[name]: undefined
+			})
+		).toThrowError('CONFIG_PRIVATE_INVALID');
+	});
+
+	it('requires the reviewed support address before production checkout can start', () => {
+		expect(() =>
+			parsePrivateConfig({
+				...validPrivateEnv,
+				NODE_ENV: 'production',
+				CHECKOUT_ENABLED: 'true',
+				SUPPORT_EMAIL: 'support@example.com'
+			})
+		).toThrowError('CONFIG_PRIVATE_INVALID');
+	});
+
+	it('accepts complete reviewed seller and policy fields for production checkout', () => {
+		expect(() =>
+			parsePrivateConfig({
+				...validPrivateEnv,
+				NODE_ENV: 'production',
+				CHECKOUT_ENABLED: 'true'
+			})
+		).not.toThrow();
+	});
+
 	it('parses required Stripe configuration', () => {
 		expect(parsePrivateConfig(validPrivateEnv)).toEqual({
 			storefrontEnabled: true,

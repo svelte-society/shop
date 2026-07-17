@@ -14,6 +14,19 @@ const SHARED_FIXTURE_ENV = {
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
 } as const;
+const POLICY_FIXTURE_ENV = {
+	SELLER_LEGAL_NAME: 'Svelte School AB',
+	SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
+	SELLER_VAT_NUMBER: 'reviewed-vat-number',
+	SELLER_ADDRESS_LINE1: 'Reviewed street 1',
+	SELLER_POSTAL_CODE: '123 45',
+	SELLER_CITY: 'Reviewed city',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merchant@example.com',
+	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
+	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
+} as const;
 
 async function importLauncher() {
 	return import('../../scripts/dev-test-catalog.mjs');
@@ -55,6 +68,7 @@ describe('test catalog command portability', () => {
 			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 			expect(server?.env).toEqual({
 				...SHARED_FIXTURE_ENV,
+				...POLICY_FIXTURE_ENV,
 				CHECKOUT_ENABLED: expected.checkout,
 				STOREFRONT_ENABLED: expected.storefront,
 				TEST_CATALOG_SCENARIO: expected.scenario,

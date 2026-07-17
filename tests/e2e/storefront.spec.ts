@@ -81,3 +81,38 @@ test('disabled storefront stops commerce before private catalog work', async ({ 
 	).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Visit Svelte Society' })).toBeVisible();
 });
+
+test('disabled storefront keeps every information page and footer destination available', async ({
+	page
+}) => {
+	const pages = [
+		['/shipping', 'Shipping'],
+		['/returns', 'Returns and withdrawal'],
+		['/privacy', 'Privacy'],
+		['/terms', 'Terms of sale'],
+		['/about', 'About the Society Shop']
+	] as const;
+
+	for (const [path, heading] of pages) {
+		await page.goto(`${STOREFRONT_DISABLED_ORIGIN}${path}`);
+
+		await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
+		await expect(page.getByText('The collection is getting ready.')).toHaveCount(0);
+		const footer = page.locator('footer');
+		for (const [destination, label] of [
+			['/shipping', 'Shipping'],
+			['/returns', 'Returns'],
+			['/privacy', 'Privacy'],
+			['/terms', 'Terms'],
+			['/about', 'About']
+		] as const) {
+			await expect(footer.getByRole('link', { name: label, exact: true })).toHaveAttribute(
+				'href',
+				destination
+			);
+		}
+		expect(
+			await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)
+		).toBe(false);
+	}
+});

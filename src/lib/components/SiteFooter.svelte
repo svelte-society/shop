@@ -9,7 +9,7 @@
 			<p>Official merch for Svelte people, wherever the community gathers.</p>
 		</div>
 
-		<nav aria-label="Policies">
+		<nav aria-label="Shop information">
 			<a href={resolve('/shipping' as '/')}>Shipping</a>
 			<a href={resolve('/returns' as '/')}>Returns</a>
 			<a href={resolve('/privacy' as '/')}>Privacy</a>

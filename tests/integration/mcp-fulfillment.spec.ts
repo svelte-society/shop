@@ -38,9 +38,12 @@ describe('Codex MCP fulfillment lifecycle', () => {
 
 	afterEach(() => {
 		for (const database of databases.splice(0)) database.close();
+		vi.useRealTimers();
 	});
 
 	it('moves a paid order through MCP approval, hourly tracking sync, and just-in-time shipping email', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-17T10:00:00.000Z'));
 		const database = createLifecycleDatabase();
 		databases.push(database);
 		const paidOrder = recordPaidOrder(database, 'success');
