@@ -4,18 +4,21 @@ const FAILURE_WINDOW_MS = 60 * 60_000;
 const REPEATED_FAILURE_THRESHOLD = 6;
 
 export interface McpAuthFailureMonitor {
-	record(now: Date): void;
+	record(now: Date): Promise<void>;
+	reset(): void;
 }
 
 export function createMcpAuthFailureMonitor(options: {
-	onRepeatedFailure: (now: Date) => void;
+	onRepeatedFailure: (now: Date) => void | Promise<void>;
 }): McpAuthFailureMonitor {
 	let failures: number[] = [];
 	let latest = Number.NEGATIVE_INFINITY;
 	let alertedHour: string | null = null;
+	let pendingHour: string | null = null;
+	let pendingAlert: Promise<void> | null = null;
 
 	return {
-		record(now: Date): void {
+		async record(now: Date): Promise<void> {
 			if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
 				throw new Error('MCP_AUTH_FAILURE_TIME_INVALID');
 			}
@@ -32,12 +35,34 @@ export function createMcpAuthFailureMonitor(options: {
 			}
 			const hour = now.toISOString().slice(0, 13);
 			if (failures.length < REPEATED_FAILURE_THRESHOLD || alertedHour === hour) return;
-			alertedHour = hour;
+			if (pendingHour === hour && pendingAlert) {
+				try {
+					await pendingAlert;
+				} catch {
+					// The request that created the operation owns retry-state cleanup.
+				}
+				return;
+			}
+			const operation = Promise.resolve().then(() =>
+				options.onRepeatedFailure(new Date(timestamp))
+			);
+			pendingHour = hour;
+			pendingAlert = operation;
 			try {
-				options.onRepeatedFailure(new Date(timestamp));
+				await operation;
+				alertedHour = hour;
 			} catch {
 				// Authentication remains fail-closed if operational alert persistence is unavailable.
+			} finally {
+				if (pendingAlert === operation) {
+					pendingHour = null;
+					pendingAlert = null;
+				}
 			}
+		},
+		reset(): void {
+			failures = [];
+			latest = Number.NEGATIVE_INFINITY;
 		}
 	};
 }

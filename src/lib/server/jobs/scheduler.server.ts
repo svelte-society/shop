@@ -124,7 +124,12 @@ export class OutboxScheduler implements Scheduler {
 			this.launchScheduledStyriaRun();
 		}
 		if (this.options.backup) this.scheduleNextBackup();
-		if (this.options.operationalChecks) this.scheduleNextOperationalChecks();
+		if (this.options.operationalChecks) {
+			this.scheduleNextOperationalChecks();
+			if (this.operationalChecksCatchUpDue(this.clock())) {
+				this.launchScheduledOperationalChecksRun();
+			}
+		}
 	}
 
 	async stop(): Promise<void> {
@@ -180,7 +185,9 @@ export class OutboxScheduler implements Scheduler {
 		const execution = Promise.resolve()
 			.then(() => this.executeOperationalChecksRun(now, controller.signal))
 			.catch((error) => {
-				this.enqueueFailureAlert('SCHEDULER_FAILED', OPERATIONAL_CHECKS_JOB_NAME, now);
+				if (!controller.signal.aborted) {
+					this.enqueueFailureAlert('SCHEDULER_FAILED', OPERATIONAL_CHECKS_JOB_NAME, now);
+				}
 				throw error;
 			});
 		const trackedRun = execution.finally(() => {
@@ -203,8 +210,10 @@ export class OutboxScheduler implements Scheduler {
 		const execution = Promise.resolve()
 			.then(() => this.executeBackupRun(now, controller.signal))
 			.catch((error) => {
-				this.enqueueFailureAlert('BACKUP_FAILED', 'daily-backup', now);
-				this.enqueueFailureAlert('SCHEDULER_FAILED', BACKUP_JOB_NAME, now);
+				if (!controller.signal.aborted) {
+					this.enqueueFailureAlert('BACKUP_FAILED', 'daily-backup', now);
+					this.enqueueFailureAlert('SCHEDULER_FAILED', BACKUP_JOB_NAME, now);
+				}
 				throw error;
 			});
 		const trackedRun = execution.finally(() => {
@@ -227,7 +236,9 @@ export class OutboxScheduler implements Scheduler {
 		const execution = Promise.resolve()
 			.then(() => this.executeStyriaRun(now, controller.signal))
 			.catch((error) => {
-				this.enqueueFailureAlert('SCHEDULER_FAILED', STYRIA_SYNC_JOB_NAME, now);
+				if (!controller.signal.aborted) {
+					this.enqueueFailureAlert('SCHEDULER_FAILED', STYRIA_SYNC_JOB_NAME, now);
+				}
 				throw error;
 			});
 		const trackedRun = execution.finally(() => {
@@ -249,7 +260,9 @@ export class OutboxScheduler implements Scheduler {
 		const execution = Promise.resolve()
 			.then(() => this.executeRun(now, controller.signal))
 			.catch((error) => {
-				this.enqueueFailureAlert('SCHEDULER_FAILED', OUTBOX_JOB_NAME, now);
+				if (!controller.signal.aborted) {
+					this.enqueueFailureAlert('SCHEDULER_FAILED', OUTBOX_JOB_NAME, now);
+				}
 				throw error;
 			});
 		const trackedRun = execution.finally(() => {
@@ -326,6 +339,48 @@ export class OutboxScheduler implements Scheduler {
 		if (this.reportedOperationalChecksRuns.has(run)) return;
 		this.reportedOperationalChecksRuns.add(run);
 		void run.catch(() => this.reportError(OPERATIONAL_CHECKS_ERROR_CODE));
+	}
+
+	private operationalChecksCatchUpDue(now: Date): boolean {
+		const cadence = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 0, 0, 0)
+		);
+		if (now < cadence) return false;
+		const nextCadence = new Date(cadence);
+		nextCadence.setUTCDate(nextCadence.getUTCDate() + 1);
+		const completed = this.options.database
+			.prepare(
+				`SELECT 1 FROM job_runs
+				 WHERE name = ? AND result = 'completed'
+				 AND started_at >= ? AND started_at < ?
+				 AND finished_at IS NOT NULL AND finished_at <= ?
+				 LIMIT 1`
+			)
+			.get(
+				OPERATIONAL_CHECKS_JOB_NAME,
+				cadence.toISOString(),
+				nextCadence.toISOString(),
+				now.toISOString()
+			);
+		if (completed !== undefined) return false;
+		const active = this.options.database
+			.prepare(
+				`SELECT 1 FROM job_runs jr
+				 JOIN job_leases jl ON jl.name = jr.name AND jl.owner_id = jr.owner_id
+				 WHERE jr.name = ?
+				 AND jr.started_at >= ? AND jr.started_at < ? AND jr.started_at <= ?
+				 AND jr.finished_at IS NULL AND jr.result IS NULL
+				 AND jl.expires_at > ?
+				 LIMIT 1`
+			)
+			.get(
+				OPERATIONAL_CHECKS_JOB_NAME,
+				cadence.toISOString(),
+				nextCadence.toISOString(),
+				now.toISOString(),
+				now.toISOString()
+			);
+		return active === undefined;
 	}
 
 	private async executeRun(now: Date, signal: AbortSignal): Promise<void> {

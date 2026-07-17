@@ -4,7 +4,8 @@ import type { ReadinessResult } from '$lib/server/health/readiness.server';
 import type { AlertService } from '$lib/server/monitoring/alerts.server';
 
 const PENDING_REVIEW_AGE_MS = 24 * 60 * 60_000;
-export const BACKUP_FRESHNESS_MS = 26 * 60 * 60_000;
+export const BACKUP_CADENCE_GRACE_MS = 30 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
 
 type SubjectRow = { id: unknown };
 
@@ -50,6 +51,14 @@ function subjectIds(rows: SubjectRow[]): string[] {
 function throwIfAborted(signal?: AbortSignal): void {
 	if (!signal?.aborted) return;
 	throw signal.reason instanceof Error ? signal.reason : new Error('OPERATIONAL_CHECK_ABORTED');
+}
+
+function latestBackupCadence(now: Date): Date {
+	const cadence = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 2, 30, 0, 0)
+	);
+	if (cadence > now) cadence.setUTCDate(cadence.getUTCDate() - 1);
+	return cadence;
 }
 
 export class SqliteOperationalChecksJob implements OperationalChecksJob {
@@ -111,16 +120,36 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 			this.dependencies.alerts.enqueueAlert('SHIPPING_EMAIL_UNSENT', subjectId, now);
 		}
 
-		const backupCutoff = new Date(now.getTime() - BACKUP_FRESHNESS_MS).toISOString();
-		const recentBackup = this.dependencies.database
+		const backupCadence = latestBackupCadence(now);
+		const nextBackupCadence = new Date(backupCadence.getTime() + DAY_MS);
+		const completedBackup = this.dependencies.database
 			.prepare(
 				`SELECT 1 FROM job_runs
 				 WHERE name = 'backup' AND result = 'completed'
-				 AND finished_at IS NOT NULL AND finished_at >= ? AND finished_at <= ?
+				 AND started_at >= ? AND started_at < ?
+				 AND finished_at IS NOT NULL AND finished_at <= ?
 				 LIMIT 1`
 			)
-			.get(backupCutoff, now.toISOString());
-		const backupMissed = recentBackup === undefined;
+			.get(backupCadence.toISOString(), nextBackupCadence.toISOString(), now.toISOString());
+		const activeBackup = this.dependencies.database
+			.prepare(
+				`SELECT 1 FROM job_runs jr
+				 JOIN job_leases jl ON jl.name = jr.name AND jl.owner_id = jr.owner_id
+				 WHERE jr.name = 'backup'
+				 AND jr.started_at >= ? AND jr.started_at < ? AND jr.started_at <= ?
+				 AND jr.finished_at IS NULL AND jr.result IS NULL
+				 AND jl.expires_at > ?
+				 LIMIT 1`
+			)
+			.get(
+				backupCadence.toISOString(),
+				nextBackupCadence.toISOString(),
+				now.toISOString(),
+				now.toISOString()
+			);
+		const graceElapsed = now.getTime() >= backupCadence.getTime() + BACKUP_CADENCE_GRACE_MS;
+		const backupMissed =
+			graceElapsed && completedBackup === undefined && activeBackup === undefined;
 		if (backupMissed) {
 			this.dependencies.alerts.enqueueAlert('BACKUP_MISSED', 'daily-backup', now);
 		}

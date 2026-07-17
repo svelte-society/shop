@@ -621,11 +621,13 @@ describe('application runtime', () => {
 		await runtime?.scheduler?.stop();
 		expect(
 			runtime?.database.prepare('SELECT name, result, error_code FROM job_runs ORDER BY id').all()
-		).toEqual([
-			{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null },
-			{ name: STYRIA_SYNC_JOB_NAME, result: 'completed', error_code: null },
-			{ name: BACKUP_JOB_NAME, result: 'completed', error_code: null }
-		]);
+		).toEqual(
+			expect.arrayContaining([
+				{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null },
+				{ name: STYRIA_SYNC_JOB_NAME, result: 'completed', error_code: null },
+				{ name: BACKUP_JOB_NAME, result: 'completed', error_code: null }
+			])
+		);
 		await application.stop();
 		expect(runtime?.database.open).toBe(false);
 	});
@@ -1473,9 +1475,80 @@ describe('OutboxScheduler', () => {
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 	});
 
+	it('catches up a missed 03:00 operational check after a cold restart only once', async () => {
+		const current = new Date('2026-07-17T05:00:00.000Z');
+		const firstTimers = timerHarness();
+		const firstChecks: OperationalChecksJob = {
+			run: vi.fn(async () => ({
+				pendingReview: 0,
+				reviewRequired: 0,
+				shippingUnsent: 0,
+				backupMissed: false,
+				diskLow: false,
+				sqliteNotReady: false
+			}))
+		};
+		const first = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks: firstChecks,
+			enabled: true,
+			ownerId: 'scheduler-cold-catchup-first',
+			clock: () => current,
+			schedule: firstTimers.schedule,
+			scheduleOperationalChecks: firstTimers.schedule,
+			cancel: firstTimers.cancel
+		});
+
+		first.start();
+		await vi.waitFor(() => expect(firstChecks.run).toHaveBeenCalledOnce());
+		await settleAsyncWork();
+		expect(firstTimers.handles(22 * 60 * 60_000)).toHaveLength(1);
+		await first.stop();
+		expect(
+			database
+				.prepare(
+					`SELECT result FROM job_runs
+					 WHERE name = 'operational-checks' AND started_at >= ?`
+				)
+				.all('2026-07-17T03:00:00.000Z')
+		).toEqual([{ result: 'completed' }]);
+
+		const secondTimers = timerHarness();
+		const secondChecks: OperationalChecksJob = {
+			run: vi.fn(async () => ({
+				pendingReview: 0,
+				reviewRequired: 0,
+				shippingUnsent: 0,
+				backupMissed: false,
+				diskLow: false,
+				sqliteNotReady: false
+			}))
+		};
+		const second = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks: secondChecks,
+			enabled: true,
+			ownerId: 'scheduler-cold-catchup-second',
+			clock: () => current,
+			schedule: secondTimers.schedule,
+			scheduleOperationalChecks: secondTimers.schedule,
+			cancel: secondTimers.cancel
+		});
+
+		second.start();
+		await settleAsyncWork();
+		expect(secondChecks.run).not.toHaveBeenCalled();
+		expect(secondTimers.handles(22 * 60 * 60_000)).toHaveLength(1);
+		await second.stop();
+	});
+
 	it('runs daily operational checks at 03:00 UTC under one lease and recalculates across rollover', async () => {
 		const timers = timerHarness();
-		let current = new Date('2026-12-31T23:00:00.000Z');
+		let current = new Date('2026-12-31T02:00:00.000Z');
 		const operationalChecks: OperationalChecksJob = {
 			run: vi.fn(async (_runAt, signal) => {
 				expect(signal).toBeInstanceOf(AbortSignal);
@@ -1509,9 +1582,9 @@ describe('OutboxScheduler', () => {
 		});
 
 		scheduler.start();
-		expect(timers.handles(4 * 60 * 60_000)).toHaveLength(1);
-		current = new Date('2027-01-01T03:00:00.000Z');
-		timers.fire(4 * 60 * 60_000);
+		expect(timers.handles(60 * 60_000)).toHaveLength(1);
+		current = new Date('2026-12-31T03:00:00.000Z');
+		timers.fire(60 * 60_000);
 		await scheduler.runOperationalChecksOnce();
 
 		expect(operationalChecks.run).toHaveBeenCalledOnce();
@@ -1565,6 +1638,119 @@ describe('OutboxScheduler', () => {
 		expect(operationalChecks.run).toHaveBeenCalledOnce();
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 	});
+
+	it.each(['outbox', 'styria-sync', 'backup', 'operational-checks'] as const)(
+		'does not alert when shutdown intentionally aborts an active %s run',
+		async (kind) => {
+			let receivedSignal: AbortSignal | undefined;
+			const abortingRun = vi.fn(
+				(_now: Date, _limitOrSignal?: number | AbortSignal, maybeSignal?: AbortSignal) =>
+					new Promise((_, reject) => {
+						const signal = _limitOrSignal instanceof AbortSignal ? _limitOrSignal : maybeSignal;
+						receivedSignal = signal;
+						signal?.addEventListener('abort', () => reject(new Error('provider aborted')), {
+							once: true
+						});
+					})
+			);
+			const scheduler = new OutboxScheduler({
+				database,
+				leases: new SqliteLeaseRepository(database),
+				worker:
+					kind === 'outbox'
+						? ({ drain: abortingRun } as unknown as OutboxWorker)
+						: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+				styriaSync:
+					kind === 'styria-sync' ? ({ run: abortingRun } as unknown as StyriaSyncJob) : undefined,
+				backup: kind === 'backup' ? ({ run: abortingRun } as unknown as BackupService) : undefined,
+				operationalChecks:
+					kind === 'operational-checks'
+						? ({ run: abortingRun } as unknown as OperationalChecksJob)
+						: undefined,
+				alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+				enabled: true,
+				ownerId: `scheduler-shutdown-${kind}`,
+				clock: () => initialNow
+			});
+			const active =
+				kind === 'outbox'
+					? scheduler.runOutboxOnce()
+					: kind === 'styria-sync'
+						? scheduler.runStyriaSyncOnce()
+						: kind === 'backup'
+							? scheduler.runBackupOnce()
+							: scheduler.runOperationalChecksOnce();
+
+			await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+			const stopping = scheduler.stop();
+			await expect(active).rejects.toThrow('provider aborted');
+			await stopping;
+
+			expect(
+				database
+					.prepare("SELECT idempotency_key FROM outbox_jobs WHERE kind = 'operational-alert'")
+					.all()
+			).toEqual([]);
+			expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		}
+	);
+
+	it.each(['outbox', 'styria-sync', 'backup', 'operational-checks'] as const)(
+		'alerts a genuine %s failure before shutdown',
+		async (kind) => {
+			const genuineFailure = vi.fn(async () => {
+				throw new Error('genuine provider failure');
+			});
+			const scheduler = new OutboxScheduler({
+				database,
+				leases: new SqliteLeaseRepository(database),
+				worker:
+					kind === 'outbox'
+						? ({ drain: genuineFailure } as unknown as OutboxWorker)
+						: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+				styriaSync:
+					kind === 'styria-sync'
+						? ({ run: genuineFailure } as unknown as StyriaSyncJob)
+						: undefined,
+				backup:
+					kind === 'backup' ? ({ run: genuineFailure } as unknown as BackupService) : undefined,
+				operationalChecks:
+					kind === 'operational-checks'
+						? ({ run: genuineFailure } as unknown as OperationalChecksJob)
+						: undefined,
+				alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+				enabled: true,
+				ownerId: `scheduler-genuine-${kind}`,
+				clock: () => initialNow
+			});
+			const active =
+				kind === 'outbox'
+					? scheduler.runOutboxOnce()
+					: kind === 'styria-sync'
+						? scheduler.runStyriaSyncOnce()
+						: kind === 'backup'
+							? scheduler.runBackupOnce()
+							: scheduler.runOperationalChecksOnce();
+
+			await expect(active).rejects.toThrow('genuine provider failure');
+			const keys = (
+				database
+					.prepare(
+						"SELECT idempotency_key FROM outbox_jobs WHERE kind = 'operational-alert' ORDER BY id"
+					)
+					.all() as Array<{ idempotency_key: string }>
+			).map((row) => row.idempotency_key);
+			expect(keys).toEqual(
+				kind === 'backup'
+					? [
+							'alert:BACKUP_FAILED:daily-backup:2026-07-16T08',
+							'alert:SCHEDULER_FAILED:backup:2026-07-16T08'
+						]
+					: [`alert:SCHEDULER_FAILED:${kind}:2026-07-16T08`]
+			);
+			await scheduler.stop();
+		}
+	);
 
 	it('durably alerts backup and scheduler failures without recursive failure storms', async () => {
 		const alerts = new SqliteAlertService(new SqliteOutboxRepository(database));

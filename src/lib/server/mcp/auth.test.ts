@@ -62,41 +62,107 @@ describe('authorizeBearer', () => {
 });
 
 describe('MCP authentication failure monitoring', () => {
-	it('alerts only after six non-sensitive failures in a bounded rolling hour', () => {
+	it('alerts only after six non-sensitive failures in a bounded rolling hour', async () => {
 		const onRepeatedFailure = vi.fn();
 		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
 
 		for (let index = 0; index < 5; index += 1) {
-			monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+			await monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
 		}
 		expect(onRepeatedFailure).not.toHaveBeenCalled();
-		monitor.record(new Date('2026-07-17T08:05:00.000Z'));
+		await monitor.record(new Date('2026-07-17T08:05:00.000Z'));
 		expect(onRepeatedFailure).toHaveBeenCalledOnce();
 		expect(onRepeatedFailure).toHaveBeenCalledWith(new Date('2026-07-17T08:05:00.000Z'));
 
-		monitor.record(new Date('2026-07-17T08:06:00.000Z'));
+		await monitor.record(new Date('2026-07-17T08:06:00.000Z'));
 		expect(onRepeatedFailure).toHaveBeenCalledOnce();
 	});
 
-	it('clears recovered failures and permits a new alert in a later UTC hour', () => {
+	it('clears recovered failures after successful authentication', async () => {
+		const onRepeatedFailure = vi.fn();
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+		for (let index = 0; index < 5; index += 1) {
+			await monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+		}
+
+		monitor.reset();
+		await monitor.record(new Date('2026-07-17T08:05:00.000Z'));
+
+		expect(onRepeatedFailure).not.toHaveBeenCalled();
+	});
+
+	it('permits a new alert in a later UTC hour', async () => {
 		const onRepeatedFailure = vi.fn();
 		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
 		for (let index = 0; index < 6; index += 1) {
-			monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+			await monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
 		}
-		monitor.record(new Date('2026-07-17T10:00:00.000Z'));
+		await monitor.record(new Date('2026-07-17T10:00:00.000Z'));
 		expect(onRepeatedFailure).toHaveBeenCalledTimes(1);
 		for (let index = 1; index < 6; index += 1) {
-			monitor.record(new Date(`2026-07-17T10:0${index}:00.000Z`));
+			await monitor.record(new Date(`2026-07-17T10:0${index}:00.000Z`));
 		}
 		expect(onRepeatedFailure).toHaveBeenCalledTimes(2);
 	});
 
-	it('accepts only time and never retains request, token, address, agent, or tool data', () => {
+	it('retries a threshold alert when durable persistence fails without latching success', async () => {
+		const onRepeatedFailure = vi
+			.fn<(now: Date) => Promise<void>>()
+			.mockRejectedValueOnce(new Error('SQLITE_NOT_READY'))
+			.mockResolvedValue(undefined);
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+
+		for (let index = 0; index < 6; index += 1) {
+			await monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+		}
+		await monitor.record(new Date('2026-07-17T08:06:00.000Z'));
+
+		expect(onRepeatedFailure).toHaveBeenCalledTimes(2);
+	});
+
+	it('coalesces concurrent threshold persistence and keeps every failure path retryable', async () => {
+		const pending = Promise.withResolvers<void>();
+		const onRepeatedFailure = vi
+			.fn<(now: Date) => Promise<void>>()
+			.mockReturnValueOnce(pending.promise)
+			.mockResolvedValue(undefined);
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+		for (let index = 0; index < 5; index += 1) {
+			await monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+		}
+
+		const sixth = monitor.record(new Date('2026-07-17T08:05:00.000Z'));
+		await Promise.resolve();
+		const seventh = monitor.record(new Date('2026-07-17T08:06:00.000Z'));
+		pending.reject(new Error('SQLITE_NOT_READY'));
+
+		await expect(Promise.all([sixth, seventh])).resolves.toEqual([undefined, undefined]);
+		expect(onRepeatedFailure).toHaveBeenCalledOnce();
+		await monitor.record(new Date('2026-07-17T08:07:00.000Z'));
+		expect(onRepeatedFailure).toHaveBeenCalledTimes(2);
+	});
+
+	it('contains synchronous persistence exceptions and retries on the next failure', async () => {
+		const onRepeatedFailure = vi.fn<(now: Date) => void>().mockImplementationOnce(() => {
+			throw new Error('SQLITE_NOT_READY');
+		});
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+
+		for (let index = 0; index < 6; index += 1) {
+			await expect(
+				monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`))
+			).resolves.toBeUndefined();
+		}
+		await monitor.record(new Date('2026-07-17T08:06:00.000Z'));
+
+		expect(onRepeatedFailure).toHaveBeenCalledTimes(2);
+	});
+
+	it('accepts only time and never retains request, token, address, agent, or tool data', async () => {
 		const onRepeatedFailure = vi.fn();
 		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
-		expect(Object.keys(monitor)).toEqual(['record']);
-		expect(() => monitor.record(new Date(Number.NaN))).toThrowError(
+		expect(Object.keys(monitor)).toEqual(['record', 'reset']);
+		await expect(monitor.record(new Date(Number.NaN))).rejects.toThrowError(
 			'MCP_AUTH_FAILURE_TIME_INVALID'
 		);
 		expect(JSON.stringify(monitor)).not.toContain('Authorization');

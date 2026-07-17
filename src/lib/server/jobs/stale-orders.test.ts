@@ -122,13 +122,13 @@ describe('daily operational checks', () => {
 		);
 	});
 
-	it('uses durable completed job runs for the 26-hour backup freshness window', async () => {
+	it('requires a completed run for the current 02:30 UTC backup cadence', async () => {
 		database
 			.prepare(
 				`INSERT INTO job_runs (name, owner_id, started_at, finished_at, result)
 				 VALUES ('backup', 'prior-owner', ?, ?, 'completed')`
 			)
-			.run('2026-07-16T02:00:00.001Z', '2026-07-16T02:00:00.001Z');
+			.run('2026-07-17T02:30:00.000Z', '2026-07-17T02:45:00.000Z');
 		const job = new SqliteOperationalChecksJob({
 			database,
 			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
@@ -142,6 +142,68 @@ describe('daily operational checks', () => {
 		expect(alertKeys()).not.toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
 
 		database.prepare('DELETE FROM job_runs').run();
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at, finished_at, result)
+				 VALUES ('backup', 'stale-owner', ?, ?, 'completed')`
+			)
+			.run('2026-07-16T02:30:00.000Z', '2026-07-16T02:45:00.000Z');
+		await job.run(NOW);
+		expect(alertKeys()).toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+	});
+
+	it('alerts a failed current-cadence backup and suppresses a genuinely active leased run', async () => {
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			readiness: async () => ({
+				ready: true,
+				checks: { configuration: 'ok', database: 'ok', migrations: 'ok', volume: 'ok', disk: 'ok' }
+			})
+		});
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at, finished_at, result, error_code)
+				 VALUES ('backup', 'failed-owner', ?, ?, 'failed', 'BACKUP_FAILED')`
+			)
+			.run('2026-07-17T02:30:00.000Z', '2026-07-17T02:40:00.000Z');
+
+		await job.run(NOW);
+		expect(alertKeys()).toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+
+		database.prepare('DELETE FROM outbox_jobs').run();
+		database.prepare('DELETE FROM job_runs').run();
+		database
+			.prepare(
+				`INSERT INTO job_runs (name, owner_id, started_at)
+				 VALUES ('backup', 'active-owner', ?)`
+			)
+			.run('2026-07-17T02:30:00.000Z');
+		database
+			.prepare(`INSERT INTO job_leases (name, owner_id, expires_at) VALUES ('backup', ?, ?)`)
+			.run('active-owner', '2026-07-17T04:30:00.000Z');
+
+		await job.run(NOW);
+		expect(alertKeys()).not.toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+
+		database.prepare("UPDATE job_leases SET expires_at = '2026-07-17T02:59:59.999Z'").run();
+		await job.run(NOW);
+		expect(alertKeys()).toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+	});
+
+	it('allows the explicit 30-minute backup grace before reporting a missing cadence', async () => {
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			readiness: async () => ({
+				ready: true,
+				checks: { configuration: 'ok', database: 'ok', migrations: 'ok', volume: 'ok', disk: 'ok' }
+			})
+		});
+
+		await job.run(new Date('2026-07-17T02:59:59.999Z'));
+		expect(alertKeys()).not.toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+
 		await job.run(NOW);
 		expect(alertKeys()).toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
 	});

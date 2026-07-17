@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ApplicationLifecycle } from '$lib/server/app.server';
+import { createApplicationLifecycle, type ApplicationLifecycle } from '$lib/server/app.server';
 import {
 	applySecurityHeaders,
 	createApplicationHandle,
+	createComposedHandle,
 	createSecurityHandle,
 	handleError
 } from './hooks.server';
@@ -329,6 +330,119 @@ describe('HTTP security hook', () => {
 		expect(observable).not.toContain('private-session');
 		expect(observable).not.toContain('192.0.2.');
 		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('persists one safe alert from a composed cold process after liveness and six invalid MCP requests', async () => {
+		const application = createApplicationLifecycle();
+		const environment = {
+			...SECURITY_ENV,
+			DATABASE_PATH: ':memory:',
+			DATABASE_BOOTSTRAP: 'true',
+			SCHEDULER_ENABLED: 'false'
+		};
+		const handle = createComposedHandle(
+			application,
+			{ environment, building: false, test: false },
+			{
+				production: true,
+				requestId: () => 'req_cold_mcp_auth',
+				emit: () => undefined
+			}
+		);
+		const resolve = vi.fn(async () => new Response('live'));
+
+		try {
+			const liveness = await handle({
+				event: securityEvent('/health/live', { method: 'GET' }),
+				resolve
+			} as unknown as Parameters<typeof handle>[0]);
+			expect(liveness.status).toBe(200);
+			expect(application.current()).toBeNull();
+
+			for (let index = 0; index < 6; index += 1) {
+				const response = await handle({
+					event: securityEvent('/mcp', {
+						method: 'POST',
+						authorization: `Bearer cold-private-token-${index}`,
+						sessionId: `cold-private-session-${index}`,
+						clientAddress: `192.0.2.${index + 20}`
+					}),
+					resolve
+				} as unknown as Parameters<typeof handle>[0]);
+				expect(response.status).toBe(401);
+			}
+
+			const runtime = application.current();
+			expect(runtime).not.toBeNull();
+			const rows = runtime?.database
+				.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'")
+				.all();
+			expect(rows).toHaveLength(1);
+			expect(rows?.[0]).toMatchObject({
+				kind: 'operational-alert',
+				alert_code: 'MCP_AUTH_REPEATED_FAILURE',
+				alert_subject_id: 'mcp-auth'
+			});
+			const observable = JSON.stringify(rows);
+			expect(observable).not.toContain('cold-private-token');
+			expect(observable).not.toContain('cold-private-session');
+			expect(observable).not.toContain('192.0.2.');
+			expect(resolve).toHaveBeenCalledOnce();
+		} finally {
+			await application.stop();
+		}
+	});
+
+	it('resets accumulated MCP failures after a valid bearer authentication', async () => {
+		const enqueueOperationalAlert = vi.fn();
+		let current = Date.parse('2026-07-17T08:00:00.000Z');
+		const handle = createSecurityHandle(SECURITY_ENV, {
+			production: true,
+			now: () => current,
+			requestId: () => 'req_auth_recovery',
+			emit: () => undefined,
+			enqueueOperationalAlert
+		});
+		const resolve = vi.fn(async () => new Response('ok'));
+
+		for (let index = 0; index < 5; index += 1) {
+			current += 60_000;
+			await handle({
+				event: securityEvent('/mcp', {
+					method: 'POST',
+					authorization: `Bearer private-before-recovery-${index}`
+				}),
+				resolve
+			} as unknown as Parameters<typeof handle>[0]);
+		}
+		await handle({
+			event: securityEvent('/mcp', {
+				method: 'POST',
+				authorization: 'Bearer test-mcp-token'
+			}),
+			resolve
+		} as unknown as Parameters<typeof handle>[0]);
+		current += 60_000;
+		await handle({
+			event: securityEvent('/mcp', {
+				method: 'POST',
+				authorization: 'Bearer private-after-recovery-0'
+			}),
+			resolve
+		} as unknown as Parameters<typeof handle>[0]);
+		expect(enqueueOperationalAlert).not.toHaveBeenCalled();
+
+		for (let index = 1; index < 6; index += 1) {
+			current += 60_000;
+			await handle({
+				event: securityEvent('/mcp', {
+					method: 'POST',
+					authorization: `Bearer private-after-recovery-${index}`
+				}),
+				resolve
+			} as unknown as Parameters<typeof handle>[0]);
+		}
+		expect(enqueueOperationalAlert).toHaveBeenCalledOnce();
 	});
 
 	it.each([undefined, '', 'false', 'TRUE', 'True', '1', 'yes'])(

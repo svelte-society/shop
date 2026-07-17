@@ -1,15 +1,19 @@
 import { building } from '$app/environment';
 import { env } from '$env/dynamic/private';
-import { sequence } from '@sveltejs/kit/hooks';
 import type { Handle, HandleServerError } from '@sveltejs/kit';
 import {
 	applicationLifecycle,
 	type ApplicationLifecycle,
 	type ApplicationStartOptions
 } from '$lib/server/app.server';
+import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import { log, type LogEvent } from '$lib/server/logging/logger.server';
 import { authorizeBearer, createMcpAuthFailureMonitor } from '$lib/server/mcp/auth.server';
-import { enqueueAlert, type AlertCode } from '$lib/server/monitoring/alerts.server';
+import {
+	enqueueAlert,
+	SqliteAlertService,
+	type AlertCode
+} from '$lib/server/monitoring/alerts.server';
 import {
 	SecurityBoundaryError,
 	createSecurityConfig,
@@ -209,7 +213,7 @@ type SecurityHandleOptions = {
 	now?: () => number;
 	requestId?: () => string;
 	emit?: (event: LogEvent) => void;
-	enqueueOperationalAlert?: (code: AlertCode, subjectId: string, now: Date) => void;
+	enqueueOperationalAlert?: (code: AlertCode, subjectId: string, now: Date) => void | Promise<void>;
 };
 
 export function createSecurityHandle(
@@ -224,8 +228,8 @@ export function createSecurityHandle(
 	const emit = options.emit ?? log;
 	const enqueueOperationalAlert = options.enqueueOperationalAlert ?? enqueueAlert;
 	const mcpAuthFailures = createMcpAuthFailureMonitor({
-		onRepeatedFailure(observedAt) {
-			enqueueOperationalAlert('MCP_AUTH_REPEATED_FAILURE', 'mcp-auth', observedAt);
+		async onRepeatedFailure(observedAt) {
+			await enqueueOperationalAlert('MCP_AUTH_REPEATED_FAILURE', 'mcp-auth', observedAt);
 		}
 	});
 
@@ -256,7 +260,8 @@ export function createSecurityHandle(
 				policy = authorized ? rateLimitPolicies.mcp : rateLimitPolicies.invalidMcpAuth;
 				keyPrefix = authorized ? 'mcp' : 'mcp-invalid-auth';
 				rejectMcpAuth = !authorized;
-				if (rejectMcpAuth) mcpAuthFailures.record(new Date(startedAt));
+				if (rejectMcpAuth) await mcpAuthFailures.record(new Date(startedAt));
+				else mcpAuthFailures.reset();
 			}
 
 			if (policy !== null) {
@@ -349,16 +354,42 @@ export function createApplicationHandle(
 	};
 }
 
-const applicationHandle = createApplicationHandle(applicationLifecycle, {
+type ComposedHandleOptions = Omit<SecurityHandleOptions, 'enqueueOperationalAlert'>;
+
+export function createComposedHandle(
+	application: ApplicationLifecycle,
+	options: ApplicationStartOptions,
+	securityOptions: ComposedHandleOptions = {}
+): Handle {
+	const applicationHandle = createApplicationHandle(application, options);
+	const securityHandle = createSecurityHandle(options.environment, {
+		...securityOptions,
+		async enqueueOperationalAlert(code, subjectId, observedAt) {
+			const runtime = await application.start(options);
+			if (!runtime) throw new Error('APPLICATION_RUNTIME_UNAVAILABLE');
+			new SqliteAlertService(new SqliteOutboxRepository(runtime.database)).enqueueAlert(
+				code,
+				subjectId,
+				observedAt
+			);
+		}
+	});
+	return ({ event, resolve }) =>
+		securityHandle({
+			event,
+			resolve: (securedEvent) => applicationHandle({ event: securedEvent, resolve })
+		});
+}
+
+const applicationOptions: ApplicationStartOptions = {
 	environment: env,
 	building,
 	test: process.env.NODE_ENV === 'test'
-});
+};
 
-export const handle: Handle = sequence(
-	createSecurityHandle(env, { production: process.env.NODE_ENV === 'production' && !building }),
-	applicationHandle
-);
+export const handle: Handle = createComposedHandle(applicationLifecycle, applicationOptions, {
+	production: process.env.NODE_ENV === 'production' && !building
+});
 
 export const handleError: HandleServerError = ({ event, status }) => {
 	if (status >= 500) {
