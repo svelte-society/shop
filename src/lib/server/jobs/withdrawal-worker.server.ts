@@ -9,6 +9,7 @@ import type {
 	WithdrawalMessage,
 	WithdrawalMessageKind
 } from '$lib/server/withdrawals/repository.server';
+import { isWithdrawalProviderDeliveryId } from '$lib/server/withdrawals/repository.server';
 import type {
 	WithdrawalReceiptDeliveryState,
 	WithdrawalReceiptDispatcher
@@ -106,6 +107,9 @@ export class WithdrawalMessageWorker implements WithdrawalReceiptDispatcher {
 			delivery = signal
 				? await this.dependencies.plunk.send(providerMessage, signal)
 				: await this.dependencies.plunk.send(providerMessage);
+			if (!isWithdrawalProviderDeliveryId(delivery.deliveryId)) {
+				throw new PlunkError('PLUNK_RESPONSE_INVALID');
+			}
 		} catch (error) {
 			throwIfAborted(signal);
 			const code = stableFailure(error);
@@ -131,7 +135,6 @@ export class WithdrawalMessageWorker implements WithdrawalReceiptDispatcher {
 			}
 			throw error;
 		}
-		throwIfAborted(signal);
 		this.dependencies.repository.completeMessage(
 			message.id,
 			message.attemptCount,

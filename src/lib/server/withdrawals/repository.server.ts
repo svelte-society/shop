@@ -141,6 +141,10 @@ class WithdrawalRepositoryError extends Error {
 
 const STABLE_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/u;
 
+export function isWithdrawalProviderDeliveryId(value: unknown): value is string {
+	return typeof value === 'string' && PROVIDER_ID_PATTERN.test(value);
+}
+
 function isStableErrorCode(value: unknown): value is string {
 	return typeof value === 'string' && STABLE_ERROR_CODE_PATTERN.test(value);
 }
@@ -284,8 +288,7 @@ function mapMessage(row: MessageRow): WithdrawalMessage {
 		!Number.isSafeInteger(row.attempt_count) ||
 		(row.attempt_count as number) < 0 ||
 		(row.provider_delivery_id !== null &&
-			(typeof row.provider_delivery_id !== 'string' ||
-				!PROVIDER_ID_PATTERN.test(row.provider_delivery_id))) ||
+			!isWithdrawalProviderDeliveryId(row.provider_delivery_id)) ||
 		(row.last_error_code !== null && !isStableErrorCode(row.last_error_code))
 	) {
 		fail('WITHDRAWAL_MESSAGE_ROW_INVALID');
@@ -605,7 +608,7 @@ export class SqliteWithdrawalRepository {
 	): void {
 		validateMessageId(id);
 		validateExpectedAttempt(expectedAttemptCount);
-		if (!PROVIDER_ID_PATTERN.test(providerDeliveryId)) fail('WITHDRAWAL_MESSAGE_INVALID');
+		if (!isWithdrawalProviderDeliveryId(providerDeliveryId)) fail('WITHDRAWAL_MESSAGE_INVALID');
 		const completedAt = isoTimestamp(now, 'WITHDRAWAL_MESSAGE_INVALID');
 		const update = this.database.prepare(`
 			UPDATE withdrawal_messages

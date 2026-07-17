@@ -151,6 +151,70 @@ describe('WithdrawalMessageWorker', () => {
 		});
 	});
 
+	it('settles an accepted response exactly once when shutdown aborts after provider resolution', async () => {
+		const controller = new AbortController();
+		const send = vi.fn(
+			() =>
+				new Promise<{ deliveryId: string }>((resolve) => {
+					resolve({ deliveryId: 'delivery_accepted_before_abort' });
+					controller.abort(new Error('late scheduler shutdown'));
+				})
+		);
+
+		await expect(worker({ send }).attemptReceipt(1, start, controller.signal)).resolves.toBe(
+			'delivered'
+		);
+
+		expect(send).toHaveBeenCalledOnce();
+		expect(repository.getMessage(1)).toMatchObject({
+			attemptCount: 1,
+			providerDeliveryId: 'delivery_accepted_before_abort',
+			completedAt: start,
+			lastErrorCode: null
+		});
+		expect(repository.claimMessage(1, new Date(start.getTime() + 5 * 60_000))).toBeNull();
+		expect(database.prepare('SELECT COUNT(*) AS count FROM withdrawal_messages').get()).toEqual({
+			count: 1
+		});
+	});
+
+	it('treats a malformed accepted delivery ID as a first-attempt invalid response', async () => {
+		const send = vi.fn(async () => ({ deliveryId: 'malformed delivery id' }));
+
+		await expect(worker({ send }).attemptReceipt(1, start)).resolves.toBe('queued');
+
+		expect(repository.getMessage(1)).toMatchObject({
+			attemptCount: 1,
+			providerDeliveryId: null,
+			completedAt: null,
+			lastErrorCode: 'PLUNK_RESPONSE_INVALID',
+			nextAttemptAt: new Date(start.getTime() + 60_000)
+		});
+		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toEqual([]);
+	});
+
+	it('keeps a fifth malformed delivery ID retryable and emits the generic unsent alert', async () => {
+		messageId('receipt', 4);
+		const send = vi.fn(async () => ({ deliveryId: '<malformed-delivery-id>' }));
+
+		await expect(worker({ send }).attemptReceipt(1, start)).resolves.toBe('queued');
+
+		expect(repository.getMessage(1)).toMatchObject({
+			attemptCount: 5,
+			providerDeliveryId: null,
+			completedAt: null,
+			lastErrorCode: 'PLUNK_RESPONSE_INVALID',
+			nextAttemptAt: new Date(start.getTime() + 60 * 60_000)
+		});
+		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toEqual([
+			{
+				alert_code: 'WITHDRAWAL_MESSAGE_UNSENT',
+				alert_subject_id: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				alert_observed_at: start.toISOString()
+			}
+		]);
+	});
+
 	it('backs transient Plunk failures off by 1, 5, 15, then 60 minutes capped at 60', async () => {
 		const send = vi.fn(async () => {
 			throw new PlunkError('PLUNK_TIMEOUT');
