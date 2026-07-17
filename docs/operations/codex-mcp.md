@@ -11,33 +11,42 @@ gates pass. Production checkout must remain disabled for the same period.
 
 ## Generate and install the bearer secret
 
-Generate 256 bits into a mode-`0600` temporary file so the secret is not printed
-to terminal output, logs, or task transcripts:
+Generate 256 bits directly into the current shell environment. Process
+substitution keeps the bearer in shell memory, not on disk, while producing no
+terminal stdout. The command text stored in shell history contains only the
+variable name, never the generated value:
 
 ```sh
-umask 077
-token_file="$(mktemp)"
-openssl rand -hex 32 > "$token_file"
-```
-
-Copy the file contents directly into the Coolify secret field named
-`MCP_BEARER_TOKEN`. On macOS, `pbcopy < "$token_file"` copies it without writing
-it to stdout. Supply the same value as `SVELTE_SHOP_MCP_TOKEN` in the environment
-that starts the local Codex host. Use the operating system's secret manager or a
-private startup wrapper. Never paste either value into `config.toml`, this
-repository, SQLite, a command argument, a log, a screenshot, or an MCP result.
-
-For a one-session private shell, load the value without echoing it:
-
-```sh
-IFS= read -r SVELTE_SHOP_MCP_TOKEN < "$token_file"
+IFS= read -r SVELTE_SHOP_MCP_TOKEN < <(openssl rand -hex 32)
 export SVELTE_SHOP_MCP_TOKEN
-rm -f "$token_file"
-unset token_file
 ```
 
-Restart the Codex host after its environment changes. Coolify must expose the
-matching value to the Node container as `MCP_BEARER_TOKEN`.
+The preferred handoff is an approved secret manager that can inject the value
+as Coolify `MCP_BEARER_TOKEN` and local `SVELTE_SHOP_MCP_TOKEN` without revealing
+it. If that integration is unavailable, a controlled macOS session can copy the
+in-memory value to the volatile clipboard without passing the value as a command
+argument or printing it:
+
+```sh
+printf '%s' "$SVELTE_SHOP_MCP_TOKEN" | pbcopy
+```
+
+Paste it directly into the Coolify secret field, then start or restart the local
+Codex host from the environment containing `SVELTE_SHOP_MCP_TOKEN`. Clear the
+clipboard immediately after both handoffs and remove the value from the parent
+shell when the Codex host has inherited it:
+
+```sh
+printf '' | pbcopy
+unset SVELTE_SHOP_MCP_TOKEN
+```
+
+Clipboard managers may retain copied values after the system clipboard is
+cleared. Treat that as a disclosure risk: disable clipboard history for this
+operation or use the approved secret manager instead. Never paste either value
+into `config.toml`, this repository, SQLite, a command argument, a log, a
+screenshot, or an MCP result. Coolify must expose the matching value to the Node
+container as `MCP_BEARER_TOKEN`.
 
 ## Codex configuration
 
@@ -91,14 +100,18 @@ Static-token rotation has no overlap window, so use a short maintenance window:
 1. Retain the previous token in the approved secret manager for rollback. Do
    not print or export it.
 2. Set `MCP_ENABLED=false` and redeploy; verify `/mcp` returns `404`.
-3. Generate a replacement with the file procedure above.
+3. Generate the replacement into shell memory with the process-substitution
+   procedure above. Use the approved secret manager, or the controlled volatile
+   clipboard with clipboard history disabled.
 4. Replace Coolify `MCP_BEARER_TOKEN` and the Codex-host
-   `SVELTE_SHOP_MCP_TOKEN` from the private file. Do not change the TOML block.
+   `SVELTE_SHOP_MCP_TOKEN` without printing the value or placing it in a command
+   argument. Do not change the TOML block.
 5. Restart the Codex host, redeploy the container, then set `MCP_ENABLED=true`
    and redeploy.
 6. Repeat initialize, tools/list, read, preparation approval, invalid-token
    `401`, and redaction checks.
-7. Delete the previous secret only after every check passes.
+7. Clear the clipboard, unset the parent-shell value, and delete the previous
+   secret from the approved secret manager only after every check passes.
 
 Rollback: set `MCP_ENABLED=false`, restore the previous secret on both hosts,
 restart Codex, redeploy the container, re-enable MCP, and repeat the verification
@@ -118,4 +131,3 @@ binary on `PATH`; the live gate remains manual.
 When the gate runs, replace the pending row with only its date, exact client
 version, and `PASS` or `FAIL`. Do not record endpoint responses, order data,
 tool arguments, headers, or secrets here.
-

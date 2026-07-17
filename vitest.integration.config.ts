@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
 	resolve: {
-		alias: { $lib: resolve('src/lib') }
+		alias: {
+			'$env/dynamic/private': resolve('tests/fixtures/private-env.ts'),
+			$lib: resolve('src/lib')
+		}
 	},
 	test: {
 		name: 'integration',

@@ -8,6 +8,8 @@ import type { PlunkSendInput } from '../../src/lib/server/plunk/gateway';
 import type { StyriaGateway } from '../../src/lib/server/styria/gateway';
 import {
 	createLifecycleDatabase,
+	durableDatabaseDump,
+	expectNoFixturePii,
 	fulfillmentDetails,
 	recordPaidOrder
 } from '../fixtures/fulfillment-lifecycle';
@@ -118,12 +120,7 @@ describe('shipping email integration', () => {
 		});
 		expect(messages.at(-1)?.html).toContain('1 × Community Tee (M)');
 		expect(messages.at(-1)?.html).toContain('Tracking: TRACK-JIT-2042');
-		const durable = JSON.stringify({
-			jobs: database.prepare('SELECT * FROM outbox_jobs').all(),
-			deliveries: database.prepare('SELECT * FROM email_deliveries').all()
-		});
-		expect(durable).not.toContain(fulfillmentDetails.email);
-		expect(durable).not.toContain(fulfillmentDetails.address.line1);
+		expectNoFixturePii(durableDatabaseDump(database));
 		expect(database.prepare('SELECT * FROM email_deliveries').all()).toEqual([
 			expect.objectContaining({
 				kind: 'shipping',

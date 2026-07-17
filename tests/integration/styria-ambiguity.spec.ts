@@ -56,7 +56,7 @@ describe('ambiguous Styria create reconciliation', () => {
 				send: vi.fn(async () => ({ deliveryId: 'unused' }))
 			})
 		});
-		const client = createLocalMcpClient(services, { sessionId: 'ambiguity-session' });
+		const client = createLocalMcpClient(() => services);
 		await client.initialize();
 
 		const prepared = await client.call('prepare_styria_submission', { order_id: paidOrder.id });

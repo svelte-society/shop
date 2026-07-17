@@ -13,6 +13,8 @@ import type { StyriaOrder, StyriaOrderPayload } from '../../src/lib/server/styri
 import {
 	createLifecycleDatabase,
 	createLocalMcpClient,
+	durableDatabaseDump,
+	expectNoFixturePii,
 	fulfillmentDetails,
 	MCP_TOKEN,
 	orderFromPayload,
@@ -66,20 +68,29 @@ describe('Codex MCP fulfillment lifecycle', () => {
 				return { deliveryId: `plunk-${plunkMessages.length}` };
 			})
 		};
-		const services = createRuntimeMcpServices(database, runtimeEnvironment, {
-			createStripeGateway: () => stripe,
-			createStyriaGateway: () => styria,
-			createPlunkGateway: () => plunk
-		});
-		const client = createLocalMcpClient(services);
+		const createServices = vi.fn(() =>
+			createRuntimeMcpServices(database, runtimeEnvironment, {
+				createStripeGateway: () => stripe,
+				createStyriaGateway: () => styria,
+				createPlunkGateway: () => plunk
+			})
+		);
+		const client = createLocalMcpClient(createServices);
+		expect(createServices).not.toHaveBeenCalled();
 
 		const initialized = await client.initialize();
+		expect(createServices).toHaveBeenCalledOnce();
 		expect(initialized.response.status).toBe(200);
+		expect(initialized.response.headers.get('mcp-session-id')).toBeTruthy();
+		expect(initialized.response.headers.get('mcp-session-id')).not.toBe('integration-mcp-session');
 		expect(initialized.message.result).toMatchObject({
 			serverInfo: { name: 'svelte-society-shop', version: '1.0.0' }
 		});
 
 		const listedTools = await client.listTools();
+		expect(listedTools.response.headers.get('mcp-session-id')).toBe(
+			initialized.response.headers.get('mcp-session-id')
+		);
 		const tools = listedTools.message.result.tools as Array<{
 			name: string;
 			annotations: { readOnlyHint: boolean };
@@ -112,7 +123,7 @@ describe('Codex MCP fulfillment lifecycle', () => {
 				fulfillment: { status: 'pending_review' }
 			}
 		});
-		expect(JSON.stringify(inspected.message.result)).not.toContain(fulfillmentDetails.email);
+		expectNoFixturePii(inspected.message.result);
 
 		const prepared = await client.call('prepare_styria_submission', { order_id: paidOrder.id });
 		const preparation = prepared.message.result.structuredContent as {
@@ -219,17 +230,18 @@ describe('Codex MCP fulfillment lifecycle', () => {
 				completed_at: expect.any(String)
 			})
 		]);
-		const localRows = JSON.stringify(database.prepare('SELECT * FROM email_deliveries').all());
-		expect(localRows).not.toContain(fulfillmentDetails.email);
-		expect(localRows).not.toContain(fulfillmentDetails.address.line1);
+		expectNoFixturePii(durableDatabaseDump(database));
 	});
 
 	it('rejects disabled and invalid bearer requests before protocol handling without echoing tokens', async () => {
-		const disabled = createLocalMcpClient({}, { enabled: 'false' });
+		const createDisabledServices = vi.fn(() => ({}));
+		const disabled = createLocalMcpClient(createDisabledServices, { enabled: 'false' });
 		const disabledResponse = await disabled.post({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 		expect(disabledResponse.status).toBe(404);
+		expect(createDisabledServices).not.toHaveBeenCalled();
 
-		const client = createLocalMcpClient({});
+		const createServices = vi.fn(() => ({}));
+		const client = createLocalMcpClient(createServices);
 		const rejected = await client.post(
 			{ jsonrpc: '2.0', id: 2, method: 'initialize' },
 			'invalid-bearer-never-echo'
@@ -237,6 +249,7 @@ describe('Codex MCP fulfillment lifecycle', () => {
 		const observable = `${rejected.status}\n${JSON.stringify([...rejected.headers])}\n${await rejected.text()}`;
 		expect(rejected.status).toBe(401);
 		expect(rejected.headers.get('www-authenticate')).toBe('Bearer');
+		expect(createServices).not.toHaveBeenCalled();
 		expect(observable).not.toContain('invalid-bearer-never-echo');
 		expect(observable).not.toContain(MCP_TOKEN);
 	});
@@ -246,6 +259,13 @@ describe('Codex MCP fulfillment lifecycle', () => {
 		const exactConfig = `[mcp_servers.svelte_society_shop]\nurl = "https://shop.sveltesociety.dev/mcp"\nbearer_token_env_var = "SVELTE_SHOP_MCP_TOKEN"\ndefault_tools_approval_mode = "writes"`;
 
 		expect(document).toContain('openssl rand -hex 32');
+		expect(document).not.toMatch(/mktemp|token_file/i);
+		expect(document).toContain('IFS= read -r SVELTE_SHOP_MCP_TOKEN < <(openssl rand -hex 32)');
+		expect(document).toContain(`printf '%s' "$SVELTE_SHOP_MCP_TOKEN" | pbcopy`);
+		expect(document).toMatch(/clear.*clipboard/is);
+		expect(document).toMatch(/clipboard manager.*risk/is);
+		expect(document).toMatch(/approved secret manager/is);
+		expect(document).toMatch(/memory.*not.*disk/is);
 		expect(document).toContain('MCP_BEARER_TOKEN');
 		expect(document).toContain('SVELTE_SHOP_MCP_TOKEN');
 		expect(document).toContain(exactConfig);

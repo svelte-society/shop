@@ -1,15 +1,16 @@
 import Database from 'better-sqlite3';
 import { resolve } from 'node:path';
-import { HttpTransport } from '@tmcp/transport-http';
+import { expect } from 'vitest';
 import { SqliteCheckoutDraftRepository } from '../../src/lib/server/db/checkout-drafts.server';
 import { SqlitePaidOrderUnitOfWork } from '../../src/lib/server/db/orders.server';
 import { SqliteStripeEventRepository } from '../../src/lib/server/db/stripe-events.server';
 import { migrate } from '../../src/lib/server/db/migrate.server';
 import type { ShopDatabase } from '../../src/lib/server/db/types';
-import { authorizeBearer } from '../../src/lib/server/mcp/auth.server';
-import { createMcpServer, type McpServices } from '../../src/lib/server/mcp/server';
+import type { McpServices } from '../../src/lib/server/mcp/server';
+import { createMcpResponder } from '../../src/lib/server/mcp/transport.server';
 import type { FulfillmentDetails } from '../../src/lib/server/stripe/gateway';
 import type { StyriaOrder, StyriaOrderPayload } from '../../src/lib/server/styria/types';
+import { _createMcpRequestHandler } from '../../src/routes/mcp/+server';
 
 export const MCP_TOKEN = 'integration-mcp-token.never-log';
 export const PAID_AT = new Date('2026-07-16T08:00:00.000Z');
@@ -31,6 +32,43 @@ export const fulfillmentDetails: FulfillmentDetails = {
 	},
 	email: 'ada@example.test'
 };
+
+export const fixturePiiValues = [
+	fulfillmentDetails.recipient.firstName,
+	fulfillmentDetails.recipient.lastName,
+	`${fulfillmentDetails.recipient.firstName} ${fulfillmentDetails.recipient.lastName}`,
+	fulfillmentDetails.recipient.company,
+	fulfillmentDetails.email,
+	fulfillmentDetails.recipient.phone,
+	fulfillmentDetails.address.line1,
+	fulfillmentDetails.address.line2,
+	fulfillmentDetails.address.city,
+	fulfillmentDetails.address.state,
+	fulfillmentDetails.address.postalCode
+].filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+
+export function expectNoFixturePii(value: unknown): void {
+	const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+	for (const pii of fixturePiiValues) expect(serialized).not.toContain(pii);
+}
+
+export function durableDatabaseDump(database: ShopDatabase): Record<string, unknown[]> {
+	const tables = database
+		.prepare(
+			`SELECT name FROM sqlite_master
+			WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+			ORDER BY name`
+		)
+		.all() as Array<{ name: unknown }>;
+	return Object.fromEntries(
+		tables.map(({ name }) => {
+			if (typeof name !== 'string' || !/^[a-z0-9_]+$/i.test(name)) {
+				throw new Error('TEST_DATABASE_TABLE_INVALID');
+			}
+			return [name, database.prepare(`SELECT * FROM "${name}"`).all()];
+		})
+	);
+}
 
 export function createLifecycleDatabase(): ShopDatabase {
 	const database = new Database(':memory:');
@@ -132,40 +170,46 @@ async function eventData(response: Response): Promise<RpcResponse> {
 }
 
 export function createLocalMcpClient(
-	services: McpServices,
-	options: { token?: string; enabled?: string; sessionId?: string } = {}
+	services: McpServices | (() => McpServices),
+	options: { token?: string; enabled?: string } = {}
 ) {
 	const token = options.token ?? MCP_TOKEN;
-	const sessionId = options.sessionId ?? 'integration-mcp-session';
-	const transport = new HttpTransport(createMcpServer(services), { path: '/mcp' });
-	const handler = async ({ request }: { request: Request }): Promise<Response> => {
-		if ((options.enabled ?? 'true') === 'false') return new Response(null, { status: 404 });
-		if (!authorizeBearer(request.headers.get('authorization'), MCP_TOKEN)) {
-			return new Response(null, {
-				status: 401,
-				headers: { 'www-authenticate': 'Bearer' }
-			});
-		}
-		return (await transport.respond(request)) ?? new Response(null, { status: 404 });
-	};
+	const createServices = typeof services === 'function' ? services : () => services;
+	const handler = _createMcpRequestHandler(
+		{ MCP_ENABLED: options.enabled ?? 'true', MCP_BEARER_TOKEN: MCP_TOKEN },
+		createMcpResponder(createServices)
+	);
+	let sessionId: string | undefined;
 	let nextId = 1;
 
-	async function post(body: Record<string, unknown>, suppliedToken = token): Promise<Response> {
+	async function post(
+		body: Record<string, unknown>,
+		suppliedToken = token,
+		postOptions: { sessionId?: string | null } = {}
+	): Promise<Response> {
+		const headers = new Headers({
+			'content-type': 'application/json',
+			authorization: `Bearer ${suppliedToken}`
+		});
+		const requestSessionId =
+			postOptions.sessionId === undefined ? sessionId : postOptions.sessionId;
+		if (requestSessionId) headers.set('mcp-session-id', requestSessionId);
 		const request = new Request('https://shop.sveltesociety.dev/mcp', {
 			method: 'POST',
-			headers: {
-				'content-type': 'application/json',
-				authorization: `Bearer ${suppliedToken}`,
-				'mcp-session-id': sessionId
-			},
+			headers,
 			body: JSON.stringify(body)
 		});
-		return handler({ request });
+		const response = await handler({ request } as Parameters<typeof handler>[0]);
+		const responseSessionId = response.headers.get('mcp-session-id');
+		if (responseSessionId && postOptions.sessionId === undefined) sessionId = responseSessionId;
+		return response;
 	}
 
 	return {
 		handler,
-		sessionId,
+		get sessionId() {
+			return sessionId;
+		},
 		async initialize() {
 			const id = nextId++;
 			const response = await post({
