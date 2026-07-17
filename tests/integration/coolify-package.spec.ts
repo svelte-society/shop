@@ -1,0 +1,110 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const root = resolve(import.meta.dirname, '../..');
+
+async function text(path: string): Promise<string> {
+	return readFile(resolve(root, path), 'utf8');
+}
+
+describe('Coolify production package', () => {
+	it('starts the adapter-node build with the pinned pnpm and Node 24 contract', async () => {
+		const packageJson = JSON.parse(await text('package.json')) as {
+			packageManager?: string;
+			scripts?: Record<string, string>;
+		};
+		const dockerfile = await text('Dockerfile');
+
+		expect(packageJson.packageManager).toBe('pnpm@10.28.1');
+		expect(packageJson.scripts?.start).toBe('node build');
+		expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim AS base$/m);
+		expect(dockerfile).toContain('corepack prepare pnpm@10.28.1 --activate');
+		expect(dockerfile).toContain('RUN pnpm install --frozen-lockfile');
+		expect(dockerfile).toContain('RUN pnpm build');
+		expect(dockerfile).toContain('RUN pnpm prune --prod');
+		expect(dockerfile).toContain('CMD ["node", "build"]');
+	});
+
+	it('runs as one non-root process with only persistent data writable', async () => {
+		const dockerfile = await text('Dockerfile');
+
+		expect(dockerfile).toContain('ENV HOST=0.0.0.0');
+		expect(dockerfile).toContain('ENV PORT=3000');
+		expect(dockerfile).toContain('ENV DATABASE_PATH=/data/shop.sqlite');
+		expect(dockerfile).toContain('ENV TMPDIR=/data/tmp');
+		expect(dockerfile).toContain('--uid 10001');
+		expect(dockerfile).toContain('--gid 10001');
+		expect(dockerfile).toContain('USER shop');
+		expect(dockerfile).toContain('VOLUME ["/data"]');
+		expect(dockerfile).toContain("fetch('http://127.0.0.1:3000/health/live')");
+		expect(dockerfile).not.toMatch(/(?:RUN|CMD)\s+(?:npm|bun)\b/u);
+	});
+
+	it('excludes local state, secrets, and development-only artifacts from the image', async () => {
+		const ignore = await text('.dockerignore');
+
+		for (const pattern of [
+			'.git',
+			'.svelte-kit',
+			'node_modules',
+			'.env*',
+			'!.env.example',
+			'*.sqlite*',
+			'*-wal',
+			'*-shm',
+			'coverage',
+			'test-results',
+			'playwright-report',
+			'scripts/dev-test-catalog.mjs'
+		]) {
+			expect(ignore).toContain(pattern);
+		}
+	});
+
+	it('tests fail-closed bootstrap, health, persistence, headers, and SIGTERM cleanup', async () => {
+		const script = await text('tests/integration/docker-health.sh');
+
+		for (const token of [
+			'--env "DATABASE_BOOTSTRAP=$bootstrap"',
+			'start_container "$BOOTSTRAP_CONTAINER" "$PRIMARY_VOLUME" true true',
+			'start_container "$NORMAL_CONTAINER" "$PRIMARY_VOLUME" false true',
+			'/health/live',
+			'/health/ready',
+			'10001:10001',
+			'APPLICATION_SCHEDULER_STOPPED',
+			'APPLICATION_DATABASE_CLOSED',
+			'strict-transport-security',
+			'content-security-policy',
+			'SELECT COUNT(*) AS count FROM orders',
+			'docker stop'
+		]) {
+			expect(script).toContain(token);
+		}
+	});
+
+	it('documents the verified Coolify and proxy handoff without a static CSP override', async () => {
+		const runbook = await text('docs/operations/coolify.md');
+
+		for (const token of [
+			'shop.sveltesociety.dev',
+			'ORIGIN=https://shop.sveltesociety.dev',
+			'ADDRESS_HEADER=X-Forwarded-For',
+			'XFF_DEPTH',
+			'DATABASE_BOOTSTRAP=true',
+			'DATABASE_BOOTSTRAP=false',
+			'/data',
+			'10001:10001',
+			'https-0-<resource-uuid>',
+			'Readonly labels',
+			'https://coolify.io/docs/applications/build-packs/dockerfile',
+			'https://coolify.io/docs/knowledge-base/persistent-storage',
+			'https://coolify.io/docs/knowledge-base/health-checks',
+			'https://coolify.io/docs/knowledge-base/proxy/traefik/custom-middlewares'
+		]) {
+			expect(runbook).toContain(token);
+		}
+		expect(runbook).toContain('nonce');
+		expect(runbook).not.toMatch(/middlewares\.[^.]+\.headers\.contentSecurityPolicy/u);
+	});
+});

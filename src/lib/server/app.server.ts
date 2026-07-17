@@ -9,6 +9,7 @@ import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
 import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
+import { log } from '$lib/server/logging/logger.server';
 import { createPlunkClient, PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import { createShippingEmailSender } from '$lib/server/plunk/shipping-email';
 import {
@@ -43,6 +44,10 @@ export type ApplicationRuntimeDependencies = {
 	scheduleSchedulerActivation?: (callback: () => void, delayMs: number) => ApplicationTimerHandle;
 	cancelSchedulerActivation?: (handle: ApplicationTimerHandle) => void;
 	schedulerActivationRetryMs?: number;
+	reportShutdown?: (
+		event: 'scheduler_stopped' | 'database_closed',
+		details: { schedulerActive: boolean }
+	) => void;
 };
 
 export type ApplicationTimerHandle = {
@@ -53,6 +58,42 @@ export interface ApplicationLifecycle {
 	start(options: ApplicationStartOptions): Promise<ApplicationRuntime | null>;
 	current(): ApplicationRuntime | null;
 	stop(): Promise<void>;
+}
+
+export type ApplicationShutdownTarget = {
+	on(event: 'sveltekit:shutdown', listener: (reason?: string) => Promise<void>): unknown;
+};
+
+type ApplicationShutdownState = {
+	application: ApplicationLifecycle;
+	listener: (reason?: string) => Promise<void>;
+};
+
+const shutdownStateKey = Symbol.for('dev.sveltesociety.shop.application-shutdown');
+
+export function registerApplicationShutdown(
+	application: ApplicationLifecycle,
+	target: ApplicationShutdownTarget = process
+): void {
+	const stateTarget = target as ApplicationShutdownTarget & Record<PropertyKey, unknown>;
+	const existing = stateTarget[shutdownStateKey] as ApplicationShutdownState | undefined;
+	if (existing) {
+		existing.application = application;
+		return;
+	}
+
+	const state: ApplicationShutdownState = {
+		application,
+		async listener() {
+			await state.application.stop();
+		}
+	};
+	stateTarget[shutdownStateKey] = state;
+	if (target === process) {
+		process.on('sveltekit:shutdown', state.listener);
+	} else {
+		target.on('sveltekit:shutdown', state.listener);
+	}
 }
 
 function requiredEnvironmentValue(environment: RuntimeEnvironment, name: string): string {
@@ -168,6 +209,7 @@ export function createApplicationLifecycle(
 	const scheduleActivation = dependencies.scheduleSchedulerActivation ?? scheduleAfter;
 	const cancelActivation = dependencies.cancelSchedulerActivation ?? cancelScheduled;
 	const activationRetryMs = dependencies.schedulerActivationRetryMs ?? 5_000;
+	const reportShutdown = dependencies.reportShutdown ?? (() => undefined);
 	let runtime: ApplicationRuntime | null = null;
 	let startup: Promise<ApplicationRuntime | null> | null = null;
 	let stopping: Promise<void> | null = null;
@@ -315,11 +357,22 @@ export function createApplicationLifecycle(
 				if (activation) await activation;
 				if (!runtime) return;
 				const current = runtime;
+				const schedulerActive = current.scheduler !== null;
 				try {
 					await current.scheduler?.stop();
+					try {
+						reportShutdown('scheduler_stopped', { schedulerActive });
+					} catch {
+						// Observability must not block shutdown.
+					}
 				} finally {
 					close();
 					runtime = null;
+					try {
+						reportShutdown('database_closed', { schedulerActive });
+					} catch {
+						// Observability must not block shutdown.
+					}
 				}
 			})();
 			const trackedStop = operation.finally(() => {
@@ -331,4 +384,17 @@ export function createApplicationLifecycle(
 	};
 }
 
-export const applicationLifecycle = createApplicationLifecycle();
+export const applicationLifecycle = createApplicationLifecycle({
+	reportShutdown(event, details) {
+		log({
+			level: 'info',
+			code:
+				event === 'scheduler_stopped'
+					? 'APPLICATION_SCHEDULER_STOPPED'
+					: 'APPLICATION_DATABASE_CLOSED',
+			fields: { scheduler_count: details.schedulerActive ? 1 : 0 }
+		});
+	}
+});
+
+registerApplicationShutdown(applicationLifecycle);

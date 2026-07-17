@@ -11,6 +11,7 @@
 		"dev": "vite dev",
 		"dev:test-catalog": "node scripts/dev-test-catalog.mjs",
 		"build": "vite build",
+		"start": "node build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
