@@ -170,11 +170,18 @@ describe('/mcp TMCP Streamable HTTP protocol', () => {
 		expect(initialized.id).toBe(10);
 		expect(list.status).toBe(200);
 		expect(list.headers.get('mcp-session-id')).toBe(sessionId);
-		expect(listed).toEqual({
-			jsonrpc: '2.0',
-			id: 11,
-			result: { tools: [] }
-		});
+		expect(listed.jsonrpc).toBe('2.0');
+		expect(listed.id).toBe(11);
+		expect((listed.result.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
+			'list_pending_orders',
+			'inspect_order',
+			'prepare_styria_submission',
+			'submit_styria_order',
+			'reconcile_styria_order',
+			'check_fulfillment_status',
+			'resend_shipping_email',
+			'record_return_or_replacement'
+		]);
 	});
 
 	it('DELETE cleans up a notification stream session so it can be opened again', async () => {
