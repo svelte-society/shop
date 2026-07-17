@@ -105,6 +105,28 @@ describe('parseWithdrawalConfig', () => {
 		).toMatchObject({ keyVersion: 1 });
 	});
 
+	it('parses identically when both commerce feature flags are absent', () => {
+		const {
+			STOREFRONT_ENABLED: _storefront,
+			CHECKOUT_ENABLED: _checkout,
+			...withoutCommerceFlags
+		} = validPrivateEnv;
+
+		expect(parseWithdrawalConfig(withoutCommerceFlags)).toEqual(
+			parseWithdrawalConfig(validPrivateEnv)
+		);
+	});
+
+	it.each([
+		{ STOREFRONT_ENABLED: 'malformed', CHECKOUT_ENABLED: 'false' },
+		{ STOREFRONT_ENABLED: 'true', CHECKOUT_ENABLED: 'malformed' },
+		{ STOREFRONT_ENABLED: 'malformed', CHECKOUT_ENABLED: 'also-malformed' }
+	])('ignores malformed commerce feature flags %#', (commerceFlags) => {
+		expect(parseWithdrawalConfig({ ...validPrivateEnv, ...commerceFlags })).toEqual(
+			parseWithdrawalConfig(validPrivateEnv)
+		);
+	});
+
 	it('maps every public or policy validation error to its withdrawal-only error', () => {
 		expect(() =>
 			parseWithdrawalConfig({ ...validPrivateEnv, SUPPORT_EMAIL: 'not-an-email' })

@@ -77,6 +77,16 @@ const stripeEnvSchema = v.object({
 	STRIPE_FREE_SHIPPING_RATE_ID: requiredValueSchema
 });
 
+const withdrawalPublicEnvSchema = v.object({
+	PRODUCTION_ORIGIN: v.pipe(
+		v.string(),
+		v.url(),
+		v.transform((value) => new URL(value)),
+		v.check((value) => value.protocol === 'https:')
+	),
+	SUPPORT_EMAIL: v.pipe(v.string(), v.email())
+});
+
 export function parseSellerPolicyConfig(
 	env: Record<string, string | undefined>
 ): SellerPolicyConfig {
@@ -100,13 +110,14 @@ export function parseSellerPolicyConfig(
 
 export function parseWithdrawalConfig(env: Record<string, string | undefined>): WithdrawalConfig {
 	try {
-		const publicConfig = parsePublicConfig(env);
+		const publicResult = v.safeParse(withdrawalPublicEnvSchema, env);
+		if (!publicResult.success) throw new Error('CONFIG_WITHDRAWAL_INVALID');
 		const policyConfig = parseSellerPolicyConfig(env);
 		return {
 			dataKey: parseWithdrawalDataKey(env.WITHDRAWAL_DATA_KEY),
 			keyVersion: 1,
-			productionOrigin: publicConfig.productionOrigin,
-			supportEmail: publicConfig.supportEmail,
+			productionOrigin: publicResult.output.PRODUCTION_ORIGIN,
+			supportEmail: publicResult.output.SUPPORT_EMAIL,
 			seller: {
 				legalName: policyConfig.sellerLegalName,
 				registrationNumber: policyConfig.sellerRegistrationNumber,
