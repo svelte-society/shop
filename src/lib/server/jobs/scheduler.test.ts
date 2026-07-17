@@ -9,12 +9,15 @@ import {
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import type { BackupService } from '$lib/server/backups/service.server';
+import type { BackupStore } from '$lib/server/backups/s3.server';
 import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
 import { SqliteLeaseRepository } from './leases.server';
 import {
+	BACKUP_JOB_NAME,
 	OUTBOX_JOB_NAME,
 	OutboxScheduler,
 	STYRIA_SYNC_JOB_NAME,
@@ -36,7 +39,15 @@ const schedulerRuntimeEnvironment = {
 	STRIPE_SECRET_KEY: 'sk_test_scheduler_stripe',
 	STYRIA_APP_ID: 'scheduler-app',
 	STYRIA_SECRET_KEY: 'scheduler-secret',
-	STYRIA_BASE_URL: 'https://styria.scheduler.test'
+	STYRIA_BASE_URL: 'https://styria.scheduler.test',
+	S3_ENDPOINT: 'https://s3.scheduler.test',
+	S3_BUCKET: 'scheduler-backups',
+	S3_REGION: 'eu-north-1',
+	S3_ACCESS_KEY_ID: 'scheduler-access',
+	S3_SECRET_ACCESS_KEY: 'scheduler-private',
+	S3_PREFIX: 'shop-backups',
+	S3_FORCE_PATH_STYLE: 'true',
+	BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64')
 };
 const runtimeTemporaryDirectories: string[] = [];
 
@@ -122,7 +133,8 @@ describe('application runtime', () => {
 			start: vi.fn(() => sequence.push('scheduler-started')),
 			stop: vi.fn(async () => undefined),
 			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
+			runStyriaSyncOnce: vi.fn(async () => undefined),
+			runBackupOnce: vi.fn(async () => undefined)
 		};
 		const dependencies: ApplicationRuntimeDependencies = {
 			migrationsDirectory,
@@ -179,7 +191,8 @@ describe('application runtime', () => {
 			start: vi.fn(),
 			stop: vi.fn(async () => undefined),
 			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
+			runStyriaSyncOnce: vi.fn(async () => undefined),
+			runBackupOnce: vi.fn(async () => undefined)
 		};
 		const createScheduler = vi.fn(() => scheduler);
 		const checkReadiness = vi.fn(async (runtime) => {
@@ -231,7 +244,8 @@ describe('application runtime', () => {
 			start: vi.fn(),
 			stop: vi.fn(async () => undefined),
 			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
+			runStyriaSyncOnce: vi.fn(async () => undefined),
+			runBackupOnce: vi.fn(async () => undefined)
 		};
 		const checkReadiness = vi
 			.fn()
@@ -559,24 +573,53 @@ describe('application runtime', () => {
 
 	it('wires the enabled production scheduler to migrated SQLite and records its immediate run', async () => {
 		closeDatabase();
+		const objects = new Map<string, { body: Uint8Array; lastModified: Date }>();
+		const backupStore: BackupStore = {
+			async put(key, body) {
+				objects.set(key, { body: Uint8Array.from(body), lastModified: initialNow });
+			},
+			async get(key) {
+				const object = objects.get(key);
+				if (!object) throw new Error('missing test object');
+				return object.body;
+			},
+			async list(prefix) {
+				return [...objects.entries()]
+					.filter(([key]) => key.startsWith(prefix))
+					.map(([key, object]) => ({ key, lastModified: object.lastModified }));
+			},
+			async delete(keys) {
+				for (const key of keys) objects.delete(key);
+			}
+		};
+		const createBackupStore = vi.fn(() => backupStore);
+		const temporaryDirectory = runtimeTemporaryDirectory();
 		const application = createApplicationLifecycle({
 			migrationsDirectory,
-			checkReadiness: async () => ({ ready: true })
+			checkReadiness: async () => ({ ready: true }),
+			createBackupStore
 		});
 
 		const runtime = await application.start({
-			environment: schedulerRuntimeEnvironment,
+			environment: { ...schedulerRuntimeEnvironment, TMPDIR: temporaryDirectory },
 			building: false,
 			test: false
 		});
 
 		expect(runtime?.scheduler).toBeInstanceOf(OutboxScheduler);
+		await runtime?.scheduler?.runBackupOnce(new Date('2026-07-17T02:30:45.000Z'));
+		expect(createBackupStore).toHaveBeenCalledOnce();
+		expect([...objects.keys()].sort()).toEqual([
+			'shop-backups/2026/07/17/shop-20260717T023045Z.sqlite.ssbk',
+			'shop-backups/2026/07/17/shop-20260717T023045Z.sqlite.ssbk.sha256'
+		]);
 		await runtime?.scheduler?.stop();
 		expect(
 			runtime?.database.prepare('SELECT name, result, error_code FROM job_runs ORDER BY id').all()
 		).toEqual([
 			{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null },
-			{ name: STYRIA_SYNC_JOB_NAME, result: 'completed', error_code: null }
+			{ name: STYRIA_SYNC_JOB_NAME, result: 'completed', error_code: null },
+			{ name: BACKUP_JOB_NAME, result: 'completed', error_code: null }
 		]);
 		await application.stop();
 		expect(runtime?.database.open).toBe(false);
@@ -638,13 +681,15 @@ describe('application runtime', () => {
 				}),
 				stop: vi.fn(async () => undefined),
 				runOutboxOnce: vi.fn(async () => undefined),
-				runStyriaSyncOnce: vi.fn(async () => undefined)
+				runStyriaSyncOnce: vi.fn(async () => undefined),
+				runBackupOnce: vi.fn(async () => undefined)
 			};
 			const runningScheduler = {
 				start: vi.fn(),
 				stop: vi.fn(async () => undefined),
 				runOutboxOnce: vi.fn(async () => undefined),
-				runStyriaSyncOnce: vi.fn(async () => undefined)
+				runStyriaSyncOnce: vi.fn(async () => undefined),
+				runBackupOnce: vi.fn(async () => undefined)
 			};
 			const createScheduler = vi
 				.fn()
@@ -1189,5 +1234,237 @@ describe('OutboxScheduler', () => {
 		await expect(scheduler.runStyriaSyncOnce()).resolves.toBeUndefined();
 		expect(sync.run).toHaveBeenCalledTimes(3);
 		await scheduler.stop();
+	});
+
+	it('runs backup at the next 02:30 UTC under a 120-minute lease and schedules the next UTC day', async () => {
+		const timers = timerHarness();
+		let current = new Date('2026-07-17T01:00:00.000Z');
+		const backup: BackupService = {
+			run: vi.fn(async (runAt) => {
+				expect(runAt).toEqual(current);
+				expect(
+					database
+						.prepare('SELECT owner_id, expires_at FROM job_leases WHERE name = ?')
+						.get(BACKUP_JOB_NAME)
+				).toEqual({
+					owner_id: 'scheduler-backup-owner',
+					expires_at: new Date(current.getTime() + 120 * 60_000).toISOString()
+				});
+				return { objectKey: 'backup/object.ssbk', checksum: 'a'.repeat(64), deleted: 0 };
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			backup,
+			enabled: true,
+			ownerId: 'scheduler-backup-owner',
+			clock: () => current,
+			schedule: timers.schedule,
+			scheduleBackup: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		await scheduler.runOutboxOnce();
+		expect(backup.run).not.toHaveBeenCalled();
+		expect(timers.handles(90 * 60_000)).toHaveLength(1);
+		expect(timers.handles(90 * 60_000)[0].unref).toHaveBeenCalledOnce();
+
+		current = new Date('2026-07-17T02:30:00.000Z');
+		timers.fire(90 * 60_000);
+		await scheduler.runBackupOnce();
+
+		expect(backup.run).toHaveBeenCalledOnce();
+		expect(backup.run).toHaveBeenCalledWith(current, expect.any(AbortSignal));
+		expect(timers.handles(24 * 60 * 60_000)).toHaveLength(1);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(
+			database
+				.prepare('SELECT name, result, error_code FROM job_runs WHERE name = ?')
+				.all(BACKUP_JOB_NAME)
+		).toEqual([{ name: BACKUP_JOB_NAME, result: 'completed', error_code: null }]);
+		await scheduler.stop();
+	});
+
+	it('recomputes 02:30 UTC across year rollover instead of drifting by a local-day interval', async () => {
+		const timers = timerHarness();
+		let current = new Date('2026-12-31T23:00:00.000Z');
+		const backup: BackupService = {
+			run: vi.fn(async () => ({ objectKey: 'key', checksum: 'a'.repeat(64), deleted: 0 }))
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			backup,
+			enabled: true,
+			ownerId: 'scheduler-backup-rollover',
+			clock: () => current,
+			schedule: timers.schedule,
+			scheduleBackup: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		expect(timers.handles(3.5 * 60 * 60_000)).toHaveLength(1);
+		current = new Date('2027-01-01T02:30:00.000Z');
+		timers.fire(3.5 * 60 * 60_000);
+		await scheduler.runBackupOnce();
+		expect(timers.handles(24 * 60 * 60_000)).toHaveLength(1);
+		await scheduler.stop();
+	});
+
+	it('reports a redacted failure and retries only at the next daily cadence', async () => {
+		const timers = timerHarness();
+		let current = new Date('2026-07-17T02:29:00.000Z');
+		const reportError = vi.fn();
+		const backup: BackupService = {
+			run: vi
+				.fn<BackupService['run']>()
+				.mockRejectedValueOnce(new Error('private key credential object-body'))
+				.mockResolvedValue({ objectKey: 'key', checksum: 'a'.repeat(64), deleted: 0 })
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			backup,
+			enabled: true,
+			ownerId: 'scheduler-backup-recovery',
+			clock: () => current,
+			schedule: timers.schedule,
+			scheduleBackup: timers.schedule,
+			cancel: timers.cancel,
+			reportError
+		});
+
+		scheduler.start();
+		current = new Date('2026-07-17T02:30:00.000Z');
+		timers.fire(60_000);
+		await expect(scheduler.runBackupOnce()).rejects.toThrow('private key credential object-body');
+		await settleAsyncWork();
+		expect(reportError).toHaveBeenCalledWith('BACKUP_FAILED');
+		expect(backup.run).toHaveBeenCalledOnce();
+		expect(timers.handles(24 * 60 * 60_000)).toHaveLength(1);
+
+		current = new Date('2026-07-18T02:30:00.000Z');
+		timers.fire(24 * 60 * 60_000);
+		await expect(scheduler.runBackupOnce()).resolves.toBeUndefined();
+		expect(backup.run).toHaveBeenCalledTimes(2);
+		expect(
+			database
+				.prepare('SELECT result, error_code FROM job_runs WHERE name = ? ORDER BY id')
+				.all(BACKUP_JOB_NAME)
+		).toEqual([
+			{ result: 'failed', error_code: 'BACKUP_FAILED' },
+			{ result: 'completed', error_code: null }
+		]);
+		await scheduler.stop();
+	});
+
+	it('aborts active backup storage work and awaits settlement before shutdown returns', async () => {
+		const timers = timerHarness();
+		let receivedSignal: AbortSignal | undefined;
+		let networkActive = false;
+		const backup: BackupService = {
+			run: vi.fn(
+				async (_runAt, signal) =>
+					new Promise<{ objectKey: string; checksum: string; deleted: number }>(
+						(_resolve, reject) => {
+							receivedSignal = signal;
+							networkActive = true;
+							signal?.addEventListener(
+								'abort',
+								() => {
+									networkActive = false;
+									reject(new Error('provider aborted'));
+								},
+								{ once: true }
+							);
+						}
+					)
+			)
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			backup,
+			enabled: true,
+			ownerId: 'scheduler-backup-shutdown',
+			clock: () => initialNow,
+			schedule: timers.schedule,
+			scheduleBackup: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		const active = scheduler.runBackupOnce();
+		const overlapping = scheduler.runBackupOnce();
+		await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+		expect(networkActive).toBe(true);
+
+		const stopping = scheduler.stop();
+		expect(receivedSignal?.aborted).toBe(true);
+		await expect(active).rejects.toThrow('provider aborted');
+		await expect(overlapping).rejects.toThrow('provider aborted');
+		await stopping;
+
+		expect(networkActive).toBe(false);
+		expect(backup.run).toHaveBeenCalledOnce();
+		await expect(scheduler.runBackupOnce()).resolves.toBeUndefined();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(
+			database
+				.prepare('SELECT result, error_code FROM job_runs WHERE name = ?')
+				.all(BACKUP_JOB_NAME)
+		).toEqual([{ result: 'failed', error_code: 'BACKUP_FAILED' }]);
+	});
+
+	it('keeps shutdown pending until a non-abortable SQLite snapshot boundary returns', async () => {
+		const timers = timerHarness();
+		let releaseSnapshot!: () => void;
+		const snapshotBoundary = new Promise<void>((resolve) => {
+			releaseSnapshot = resolve;
+		});
+		let receivedSignal: AbortSignal | undefined;
+		const backup: BackupService = {
+			run: vi.fn(async (_runAt, signal) => {
+				receivedSignal = signal;
+				await snapshotBoundary;
+				if (signal?.aborted) throw new Error('snapshot returned after shutdown');
+				return { objectKey: 'key', checksum: 'a'.repeat(64), deleted: 0 };
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			backup,
+			enabled: true,
+			ownerId: 'scheduler-backup-snapshot-shutdown',
+			clock: () => initialNow,
+			schedule: timers.schedule,
+			scheduleBackup: timers.schedule,
+			cancel: timers.cancel
+		});
+		scheduler.start();
+		const active = scheduler.runBackupOnce();
+		await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+		let stopped = false;
+		const stopping = scheduler.stop().finally(() => {
+			stopped = true;
+		});
+
+		expect(receivedSignal?.aborted).toBe(true);
+		await Promise.resolve();
+		expect(stopped).toBe(false);
+		releaseSnapshot();
+		await expect(active).rejects.toThrow('snapshot returned after shutdown');
+		await stopping;
+		expect(stopped).toBe(true);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 	});
 });

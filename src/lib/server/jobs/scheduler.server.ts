@@ -1,10 +1,12 @@
 import type { ShopDatabase } from '$lib/server/db/types';
+import type { BackupService } from '$lib/server/backups/service.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
 
 export const OUTBOX_JOB_NAME = 'outbox';
 export const STYRIA_SYNC_JOB_NAME = 'styria-sync';
+export const BACKUP_JOB_NAME = 'backup';
 const OUTBOX_INTERVAL_MS = 60_000;
 const OUTBOX_LEASE_TTL_MS = 55_000;
 const OUTBOX_LEASE_HEARTBEAT_MS = 20_000;
@@ -16,12 +18,15 @@ const OUTBOX_DRAIN_ERROR_CODE = 'OUTBOX_DRAIN_FAILED';
 const STYRIA_SYNC_INTERVAL_MS = 60 * 60_000;
 const STYRIA_SYNC_LEASE_TTL_MS = 55 * 60_000;
 const STYRIA_SYNC_ERROR_CODE = 'STYRIA_SYNC_FAILED';
+const BACKUP_LEASE_TTL_MS = 120 * 60_000;
+const BACKUP_ERROR_CODE = 'BACKUP_FAILED';
 
 export interface Scheduler {
 	start(): void;
 	stop(): Promise<void>;
 	runOutboxOnce(now?: Date): Promise<void>;
 	runStyriaSyncOnce(now?: Date): Promise<void>;
+	runBackupOnce(now?: Date): Promise<void>;
 }
 
 export type SchedulerTimerHandle = {
@@ -35,15 +40,18 @@ export type OutboxSchedulerOptions = {
 	leases: LeaseRepository;
 	worker: OutboxWorker;
 	styriaSync?: StyriaSyncJob;
+	backup?: BackupService;
 	enabled: boolean;
 	ownerId: string;
 	clock?: () => Date;
 	schedule?: SchedulerTimer;
+	scheduleBackup?: SchedulerTimer;
 	cancel?: (handle: SchedulerTimerHandle) => void;
 	reportError?: (errorCode: string) => void;
 };
 
 const scheduleEvery: SchedulerTimer = (callback, intervalMs) => setInterval(callback, intervalMs);
+const scheduleAfter: SchedulerTimer = (callback, delayMs) => setTimeout(callback, delayMs);
 
 function cancelScheduled(handle: SchedulerTimerHandle): void {
 	clearInterval(handle as ReturnType<typeof setInterval>);
@@ -56,6 +64,7 @@ function reportSchedulerError(errorCode: string): void {
 export class OutboxScheduler implements Scheduler {
 	private readonly clock: () => Date;
 	private readonly schedule: SchedulerTimer;
+	private readonly scheduleBackup: SchedulerTimer;
 	private readonly cancel: (handle: SchedulerTimerHandle) => void;
 	private readonly reportError: (errorCode: string) => void;
 	private started = false;
@@ -63,16 +72,21 @@ export class OutboxScheduler implements Scheduler {
 	private acceptingScheduledRuns = false;
 	private timer: SchedulerTimerHandle | undefined;
 	private styriaTimer: SchedulerTimerHandle | undefined;
+	private backupTimer: SchedulerTimerHandle | undefined;
 	private activeRun: Promise<void> | undefined;
 	private activeStyriaRun: Promise<void> | undefined;
+	private activeBackupRun: Promise<void> | undefined;
 	private activeRunController: AbortController | undefined;
 	private activeStyriaRunController: AbortController | undefined;
+	private activeBackupRunController: AbortController | undefined;
 	private readonly reportedRuns = new WeakSet<Promise<void>>();
 	private readonly reportedStyriaRuns = new WeakSet<Promise<void>>();
+	private readonly reportedBackupRuns = new WeakSet<Promise<void>>();
 
 	constructor(private readonly options: OutboxSchedulerOptions) {
 		this.clock = options.clock ?? (() => new Date());
 		this.schedule = options.schedule ?? scheduleEvery;
+		this.scheduleBackup = options.scheduleBackup ?? scheduleAfter;
 		this.cancel = options.cancel ?? cancelScheduled;
 		this.reportError = options.reportError ?? reportSchedulerError;
 	}
@@ -94,6 +108,7 @@ export class OutboxScheduler implements Scheduler {
 			this.styriaTimer.unref?.();
 			this.launchScheduledStyriaRun();
 		}
+		if (this.options.backup) this.scheduleNextBackup();
 	}
 
 	async stop(): Promise<void> {
@@ -109,13 +124,19 @@ export class OutboxScheduler implements Scheduler {
 			this.cancel(this.styriaTimer);
 			this.styriaTimer = undefined;
 		}
+		if (this.backupTimer) {
+			this.cancel(this.backupTimer);
+			this.backupTimer = undefined;
+		}
 
 		const activeRun = this.activeRun;
 		const activeStyriaRun = this.activeStyriaRun;
+		const activeBackupRun = this.activeBackupRun;
 		this.activeRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
 		this.activeStyriaRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
+		this.activeBackupRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
 		await Promise.all(
-			[activeRun, activeStyriaRun].filter(Boolean).map(async (run) => {
+			[activeRun, activeStyriaRun, activeBackupRun].filter(Boolean).map(async (run) => {
 				try {
 					await run;
 				} catch {
@@ -123,6 +144,24 @@ export class OutboxScheduler implements Scheduler {
 				}
 			})
 		);
+	}
+
+	runBackupOnce(now = this.clock()): Promise<void> {
+		if (this.stopping) return Promise.resolve();
+		if (!this.options.backup) return Promise.resolve();
+		if (this.activeBackupRun) return this.activeBackupRun;
+
+		const controller = new AbortController();
+		this.activeBackupRunController = controller;
+		const execution = Promise.resolve().then(() => this.executeBackupRun(now, controller.signal));
+		const trackedRun = execution.finally(() => {
+			if (this.activeBackupRun === trackedRun) {
+				this.activeBackupRun = undefined;
+				this.activeBackupRunController = undefined;
+			}
+		});
+		this.activeBackupRun = trackedRun;
+		return trackedRun;
 	}
 
 	runStyriaSyncOnce(now = this.clock()): Promise<void> {
@@ -174,6 +213,28 @@ export class OutboxScheduler implements Scheduler {
 		if (this.reportedStyriaRuns.has(run)) return;
 		this.reportedStyriaRuns.add(run);
 		void run.catch(() => this.reportError(STYRIA_SYNC_ERROR_CODE));
+	}
+
+	private scheduleNextBackup(): void {
+		if (!this.acceptingScheduledRuns || !this.options.backup || this.backupTimer) return;
+		const delayMs = millisecondsUntilNextBackup(this.clock());
+		const handle = this.scheduleBackup(() => {
+			if (this.backupTimer !== handle) return;
+			this.backupTimer = undefined;
+			if (!this.acceptingScheduledRuns) return;
+			this.scheduleNextBackup();
+			this.launchScheduledBackupRun();
+		}, delayMs);
+		this.backupTimer = handle;
+		handle.unref?.();
+	}
+
+	private launchScheduledBackupRun(): void {
+		if (!this.acceptingScheduledRuns || !this.options.backup) return;
+		const run = this.runBackupOnce();
+		if (this.reportedBackupRuns.has(run)) return;
+		this.reportedBackupRuns.add(run);
+		void run.catch(() => this.reportError(BACKUP_ERROR_CODE));
 	}
 
 	private async executeRun(now: Date, signal: AbortSignal): Promise<void> {
@@ -255,6 +316,34 @@ export class OutboxScheduler implements Scheduler {
 		}
 	}
 
+	private async executeBackupRun(now: Date, signal: AbortSignal): Promise<void> {
+		if (
+			!this.options.leases.acquire(BACKUP_JOB_NAME, this.options.ownerId, now, BACKUP_LEASE_TTL_MS)
+		) {
+			return;
+		}
+
+		let runId: number | undefined;
+		try {
+			const insert = this.options.database
+				.prepare(
+					`INSERT INTO job_runs (name, owner_id, started_at)
+					VALUES (?, ?, ?)`
+				)
+				.run(BACKUP_JOB_NAME, this.options.ownerId, now.toISOString());
+			runId = Number(insert.lastInsertRowid);
+			await this.options.backup?.run(now, signal);
+			this.finishRun(runId, this.clock(), 'completed', null);
+		} catch (error) {
+			if (runId !== undefined) {
+				this.finishRun(runId, this.clock(), 'failed', BACKUP_ERROR_CODE);
+			}
+			throw error;
+		} finally {
+			this.options.leases.release(BACKUP_JOB_NAME, this.options.ownerId);
+		}
+	}
+
 	private finishRun(
 		runId: number,
 		finishedAt: Date,
@@ -269,4 +358,12 @@ export class OutboxScheduler implements Scheduler {
 			)
 			.run(finishedAt.toISOString(), result, errorCode, runId, this.options.ownerId);
 	}
+}
+
+function millisecondsUntilNextBackup(now: Date): number {
+	const next = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 2, 30, 0, 0)
+	);
+	if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+	return next.getTime() - now.getTime();
 }

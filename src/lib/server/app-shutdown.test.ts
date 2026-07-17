@@ -47,7 +47,8 @@ describe('application shutdown', () => {
 				sequence.push('scheduler-stopped');
 			}),
 			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
+			runStyriaSyncOnce: vi.fn(async () => undefined),
+			runBackupOnce: vi.fn(async () => undefined)
 		};
 		const application = createApplicationLifecycle({
 			migrationsDirectory: 'migrations',
@@ -87,7 +88,8 @@ describe('application shutdown', () => {
 				throw new Error('scheduler settlement failed');
 			}),
 			runOutboxOnce: vi.fn(async () => undefined),
-			runStyriaSyncOnce: vi.fn(async () => undefined)
+			runStyriaSyncOnce: vi.fn(async () => undefined),
+			runBackupOnce: vi.fn(async () => undefined)
 		};
 		const application = createApplicationLifecycle({
 			migrationsDirectory: 'migrations',

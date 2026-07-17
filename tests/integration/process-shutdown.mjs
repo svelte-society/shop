@@ -275,6 +275,14 @@ try {
 			PLUNK_FROM_NAME: 'Svelte Society Shop',
 			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 			ADMIN_EMAIL: 'merch@sveltesociety.dev',
+			S3_ENDPOINT: 'https://s3.process-shutdown.test',
+			S3_BUCKET: 'process-shutdown-backups',
+			S3_REGION: 'eu-north-1',
+			S3_ACCESS_KEY_ID: 'process-shutdown-access',
+			S3_SECRET_ACCESS_KEY: 'process-shutdown-private',
+			S3_PREFIX: 'shop-backups',
+			S3_FORCE_PATH_STYLE: 'true',
+			BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 12).toString('base64'),
 			NODE_EXTRA_CA_CERTS: certificatePath
 		},
 		stdio: ['ignore', 'pipe', 'pipe']

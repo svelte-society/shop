@@ -196,7 +196,15 @@ describe('POST /checkout', () => {
 			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 			ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
 			STYRIA_APP_ID: 'checkout-app',
-			STYRIA_SECRET_KEY: 'checkout-secret'
+			STYRIA_SECRET_KEY: 'checkout-secret',
+			S3_ENDPOINT: 'https://s3.checkout.test',
+			S3_BUCKET: 'checkout-backups',
+			S3_REGION: 'eu-north-1',
+			S3_ACCESS_KEY_ID: 'checkout-access',
+			S3_SECRET_ACCESS_KEY: 'checkout-private',
+			S3_PREFIX: 'shop-backups',
+			S3_FORCE_PATH_STYLE: 'true',
+			BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 11).toString('base64')
 		};
 		let scheduler: Scheduler | null = null;
 		const readiness = createReadinessChecker({
@@ -220,7 +228,8 @@ describe('POST /checkout', () => {
 				start() {},
 				async stop() {},
 				async runOutboxOnce() {},
-				async runStyriaSyncOnce() {}
+				async runStyriaSyncOnce() {},
+				async runBackupOnce() {}
 			};
 			const admitted = await invoke(fixture.handler, request());
 			expect(admitted.status).toBe(200);

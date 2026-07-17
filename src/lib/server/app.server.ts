@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { SqliteBackupService } from '$lib/server/backups/service.server';
+import {
+	createS3BackupStore,
+	type BackupStore,
+	type S3BackupStoreOptions
+} from '$lib/server/backups/s3.server';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
@@ -40,6 +47,7 @@ export type ApplicationRuntimeDependencies = {
 	closeDatabase?: typeof closeDatabase;
 	migrate?: typeof migrate;
 	createScheduler?: (database: ShopDatabase, environment: RuntimeEnvironment) => Scheduler;
+	createBackupStore?: (options: S3BackupStoreOptions) => BackupStore;
 	checkReadiness?: (runtime: ApplicationRuntime) => Promise<{ ready: boolean }>;
 	scheduleSchedulerActivation?: (callback: () => void, delayMs: number) => ApplicationTimerHandle;
 	cancelSchedulerActivation?: (handle: ApplicationTimerHandle) => void;
@@ -146,9 +154,17 @@ function optionalPositiveInteger(
 	return parsed;
 }
 
+function requiredBoolean(environment: RuntimeEnvironment, name: string): boolean {
+	const value = environment[name];
+	if (value === 'true') return true;
+	if (value === 'false') return false;
+	throw new Error('APPLICATION_CONFIG_INVALID');
+}
+
 function createRuntimeScheduler(
 	database: ShopDatabase,
-	environment: RuntimeEnvironment
+	environment: RuntimeEnvironment,
+	createBackupStore: (options: S3BackupStoreOptions) => BackupStore
 ): Scheduler {
 	const outbox = new SqliteOutboxRepository(database);
 	const plunk = createPlunkClient({
@@ -186,12 +202,28 @@ function createRuntimeScheduler(
 	});
 	const fulfillment = new SqliteFulfillmentRepository(database);
 	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox });
+	const backupStore = createBackupStore({
+		endpoint: requiredEnvironmentValue(environment, 'S3_ENDPOINT'),
+		region: requiredEnvironmentValue(environment, 'S3_REGION'),
+		bucket: requiredEnvironmentValue(environment, 'S3_BUCKET'),
+		accessKeyId: requiredEnvironmentValue(environment, 'S3_ACCESS_KEY_ID'),
+		secretAccessKey: requiredEnvironmentValue(environment, 'S3_SECRET_ACCESS_KEY'),
+		forcePathStyle: requiredBoolean(environment, 'S3_FORCE_PATH_STYLE')
+	});
+	const backup = new SqliteBackupService({
+		database,
+		store: backupStore,
+		encryptionKeyBase64: requiredEnvironmentValue(environment, 'BACKUP_ENCRYPTION_KEY_BASE64'),
+		prefix: requiredEnvironmentValue(environment, 'S3_PREFIX'),
+		temporaryDirectory: environment.TMPDIR ?? tmpdir()
+	});
 
 	return new OutboxScheduler({
 		database,
 		leases: new SqliteLeaseRepository(database),
 		worker,
 		styriaSync,
+		backup,
 		enabled: true,
 		ownerId: randomUUID()
 	});
@@ -204,7 +236,10 @@ export function createApplicationLifecycle(
 	const open = dependencies.openDatabase ?? openDatabase;
 	const close = dependencies.closeDatabase ?? closeDatabase;
 	const applyMigrations = dependencies.migrate ?? migrate;
-	const createScheduler = dependencies.createScheduler ?? createRuntimeScheduler;
+	const createBackupStore = dependencies.createBackupStore ?? createS3BackupStore;
+	const createScheduler =
+		dependencies.createScheduler ??
+		((database, environment) => createRuntimeScheduler(database, environment, createBackupStore));
 	const checkReadiness = dependencies.checkReadiness ?? checkRuntimeReadiness;
 	const scheduleActivation = dependencies.scheduleSchedulerActivation ?? scheduleAfter;
 	const cancelActivation = dependencies.cancelSchedulerActivation ?? cancelScheduled;

@@ -81,7 +81,19 @@ function enableFulfillment(options: { mcp?: boolean; scheduler?: boolean } = {})
 		PLUNK_SECRET_KEY: 'plunk-readiness',
 		PLUNK_FROM_NAME: 'Svelte Society Shop',
 		PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-		ADMIN_EMAIL: 'shop-ops@sveltesociety.dev'
+		ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
+		...(options.scheduler
+			? {
+					S3_ENDPOINT: 'https://s3.readiness.test',
+					S3_BUCKET: 'readiness-backups',
+					S3_REGION: 'eu-north-1',
+					S3_ACCESS_KEY_ID: 'readiness-access',
+					S3_SECRET_ACCESS_KEY: 'readiness-private',
+					S3_PREFIX: 'shop-backups',
+					S3_FORCE_PATH_STYLE: 'true',
+					BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 9).toString('base64')
+				}
+			: {})
 	};
 }
 
@@ -90,7 +102,8 @@ function runningScheduler(): Scheduler {
 		start() {},
 		async stop() {},
 		async runOutboxOnce() {},
-		async runStyriaSyncOnce() {}
+		async runStyriaSyncOnce() {},
+		async runBackupOnce() {}
 	};
 }
 
@@ -270,6 +283,27 @@ describe('local readiness', () => {
 		const result = await checker()();
 
 		expect(result).toEqual({ ready: false, checks: allOkay });
+	});
+
+	it.each([
+		['S3_ENDPOINT', undefined],
+		['S3_ENDPOINT', 'http://s3.readiness.test'],
+		['S3_BUCKET', undefined],
+		['S3_REGION', undefined],
+		['S3_ACCESS_KEY_ID', undefined],
+		['S3_SECRET_ACCESS_KEY', undefined],
+		['S3_PREFIX', undefined],
+		['S3_FORCE_PATH_STYLE', 'yes'],
+		['BACKUP_ENCRYPTION_KEY_BASE64', Buffer.alloc(31).toString('base64')]
+	] as const)('fails scheduler configuration readiness for invalid %s', async (name, value) => {
+		enableFulfillment({ scheduler: true });
+		scheduler = runningScheduler();
+		environment[name] = value;
+
+		const result = await checker()();
+
+		expect(result.checks.configuration).toBe('failed');
+		expect(JSON.stringify(result)).not.toContain('readiness-private');
 	});
 
 	it('allows only the internal activation probe to ignore the scheduler-running latch', async () => {

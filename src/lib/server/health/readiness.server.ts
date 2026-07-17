@@ -1,5 +1,7 @@
 import { env } from '$env/dynamic/private';
 import { parsePublicConfig } from '$lib/config/public';
+import { backupEncryptionKeyIsValid } from '$lib/server/backups/format';
+import { s3BackupStoreOptionsAreValid } from '$lib/server/backups/s3.server';
 import { applicationLifecycle, type ApplicationRuntime } from '$lib/server/app.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import * as v from 'valibot';
@@ -105,6 +107,29 @@ function validStyriaTimeout(environment: Record<string, string | undefined>): bo
 	return Number.isSafeInteger(timeout) && timeout <= 10_000;
 }
 
+function validBackupConfiguration(environment: Record<string, string | undefined>): boolean {
+	const forcePathStyle = environment.S3_FORCE_PATH_STYLE;
+	if (forcePathStyle !== 'true' && forcePathStyle !== 'false') return false;
+	const prefix = environment.S3_PREFIX;
+	if (
+		!exactValue(environment, 'S3_PREFIX') ||
+		prefix?.split('/').some((part) => part === '.' || part === '..')
+	) {
+		return false;
+	}
+	return (
+		backupEncryptionKeyIsValid(environment.BACKUP_ENCRYPTION_KEY_BASE64) &&
+		s3BackupStoreOptionsAreValid({
+			endpoint: environment.S3_ENDPOINT ?? '',
+			region: environment.S3_REGION ?? '',
+			bucket: environment.S3_BUCKET ?? '',
+			accessKeyId: environment.S3_ACCESS_KEY_ID ?? '',
+			secretAccessKey: environment.S3_SECRET_ACCESS_KEY ?? '',
+			forcePathStyle: forcePathStyle === 'true'
+		})
+	);
+}
+
 function productionConfigurationIsValid(environment: Record<string, string | undefined>): boolean {
 	try {
 		const publicConfig = parsePublicConfig(environment);
@@ -155,7 +180,10 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 		) {
 			return false;
 		}
-		if (environment.SCHEDULER_ENABLED === 'true' && !validEmailValue(environment, 'ADMIN_EMAIL')) {
+		if (
+			environment.SCHEDULER_ENABLED === 'true' &&
+			(!validEmailValue(environment, 'ADMIN_EMAIL') || !validBackupConfiguration(environment))
+		) {
 			return false;
 		}
 

@@ -53,6 +53,7 @@
 		"vitest-browser-svelte": "^2.1.1"
 	},
 	"dependencies": {
+		"@aws-sdk/client-s3": "3.1087.0",
 		"@tmcp/adapter-valibot": "0.1.6",
 		"@tmcp/transport-http": "0.8.6",
 		"better-sqlite3": "12.11.1",

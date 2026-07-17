@@ -61,9 +61,9 @@ authoritative name inventory.
 | STYRIA_SECRET_KEY | Secret | OFF | ON | Styria request signing |
 | PLUNK_SECRET_KEY | Secret | OFF | ON | Plunk email API |
 | MCP_BEARER_TOKEN | Secret | OFF | ON | Internal MCP bearer authentication |
-| S3_ACCESS_KEY_ID | Secret | OFF | ON | Future backup storage |
-| S3_SECRET_ACCESS_KEY | Secret | OFF | ON | Future backup storage |
-| BACKUP_ENCRYPTION_KEY_BASE64 | Secret | OFF | ON | Future backup encryption |
+| S3_ACCESS_KEY_ID | Secret | OFF | ON | Encrypted backup storage |
+| S3_SECRET_ACCESS_KEY | Secret | OFF | ON | Encrypted backup storage |
+| BACKUP_ENCRYPTION_KEY_BASE64 | Secret | OFF | ON | AES-256-GCM backup encryption |
 
 Never pass a real secret with `--build-arg`; Coolify documents that build args
 can be recorded in image metadata. This application does not need secrets while
@@ -167,7 +167,7 @@ PLUNK_FROM_EMAIL=merch@sveltesociety.dev
 
 ### Backup storage
 
-These values remain unset until the encrypted backup task is deployed:
+The enabled scheduler requires these encrypted-backup values:
 
 ```text
 S3_ENDPOINT=<https-endpoint>

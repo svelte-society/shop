@@ -53,6 +53,14 @@ start_container() {
 		--volume "$volume:/data"
 		--env "DATABASE_BOOTSTRAP=$bootstrap"
 		--env "SCHEDULER_ENABLED=$scheduler"
+		--env S3_ENDPOINT=https://s3.docker-health.test
+		--env S3_BUCKET=docker-health-backups
+		--env S3_REGION=eu-north-1
+		--env S3_ACCESS_KEY_ID=docker-health-access
+		--env S3_SECRET_ACCESS_KEY=docker-health-private
+		--env S3_PREFIX=shop-backups
+		--env S3_FORCE_PATH_STYLE=true
+		--env BACKUP_ENCRYPTION_KEY_BASE64=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 		--env SHUTDOWN_TIMEOUT=30
 		--env STOREFRONT_ENABLED=false
 		--env CHECKOUT_ENABLED=false
