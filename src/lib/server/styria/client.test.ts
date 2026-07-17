@@ -20,6 +20,42 @@ afterEach(() => {
 });
 
 describe('Styria list/search adapter', () => {
+	it('normalizes an HTTPS path-prefix base URL without duplicating slashes', async () => {
+		let requestedUrl = '';
+		const fetch: typeof globalThis.fetch = async (input) => {
+			requestedUrl = String(input);
+			return successJson([]);
+		};
+		const client = createStyriaClient({
+			...credentials,
+			baseUrl: 'https://styria.internal.example/provider/',
+			fetch
+		});
+
+		await client.searchByExternalId('cs_test_target', new Date('2026-07-16T08:00:00.000Z'));
+
+		expect(new URL(requestedUrl).pathname).toBe('/provider/api/orders.php');
+	});
+
+	it.each([
+		['HTTP', 'http://styria.internal.example'],
+		['malformed', 'not a provider URL'],
+		['credentialed', 'https://operator:secret-value@styria.internal.example'],
+		['query-bearing', 'https://styria.internal.example?token=secret-value'],
+		['fragment-bearing', 'https://styria.internal.example#secret-value']
+	])('rejects an explicitly configured %s base URL before transport', (_label, baseUrl) => {
+		const fetch = vi.fn<typeof globalThis.fetch>();
+
+		expect(() => createStyriaClient({ ...credentials, baseUrl, fetch })).toThrow(
+			expect.objectContaining({
+				name: 'StyriaError',
+				code: 'STYRIA_REQUEST_REJECTED',
+				message: 'STYRIA_REQUEST_REJECTED'
+			})
+		);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it('pages at 250 and filters exact external_id locally across every result page', async () => {
 		const targetExternalId = 'cs_test_target';
 		const firstPage = Array.from({ length: 250 }, (_, index) =>

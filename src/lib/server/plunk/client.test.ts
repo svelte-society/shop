@@ -74,6 +74,25 @@ describe('createPlunkClient', () => {
 	});
 
 	it.each([
+		['HTTP', 'http://plunk.internal.example'],
+		['malformed', 'not a provider URL'],
+		['credentialed', 'https://operator:secret-value@plunk.internal.example'],
+		['query-bearing', 'https://plunk.internal.example?token=secret-value'],
+		['fragment-bearing', 'https://plunk.internal.example#secret-value']
+	])('rejects an explicitly configured %s base URL before transport', (_label, baseUrl) => {
+		const fetch = vi.fn<typeof globalThis.fetch>();
+
+		expect(() => createPlunkClient({ secretKey: 'sk_test_secret', baseUrl, fetch })).toThrow(
+			expect.objectContaining({
+				name: 'PlunkError',
+				code: 'PLUNK_REQUEST_REJECTED',
+				message: 'PLUNK_REQUEST_REJECTED'
+			})
+		);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each([
 		['non-JSON', new Response('not-json', { status: 200 })],
 		['a false success envelope', Response.json({ success: false, error: { message: 'raw' } })],
 		['a missing emails array', Response.json({ success: true, data: {} })],

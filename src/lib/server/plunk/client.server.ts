@@ -1,4 +1,5 @@
 import { nodeFetch } from '$lib/server/http/node-fetch.server';
+import { normalizeHttpsProviderBaseUrl } from '$lib/server/http/provider-url.server';
 import type { PlunkGateway, PlunkSendInput } from './gateway';
 import { PlunkError } from './gateway';
 
@@ -38,13 +39,19 @@ function httpError(status: number): PlunkError {
 	return new PlunkError('PLUNK_REQUEST_REJECTED');
 }
 
+function invalidRequest(): never {
+	throw new PlunkError('PLUNK_REQUEST_REJECTED');
+}
+
 class HttpPlunkClient implements PlunkGateway {
 	private readonly endpoint: string;
 	private readonly fetch: typeof globalThis.fetch;
 	private readonly timeoutMs: number;
 
 	constructor(private readonly options: PlunkClientOptions) {
-		this.endpoint = `${(options.baseUrl ?? PLUNK_DEFAULT_BASE_URL).replace(/\/+$/, '')}/v1/send`;
+		const baseUrl = normalizeHttpsProviderBaseUrl(options.baseUrl ?? PLUNK_DEFAULT_BASE_URL);
+		if (baseUrl === null) invalidRequest();
+		this.endpoint = `${baseUrl}/v1/send`;
 		this.fetch = options.fetch ?? nodeFetch;
 		this.timeoutMs = options.timeoutMs ?? PLUNK_DEFAULT_TIMEOUT_MS;
 	}

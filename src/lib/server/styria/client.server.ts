@@ -1,4 +1,5 @@
 import { nodeFetch } from '$lib/server/http/node-fetch.server';
+import { normalizeHttpsProviderBaseUrl } from '$lib/server/http/provider-url.server';
 import type { StyriaGateway } from './gateway';
 import { StyriaError } from './gateway';
 import { signGet, signPost } from './signing';
@@ -190,12 +191,8 @@ class HttpStyriaClient implements StyriaGateway {
 		) {
 			invalidRequest();
 		}
-		const baseUrl = (options.baseUrl ?? STYRIA_DEFAULT_BASE_URL).replace(/\/+$/, '');
-		try {
-			new URL(baseUrl);
-		} catch {
-			invalidRequest();
-		}
+		const baseUrl = normalizeHttpsProviderBaseUrl(options.baseUrl ?? STYRIA_DEFAULT_BASE_URL);
+		if (baseUrl === null) invalidRequest();
 		this.baseUrl = baseUrl;
 		this.fetch = options.fetch ?? nodeFetch;
 		this.timeoutMs = options.timeoutMs ?? STYRIA_DEFAULT_TIMEOUT_MS;
