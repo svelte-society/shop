@@ -16,5 +16,6 @@
 		data-host-url={connectOrigin ?? undefined}
 		data-auto-track="false"
 		data-do-not-track="true"
+		data-exclude-search="true"
 	></script>
 </svelte:head>

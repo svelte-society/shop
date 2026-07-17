@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import { cart } from '$lib/stores/cart.svelte';
@@ -16,7 +16,20 @@ const data = {
 	verified: true
 } as const;
 
+let originalUrl: string;
+let originalHistoryState: unknown;
+
+function replaceBrowserUrl(state: unknown, url: string | URL): void {
+	History.prototype.replaceState.call(window.history, state, '', url);
+}
+
+beforeEach(() => {
+	originalUrl = window.location.href;
+	originalHistoryState = window.history.state;
+});
+
 afterEach(() => {
+	replaceBrowserUrl(originalHistoryState, originalUrl);
 	track.mockReset();
 	cart.clear();
 });
@@ -53,5 +66,26 @@ describe('verified checkout success page', () => {
 		await expect.poll(() => cart.totalUnits).toBe(0);
 		expect(window.localStorage.getItem('svelte-society-shop:cart:v1')).toBeNull();
 		expect(track.mock.calls).toEqual([['checkout_returned_successfully']]);
+	});
+
+	it('removes the checkout query before tracking while preserving pathname and hash', async () => {
+		const urlsObservedByTracker: string[] = [];
+		replaceBrowserUrl(
+			{ verified: true },
+			'/checkout/success?session_id=cs_test_must_not_leave#receipt'
+		);
+		track.mockImplementation(() => {
+			urlsObservedByTracker.push(
+				`${window.location.pathname}${window.location.search}${window.location.hash}`
+			);
+		});
+
+		render(SuccessPage, { data, params: {}, form: null });
+
+		await expect.poll(() => track.mock.calls).toEqual([['checkout_returned_successfully']]);
+		expect(urlsObservedByTracker).toEqual(['/checkout/success#receipt']);
+		expect(window.location.pathname).toBe('/checkout/success');
+		expect(window.location.search).toBe('');
+		expect(window.location.hash).toBe('#receipt');
 	});
 });

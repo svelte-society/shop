@@ -8,6 +8,12 @@
 
 	onMount(() => {
 		if (data.verified) {
+			History.prototype.replaceState.call(
+				window.history,
+				window.history.state,
+				'',
+				`${window.location.pathname}${window.location.hash}`
+			);
 			track('checkout_returned_successfully');
 			cart.clear();
 		}

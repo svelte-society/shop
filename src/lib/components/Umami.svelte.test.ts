@@ -21,6 +21,7 @@ describe('Umami', () => {
 		expect(script?.defer).toBe(true);
 		expect(script?.dataset.autoTrack).toBe('false');
 		expect(script?.dataset.doNotTrack).toBe('true');
+		expect(script?.dataset.excludeSearch).toBe('true');
 		expect(script?.dataset.hostUrl).toBe('https://analytics-api.sveltesociety.dev');
 		expect(view.container.textContent).toBe('');
 	});
