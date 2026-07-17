@@ -1,6 +1,5 @@
 <script lang="ts">
 	import '../app.css';
-	import favicon from '$lib/assets/favicon.svg';
 	import OpeningSoon from '$lib/components/OpeningSoon.svelte';
 	import ShippingStrip from '$lib/components/ShippingStrip.svelte';
 	import SiteFooter from '$lib/components/SiteFooter.svelte';
@@ -10,7 +9,7 @@
 	let { children, data }: LayoutProps = $props();
 </script>
 
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<svelte:head><link rel="icon" href="/brand/svelte-society.svg" /></svelte:head>
 
 <a class="skip-link" href="#main-content" tabindex="0">Skip to content</a>
 <ShippingStrip />

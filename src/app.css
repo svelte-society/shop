@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
+body > #svelte {
+	display: contents;
+}
+
 @font-face {
 	font-family: 'Manrope';
 	src: url('/fonts/manrope-variable.woff2') format('woff2');

@@ -10,6 +10,33 @@ const STRIPE_CLIENT_MODULE_ID = '$lib/server/stripe/client.server';
 
 type FixtureEnvironment = Record<string, string | undefined>;
 
+export const svelteKitOptions = {
+	compilerOptions: {
+		// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
+		runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
+	},
+	adapter: adapter(),
+	csp: {
+		mode: 'nonce' as const,
+		directives: {
+			'default-src': ['self'],
+			'base-uri': ['self'],
+			'connect-src': ['self'],
+			'font-src': ['self'],
+			'form-action': ['self'],
+			'frame-ancestors': ['none'],
+			'frame-src': ['none'],
+			'img-src': ['self'],
+			'manifest-src': ['self'],
+			'media-src': ['self'],
+			'object-src': ['none'],
+			'script-src': ['self'],
+			'style-src': ['self'],
+			'worker-src': ['self']
+		}
+	}
+} satisfies Parameters<typeof sveltekit>[0];
+
 export function resolveCatalogFixtureAlias(
 	environment: FixtureEnvironment,
 	fixtureModulePath: string
@@ -55,14 +82,7 @@ export default defineConfig(() => {
 					]
 				: []),
 			tailwindcss(),
-			sveltekit({
-				compilerOptions: {
-					// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
-					runes: ({ filename }) =>
-						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
-				},
-				adapter: adapter()
-			})
+			sveltekit(svelteKitOptions)
 		],
 		test: {
 			expect: { requireAssertions: true },
