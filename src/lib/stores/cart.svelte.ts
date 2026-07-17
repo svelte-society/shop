@@ -1,3 +1,4 @@
+import { track } from '$lib/analytics/events';
 import { parseCart, totalUnits as countUnits, type CartLine } from '$lib/domain/cart';
 
 const CART_STORAGE_KEY = 'svelte-society-shop:cart:v1';
@@ -112,6 +113,7 @@ export function createCart(storage: CartStorage | undefined = browserStorage()):
 		},
 		add(priceId, quantity = 1) {
 			commit(parseCart([...lines, { priceId, quantity }]));
+			track('added_to_cart');
 		},
 		setQuantity(priceId, quantity) {
 			if (!lines.some((line) => line.priceId === priceId)) return;

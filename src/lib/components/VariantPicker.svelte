@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { track } from '$lib/analytics/events';
 	import type { CatalogCategory, PublicCatalogVariant } from '$lib/domain/catalog';
 
 	type Props = {
@@ -34,6 +35,7 @@
 		selectedPriceId = variant.priceId;
 		announcement = `${variant.label} selected.`;
 		onSelectionChange(variant.priceId);
+		track('variant_selected');
 	}
 </script>
 

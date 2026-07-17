@@ -1,5 +1,11 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { onMount } from 'svelte';
+	import { track } from '$lib/analytics/events';
+
+	onMount(() => {
+		track('checkout_cancelled');
+	});
 </script>
 
 <svelte:head>

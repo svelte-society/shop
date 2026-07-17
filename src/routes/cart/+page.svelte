@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
+	import { track } from '$lib/analytics/events';
 	import { beginCheckout } from '$lib/client/checkout';
 	import CartLineItem from '$lib/components/CartLineItem.svelte';
 	import CartSummary from '$lib/components/CartSummary.svelte';
@@ -58,6 +59,7 @@
 	async function startCheckout(): Promise<void> {
 		if (!data.checkoutEnabled || checkoutPending) return;
 
+		track('checkout_started');
 		checkoutPending = true;
 		checkoutError = null;
 		try {
@@ -69,6 +71,7 @@
 	}
 
 	onMount(() => {
+		track('cart_viewed');
 		ready = true;
 	});
 </script>

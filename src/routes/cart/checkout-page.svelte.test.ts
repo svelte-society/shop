@@ -5,8 +5,10 @@ import type { PublicCatalogProduct } from '$lib/domain/catalog';
 import { cart } from '$lib/stores/cart.svelte';
 
 const beginCheckout = vi.hoisted(() => vi.fn<(lines: unknown) => Promise<void>>());
+const track = vi.hoisted(() => vi.fn());
 
 vi.mock('$lib/client/checkout', () => ({ beginCheckout }));
+vi.mock('$lib/analytics/events', () => ({ track }));
 
 import CartPage from './+page.svelte';
 
@@ -44,6 +46,13 @@ describe('cart page checkout submission state', () => {
 		beginCheckout.mockReset();
 		cart.clear();
 		cart.add('price_tee_medium_current');
+		track.mockReset();
+	});
+
+	it('reports the cart view once when the page mounts', async () => {
+		render(CartPage, { data, params: {}, form: null });
+
+		await expect.poll(() => track.mock.calls).toEqual([['cart_viewed']]);
 	});
 
 	it('keeps the button disabled and blocks a second request after navigation is assigned', async () => {
@@ -53,10 +62,13 @@ describe('cart page checkout submission state', () => {
 		});
 		render(CartPage, { data, params: {}, form: null });
 		const button = page.getByRole('button', { name: 'Continue to secure checkout' });
+		await expect.poll(() => track).toHaveBeenCalledWith('cart_viewed');
+		track.mockReset();
 
 		await button.click();
 
 		expect(assigned).toEqual(['https://checkout.stripe.com/c/pay/cs_test_client']);
+		expect(track.mock.calls).toEqual([['checkout_started']]);
 		const pendingButton = page.getByRole('button', { name: 'Opening secure checkout…' });
 		await expect.element(pendingButton).toBeDisabled();
 		(pendingButton.element() as HTMLButtonElement).click();

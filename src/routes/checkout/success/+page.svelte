@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { track } from '$lib/analytics/events';
 	import { cart } from '$lib/stores/cart.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
 	onMount(() => {
-		if (data.verified) cart.clear();
+		if (data.verified) {
+			track('checkout_returned_successfully');
+			cart.clear();
+		}
 	});
 </script>
 

@@ -24,7 +24,8 @@ describe('public layout feature gate', () => {
 			await expect(loadRoute(routeId)).resolves.toEqual({
 				storefrontEnabled: false,
 				checkoutEnabled: false,
-				showOpeningSoon: true
+				showOpeningSoon: true,
+				umami: null
 			});
 		}
 	);
@@ -40,7 +41,68 @@ describe('public layout feature gate', () => {
 		await expect(loadRoute('/products/[slug]', true)).resolves.toEqual({
 			storefrontEnabled: true,
 			checkoutEnabled: false,
-			showOpeningSoon: false
+			showOpeningSoon: false,
+			umami: null
+		});
+	});
+
+	it('exposes the exact HTTPS Umami tracker configuration to the root layout', async () => {
+		const load = _createLayoutServerLoad({
+			...disabledStorefrontEnv,
+			UMAMI_SCRIPT_URL: 'https://analytics.sveltesociety.dev/script.js',
+			UMAMI_CONNECT_ORIGIN: 'https://analytics-api.sveltesociety.dev',
+			UMAMI_WEBSITE_ID: 'society-storefront'
+		});
+
+		const result = await load({ route: { id: '/' } } as Parameters<typeof load>[0]);
+
+		expect(result).toMatchObject({
+			umami: {
+				scriptUrl: 'https://analytics.sveltesociety.dev/script.js',
+				connectOrigin: 'https://analytics-api.sveltesociety.dev',
+				websiteId: 'society-storefront'
+			}
+		});
+	});
+
+	it.each([
+		['a missing website ID', { UMAMI_WEBSITE_ID: undefined }],
+		['a blank website ID', { UMAMI_WEBSITE_ID: '   ' }],
+		['an HTTP script', { UMAMI_SCRIPT_URL: 'http://analytics.sveltesociety.dev/script.js' }],
+		['a wildcard script', { UMAMI_SCRIPT_URL: 'https://*.sveltesociety.dev/script.js' }],
+		[
+			'a credentialed script',
+			{ UMAMI_SCRIPT_URL: 'https://user:password@analytics.sveltesociety.dev/script.js' }
+		]
+	])('disables analytics for %s', async (_label, override) => {
+		const load = _createLayoutServerLoad({
+			...disabledStorefrontEnv,
+			UMAMI_SCRIPT_URL: 'https://analytics.sveltesociety.dev/script.js',
+			UMAMI_WEBSITE_ID: 'society-storefront',
+			...override
+		});
+
+		const result = await load({ route: { id: '/' } } as Parameters<typeof load>[0]);
+
+		expect(result).toMatchObject({ umami: null });
+	});
+
+	it('omits an invalid separate connect origin and falls back to the script origin', async () => {
+		const load = _createLayoutServerLoad({
+			...disabledStorefrontEnv,
+			UMAMI_SCRIPT_URL: 'https://analytics.sveltesociety.dev/script.js',
+			UMAMI_CONNECT_ORIGIN: 'http://analytics-api.sveltesociety.dev',
+			UMAMI_WEBSITE_ID: 'society-storefront'
+		});
+
+		const result = await load({ route: { id: '/' } } as Parameters<typeof load>[0]);
+
+		expect(result).toMatchObject({
+			umami: {
+				scriptUrl: 'https://analytics.sveltesociety.dev/script.js',
+				connectOrigin: null,
+				websiteId: 'society-storefront'
+			}
 		});
 	});
 });

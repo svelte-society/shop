@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import { cart } from '$lib/stores/cart.svelte';
+
+const track = vi.hoisted(() => vi.fn());
+
+vi.mock('$lib/analytics/events', () => ({ track }));
+
 import SuccessPage from './+page.svelte';
 
 const data = {
@@ -11,7 +16,10 @@ const data = {
 	verified: true
 } as const;
 
-afterEach(() => cart.clear());
+afterEach(() => {
+	track.mockReset();
+	cart.clear();
+});
 
 describe('verified checkout success page', () => {
 	it('renders only the approved receipt, fulfillment, and support expectations', async () => {
@@ -32,15 +40,18 @@ describe('verified checkout success page', () => {
 		await expect.element(support).toHaveAttribute('href', 'mailto:merch@sveltesociety.dev');
 		expect(document.body.textContent).not.toContain('Checkout complete');
 		expect(document.body.textContent).not.toMatch(/cs_test|pi_test|cus_test|street|card/i);
+		await expect.poll(() => track.mock.calls).toEqual([['checkout_returned_successfully']]);
 	});
 
 	it('clears the browser cart only after the verified page mounts', async () => {
 		cart.add('price_accessory_one');
 		expect(cart.totalUnits).toBe(1);
+		track.mockReset();
 
 		render(SuccessPage, { data, params: {}, form: null });
 
 		await expect.poll(() => cart.totalUnits).toBe(0);
 		expect(window.localStorage.getItem('svelte-society-shop:cart:v1')).toBeNull();
+		expect(track.mock.calls).toEqual([['checkout_returned_successfully']]);
 	});
 });

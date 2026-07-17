@@ -140,6 +140,15 @@ const SECURITY_ENV = {
 		'https://images.stripe.com,https://cdn.sveltesociety.dev,http://unsafe.example,https://*.wild.example,not-a-url'
 };
 
+function cspSources(policy: string, directive: string): string[] {
+	const section = policy
+		.split(';')
+		.map((candidate) => candidate.trim().split(/\s+/u))
+		.find(([name]) => name === directive);
+
+	return section?.slice(1) ?? [];
+}
+
 function securityEvent(
 	pathname: string,
 	options: {
@@ -541,11 +550,15 @@ describe('HTTP security hook', () => {
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff');
 			expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
 			expect(response.headers.get('permissions-policy')).toContain('camera=()');
-			expect(csp).toContain(
-				"script-src 'self' 'nonce-generated123' https://analytics.sveltesociety.dev"
-			);
-			expect(csp).toContain('connect-src');
-			expect(csp).toContain('https://analytics-api.sveltesociety.dev');
+			expect(cspSources(csp, 'script-src')).toEqual([
+				"'self'",
+				"'nonce-generated123'",
+				'https://analytics.sveltesociety.dev'
+			]);
+			expect(cspSources(csp, 'connect-src')).toEqual([
+				"'self'",
+				'https://analytics-api.sveltesociety.dev'
+			]);
 			expect(csp).toContain('https://images.stripe.com');
 			expect(csp).toContain('https://cdn.sveltesociety.dev');
 			expect(csp).not.toContain('http://unsafe.example');

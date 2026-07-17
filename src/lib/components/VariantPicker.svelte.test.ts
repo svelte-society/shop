@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogVariant } from '$lib/domain/catalog';
+
+const track = vi.hoisted(() => vi.fn());
+
+vi.mock('$lib/analytics/events', () => ({ track }));
+
 import VariantPicker from './VariantPicker.svelte';
 
 const variants: PublicCatalogVariant[] = [
@@ -24,6 +29,10 @@ const variants: PublicCatalogVariant[] = [
 ];
 
 describe('VariantPicker', () => {
+	beforeEach(() => {
+		track.mockReset();
+	});
+
 	it('requires an explicit apparel selection', async () => {
 		const onSelectionChange = vi.fn();
 		render(VariantPicker, { category: 'apparel', variants, onSelectionChange });
@@ -47,6 +56,7 @@ describe('VariantPicker', () => {
 		expect(page.getByRole('radiogroup', { name: 'Choose a size' }).query()).toBeNull();
 		expect(onSelectionChange).toHaveBeenCalledOnce();
 		expect(onSelectionChange).toHaveBeenCalledWith('price_one_size');
+		expect(track).not.toHaveBeenCalled();
 	});
 
 	it('updates the nearby live region when keyboard selection changes', async () => {
@@ -58,6 +68,7 @@ describe('VariantPicker', () => {
 		await expect.element(page.getByRole('radio', { name: 'M' })).toBeChecked();
 		await expect.element(page.getByRole('status')).toHaveTextContent('M selected.');
 		expect(onSelectionChange).toHaveBeenLastCalledWith('price_medium');
+		expect(track.mock.calls).toEqual([['variant_selected'], ['variant_selected']]);
 	});
 
 	it('clears checked state and announcement when the variant set changes', async () => {

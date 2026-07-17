@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { track } from '$lib/analytics/events';
 	import type { PublicCatalogProduct } from '$lib/domain/catalog';
 	import { formatEur } from '$lib/domain/money';
 
@@ -13,7 +14,10 @@
 </script>
 
 <article class="product-card">
-	<a href={resolve('/products/[slug]', { slug: product.slug })}>
+	<a
+		href={resolve('/products/[slug]', { slug: product.slug })}
+		onclick={() => track('product_viewed')}
+	>
 		<div class="product-frame" aria-busy={!imageReady}>
 			<img
 				src={product.images[0]}

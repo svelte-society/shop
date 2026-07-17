@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const track = vi.hoisted(() => vi.fn());
+
+vi.mock('$lib/analytics/events', () => ({ track }));
+
 import { createCart } from './cart.svelte';
 
 const CART_STORAGE_KEY = 'svelte-society-shop:cart:v1';
@@ -48,6 +53,10 @@ class ReadFaultStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeI
 }
 
 describe('createCart', () => {
+	beforeEach(() => {
+		track.mockReset();
+	});
+
 	it('hydrates schema version 1 and normalizes duplicate Price IDs', () => {
 		const storage = new MemoryStorage({
 			[CART_STORAGE_KEY]: JSON.stringify({
@@ -119,6 +128,16 @@ describe('createCart', () => {
 			version: 1,
 			lines: [{ priceId: 'price_tee_m', quantity: 3 }]
 		});
+		expect(track.mock.calls).toEqual([['added_to_cart'], ['added_to_cart']]);
+	});
+
+	it('does not report a failed addition', () => {
+		const cart = createCart(new MemoryStorage());
+		cart.add('price_tee_m', 20);
+		track.mockReset();
+
+		expect(() => cart.add('price_hat')).toThrowError('CART_TOO_MANY_UNITS');
+		expect(track).not.toHaveBeenCalled();
 	});
 
 	it('changes quantities and removes lines', () => {
