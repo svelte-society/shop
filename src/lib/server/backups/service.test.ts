@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -21,30 +22,47 @@ class MemoryBackupStore implements BackupStore {
 	readonly events: string[] = [];
 	failPutNumber: number | undefined;
 	failDelete = false;
+	waitForDeleteAbort = false;
 	omitFromFirstList: string | undefined;
-	onPut: (() => void) | undefined;
+	onPut: ((key: string, signal?: AbortSignal) => void) | undefined;
+	readonly deleteSignals: Array<AbortSignal | undefined> = [];
 	private putCount = 0;
 	private listCount = 0;
 
-	async put(key: string, body: Uint8Array, contentType: string): Promise<void> {
+	private rejectPreAborted(signal?: AbortSignal): void {
+		if (signal?.aborted) throw new Error('private pre-aborted operation');
+	}
+
+	async put(
+		key: string,
+		body: Uint8Array,
+		contentType: string,
+		signal?: AbortSignal
+	): Promise<void> {
+		this.rejectPreAborted(signal);
 		this.putCount += 1;
 		this.events.push(`put:${key}`);
-		this.onPut?.();
 		if (this.failPutNumber === this.putCount) throw new Error('private upload detail');
 		this.objects.set(key, {
 			body: Uint8Array.from(body),
 			contentType,
 			lastModified: new Date('2026-07-17T02:30:00.000Z')
 		});
+		this.onPut?.(key, signal);
 	}
 
-	async get(key: string): Promise<Uint8Array> {
+	async get(key: string, signal?: AbortSignal): Promise<Uint8Array> {
+		this.rejectPreAborted(signal);
 		const object = this.objects.get(key);
 		if (!object) throw new Error('missing');
 		return Uint8Array.from(object.body);
 	}
 
-	async list(prefix: string): Promise<Array<{ key: string; lastModified: Date }>> {
+	async list(
+		prefix: string,
+		signal?: AbortSignal
+	): Promise<Array<{ key: string; lastModified: Date }>> {
+		this.rejectPreAborted(signal);
 		this.listCount += 1;
 		this.events.push(`list:${prefix}`);
 		return [...this.objects.entries()]
@@ -55,8 +73,19 @@ class MemoryBackupStore implements BackupStore {
 			.map(([key, object]) => ({ key, lastModified: object.lastModified }));
 	}
 
-	async delete(keys: string[]): Promise<void> {
+	async delete(keys: string[], signal?: AbortSignal): Promise<void> {
+		this.deleteSignals.push(signal);
+		this.rejectPreAborted(signal);
 		this.events.push(`delete:${keys.join(',')}`);
+		if (this.waitForDeleteAbort) {
+			await new Promise<never>((_resolve, reject) => {
+				signal?.addEventListener(
+					'abort',
+					() => reject(new Error('private stalled cleanup detail')),
+					{ once: true }
+				);
+			});
+		}
 		if (this.failDelete) throw new Error('private delete detail');
 		for (const key of keys) this.objects.delete(key);
 	}
@@ -68,14 +97,24 @@ let directory: string;
 let database: ShopDatabase;
 let store: MemoryBackupStore;
 
-function service(key = encryptionKey): SqliteBackupService {
+type ReviewFilesystemOptions = {
+	removeFile?: (path: string, options?: { force?: boolean; recursive?: boolean }) => Promise<void>;
+	remoteCleanupTimeoutMs?: number;
+};
+
+function service(
+	key = encryptionKey,
+	temporaryDirectory = directory,
+	reviewOptions: ReviewFilesystemOptions = {}
+): SqliteBackupService {
 	return new SqliteBackupService({
 		database,
 		store,
 		encryptionKeyBase64: key,
 		prefix: 'shop-backups',
-		temporaryDirectory: directory
-	});
+		temporaryDirectory,
+		...reviewOptions
+	} as ConstructorParameters<typeof SqliteBackupService>[0]);
 }
 
 beforeEach(() => {
@@ -164,6 +203,39 @@ describe('SqliteBackupService', () => {
 		expect(store.objects.has(`${boundaryBase}.sha256`)).toBe(true);
 	});
 
+	it('uses one authoritative age for each pair and handles orphans without splitting companions', async () => {
+		const retainedBase = 'shop-backups/2026/06/17/shop-20260617T023045Z.sqlite.ssbk';
+		const expiredBase = 'shop-backups/2026/06/17/shop-20260617T023044Z.sqlite.ssbk';
+		const oldOrphan = 'shop-backups/2026/06/01/shop-20260601T000000Z.sqlite.ssbk';
+		const oldCompanionOrphan = 'shop-backups/2026/06/02/shop-20260602T000000Z.sqlite.ssbk.sha256';
+		const boundaryOrphan = 'shop-backups/2026/06/17/shop-20260617T023046Z.sqlite.ssbk';
+		const put = (key: string, lastModified: string): void => {
+			store.objects.set(key, {
+				body: new Uint8Array(),
+				contentType: 'application/octet-stream',
+				lastModified: new Date(lastModified)
+			});
+		};
+		put(retainedBase, '2026-06-17T02:30:45.000Z');
+		put(`${retainedBase}.sha256`, '2026-06-01T00:00:00.000Z');
+		put(expiredBase, '2026-06-17T02:30:44.999Z');
+		put(`${expiredBase}.sha256`, '2026-07-17T02:30:45.000Z');
+		put(oldOrphan, '2026-06-01T00:00:00.000Z');
+		put(oldCompanionOrphan, '2026-06-02T00:00:00.000Z');
+		put(boundaryOrphan, '2026-06-17T02:30:45.000Z');
+
+		const result = await service().run(now);
+
+		expect(result.deleted).toBe(4);
+		expect(store.objects.has(retainedBase)).toBe(true);
+		expect(store.objects.has(`${retainedBase}.sha256`)).toBe(true);
+		expect(store.objects.has(expiredBase)).toBe(false);
+		expect(store.objects.has(`${expiredBase}.sha256`)).toBe(false);
+		expect(store.objects.has(oldOrphan)).toBe(false);
+		expect(store.objects.has(oldCompanionOrphan)).toBe(false);
+		expect(store.objects.has(boundaryOrphan)).toBe(true);
+	});
+
 	it('fails closed when the snapshot quick check cannot open the online-backup output', async () => {
 		vi.spyOn(database, 'backup').mockImplementation(async (destination) => {
 			writeFileSync(destination, Buffer.from('not a SQLite snapshot'));
@@ -219,18 +291,146 @@ describe('SqliteBackupService', () => {
 		]);
 	});
 
-	it('stops between phases when aborted and does not begin a checksum upload', async () => {
+	it('uses a fresh cleanup signal after abort and removes the uploaded singleton', async () => {
 		const controller = new AbortController();
 		store.onPut = () => controller.abort(new Error('scheduler stopping'));
 
 		await expect(service().run(now, controller.signal)).rejects.toThrowError(/^BACKUP_FAILED$/);
 
 		expect(store.events.filter((event) => event.startsWith('put:'))).toHaveLength(1);
+		expect(store.deleteSignals).toHaveLength(1);
+		expect(store.deleteSignals[0]).not.toBe(controller.signal);
+		expect(store.deleteSignals[0]?.aborted).toBe(false);
+		expect(store.objects.size).toBe(0);
 		expect(readdirSync(directory).sort()).toEqual([
 			'source.sqlite',
 			'source.sqlite-shm',
 			'source.sqlite-wal'
 		]);
+	});
+
+	it('bounds partial remote cleanup and returns only the stable failure code', async () => {
+		const controller = new AbortController();
+		store.onPut = () => controller.abort(new Error('scheduler stopping'));
+		store.waitForDeleteAbort = true;
+		const startedAt = Date.now();
+
+		await expect(
+			service(encryptionKey, directory, { remoteCleanupTimeoutMs: 20 }).run(now, controller.signal)
+		).rejects.toThrowError(/^BACKUP_FAILED$/);
+
+		expect(Date.now() - startedAt).toBeLessThan(1_000);
+		expect(store.deleteSignals).toHaveLength(1);
+		expect(store.deleteSignals[0]?.aborted).toBe(true);
+	});
+
+	it('uses a private per-run directory and 0600 for the plaintext snapshot and sidecars', async () => {
+		const temporaryDirectory = join(directory, 'backup-temp');
+		const originalBackup = database.backup.bind(database);
+		let heldSnapshot: Database.Database | undefined;
+		vi.spyOn(database, 'backup').mockImplementation(async (destination) => {
+			const progress = await originalBackup(destination);
+			heldSnapshot = new Database(destination);
+			heldSnapshot.pragma('journal_mode = WAL');
+			heldSnapshot.exec('CREATE TABLE permission_probe (id INTEGER PRIMARY KEY)');
+			return progress;
+		});
+		let observed = false;
+		store.onPut = () => {
+			if (observed) return;
+			observed = true;
+			const entries = readdirSync(temporaryDirectory, { withFileTypes: true });
+			expect(entries).toHaveLength(1);
+			expect(entries[0]?.isDirectory()).toBe(true);
+			const runDirectory = join(temporaryDirectory, entries[0]!.name);
+			expect(statSync(runDirectory).mode & 0o777).toBe(0o700);
+			const snapshot = readdirSync(runDirectory).find((entry) =>
+				entry.endsWith('.snapshot.sqlite')
+			);
+			expect(snapshot).toBeDefined();
+			for (const path of [
+				join(runDirectory, snapshot!),
+				join(runDirectory, `${snapshot!}-wal`),
+				join(runDirectory, `${snapshot!}-shm`)
+			]) {
+				expect(statSync(path).mode & 0o777).toBe(0o600);
+			}
+		};
+
+		try {
+			await service(encryptionKey, temporaryDirectory).run(now);
+		} finally {
+			heldSnapshot?.close();
+		}
+		expect(observed).toBe(true);
+		expect(readdirSync(temporaryDirectory)).toEqual([]);
+	});
+
+	it.each(['snapshot', 'snapshot-wal', 'snapshot-shm', 'encrypted', 'checksum'] as const)(
+		'attempts every local cleanup and fails closed when %s removal fails',
+		async (failedKind) => {
+			const attempted = new Set<string>();
+			const classify = (path: string): string => {
+				if (path.endsWith('.snapshot.sqlite-wal')) return 'snapshot-wal';
+				if (path.endsWith('.snapshot.sqlite-shm')) return 'snapshot-shm';
+				if (path.endsWith('.snapshot.sqlite')) return 'snapshot';
+				if (path.endsWith('.sqlite.ssbk.sha256')) return 'checksum';
+				if (path.endsWith('.sqlite.ssbk')) return 'encrypted';
+				return 'run-directory';
+			};
+			const removeFile = async (
+				path: string,
+				options?: { force?: boolean; recursive?: boolean }
+			): Promise<void> => {
+				const kind = classify(path);
+				attempted.add(kind);
+				if (kind === failedKind) throw new Error('private cleanup detail');
+				await rm(path, options);
+			};
+
+			await expect(
+				service(encryptionKey, join(directory, 'backup-temp'), { removeFile }).run(now)
+			).rejects.toThrowError(/^BACKUP_FAILED$/);
+			expect(attempted).toEqual(
+				new Set([
+					'snapshot',
+					'snapshot-wal',
+					'snapshot-shm',
+					'encrypted',
+					'checksum',
+					'run-directory'
+				])
+			);
+		}
+	);
+
+	it.each(['nested//prefix', 'nested/\u0001prefix'])(
+		'rejects non-canonical prefix %j',
+		(prefix) => {
+			expect(
+				() =>
+					new SqliteBackupService({
+						database,
+						store,
+						encryptionKeyBase64: encryptionKey,
+						prefix,
+						temporaryDirectory: directory
+					})
+			).toThrowError(/^BACKUP_CONFIG_INVALID$/);
+		}
+	);
+
+	it('rejects a prefix whose checksum companion would exceed the S3 UTF-8 key limit', () => {
+		expect(
+			() =>
+				new SqliteBackupService({
+					database,
+					store,
+					encryptionKeyBase64: encryptionKey,
+					prefix: 'é'.repeat(500),
+					temporaryDirectory: directory
+				})
+		).toThrowError(/^BACKUP_CONFIG_INVALID$/);
 	});
 
 	it('waits for the non-abortable SQLite backup boundary then performs no storage I/O', async () => {

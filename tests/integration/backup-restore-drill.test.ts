@@ -1,12 +1,14 @@
 import Database from 'better-sqlite3';
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SqliteBackupService } from '$lib/server/backups/service.server';
-import type { BackupStore } from '$lib/server/backups/s3.server';
+import { createS3BackupStore, type BackupStore } from '$lib/server/backups/s3.server';
 import { backupChecksum, encryptBackup } from '$lib/server/backups/format';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
@@ -17,6 +19,7 @@ import {
 	restoreBackup,
 	runRestoreCommand
 } from '../../scripts/restore-backup.mjs';
+import { S3HttpsFixture } from '../fixtures/s3-https-server';
 
 class FileObjectTransport implements BackupStore {
 	constructor(private readonly root: string) {}
@@ -73,6 +76,7 @@ const migrationsDirectory = resolve('migrations');
 const backupNow = new Date('2026-07-17T02:30:45.000Z');
 const restoreNow = new Date('2026-07-17T04:05:06.000Z');
 const encryptionKey = randomBytes(32).toString('base64');
+const canonicalBackupKey = 'drill-bucket/2026/07/17/shop-20260717T023045Z.sqlite.ssbk';
 let root: string;
 let sourcePath: string;
 let dataDirectory: string;
@@ -93,7 +97,10 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-async function createEncryptedBackup(): Promise<string> {
+async function createEncryptedBackup(
+	store: BackupStore = transport,
+	prefix = 'drill-bucket'
+): Promise<string> {
 	await mkdir(join(root, 'objects'), { recursive: true });
 	const source = openDatabase(sourcePath);
 	migrate(source, migrationsDirectory);
@@ -104,9 +111,9 @@ async function createEncryptedBackup(): Promise<string> {
 	insert.run('third recovered row');
 	const service = new SqliteBackupService({
 		database: source,
-		store: transport,
+		store,
 		encryptionKeyBase64: encryptionKey,
-		prefix: 'drill-bucket',
+		prefix,
 		temporaryDirectory: join(root, 'backup-temp')
 	});
 	const result = await service.run(backupNow);
@@ -124,23 +131,86 @@ function createCurrentDatabase(): void {
 	closeDatabase();
 }
 
+async function createCrashLeftWalDatabase(): Promise<void> {
+	rmSync(dataDirectory, { recursive: true, force: true });
+	mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+	const base = openDatabase(databasePath);
+	migrate(base, migrationsDirectory);
+	closeDatabase();
+	const childCode = `
+		import Database from 'better-sqlite3';
+		const database = new Database(${JSON.stringify(databasePath)}, { fileMustExist: true });
+		database.pragma('journal_mode = WAL');
+		database.pragma('wal_autocheckpoint = 0');
+		database.pragma('synchronous = FULL');
+		database.exec('CREATE TABLE current_only (marker TEXT NOT NULL)');
+		database.prepare('INSERT INTO current_only (marker) VALUES (?)').run('committed crash-left WAL row');
+		process.stdout.write('WAL_COMMITTED\\n');
+		setInterval(() => undefined, 1_000);
+	`;
+	const child = spawn(process.execPath, ['--input-type=module', '--eval', childCode], {
+		cwd: resolve('.'),
+		stdio: ['ignore', 'pipe', 'pipe']
+	});
+	let stdout = '';
+	let stderr = '';
+	child.stderr.setEncoding('utf8');
+	child.stderr.on('data', (chunk: string) => {
+		stderr += chunk;
+	});
+	await new Promise<void>((resolvePromise, reject) => {
+		const timer = setTimeout(() => {
+			child.kill('SIGKILL');
+			reject(new Error(`TEST_WAL_CHILD_TIMEOUT:${stderr}`));
+		}, 5_000);
+		child.stdout.setEncoding('utf8');
+		child.stdout.on('data', (chunk: string) => {
+			stdout += chunk;
+			if (!stdout.includes('WAL_COMMITTED')) return;
+			clearTimeout(timer);
+			resolvePromise();
+		});
+		child.once('error', (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+	});
+	child.kill('SIGKILL');
+	await once(child, 'exit');
+	if (!existsSync(`${databasePath}-wal`)) throw new Error('TEST_WAL_NOT_LEFT_BEHIND');
+}
+
 describe('offline restore command safety', () => {
 	it('requires the object key and both destructive confirmations', () => {
 		expect(() => parseRestoreArguments([])).toThrowError(/^RESTORE_ARGUMENTS_INVALID$/);
-		expect(() => parseRestoreArguments(['--key', 'bucket/object.ssbk'])).toThrowError(
+		expect(() => parseRestoreArguments(['--key', canonicalBackupKey])).toThrowError(
 			/^RESTORE_CONFIRMATION_REQUIRED$/
 		);
 		expect(() =>
-			parseRestoreArguments(['--key', 'bucket/object.ssbk', '--confirm-app-stopped'])
+			parseRestoreArguments(['--key', canonicalBackupKey, '--confirm-app-stopped'])
 		).toThrowError(/^RESTORE_CONFIRMATION_REQUIRED$/);
 		expect(
 			parseRestoreArguments([
 				'--key',
-				'bucket/object.ssbk',
+				canonicalBackupKey,
 				'--confirm-app-stopped',
 				'--confirm-replace'
 			])
-		).toEqual({ key: 'bucket/object.ssbk' });
+		).toEqual({ key: canonicalBackupKey });
+	});
+
+	it.each([
+		'drill-bucket/object.ssbk',
+		`${canonicalBackupKey}.sha256`,
+		'drill-bucket/2026/07/18/shop-20260717T023045Z.sqlite.ssbk',
+		'drill-bucket/2026/02/29/shop-20260229T023045Z.sqlite.ssbk',
+		'drill-bucket/2026/07/17/shop-20260717T253045Z.sqlite.ssbk',
+		'drill-\u0001bucket/2026/07/17/shop-20260717T023045Z.sqlite.ssbk',
+		`${'é'.repeat(500)}/2026/07/17/shop-20260717T023045Z.sqlite.ssbk`
+	])('rejects non-canonical or oversized object key %j', (key) => {
+		expect(() =>
+			parseRestoreArguments(['--key', key, '--confirm-app-stopped', '--confirm-replace'])
+		).toThrowError(/^RESTORE_ARGUMENTS_INVALID$/);
 	});
 
 	it('does not construct storage or emit private details when confirmation is missing', async () => {
@@ -149,7 +219,7 @@ describe('offline restore command safety', () => {
 
 		await expect(
 			runRestoreCommand({
-				args: ['--key', 'private/object-key.ssbk'],
+				args: ['--key', canonicalBackupKey],
 				environment: {
 					S3_SECRET_ACCESS_KEY: 'private-secret',
 					BACKUP_ENCRYPTION_KEY_BASE64: encryptionKey
@@ -165,7 +235,7 @@ describe('offline restore command safety', () => {
 			'[["{\\"event\\":\\"restore_failed\\",\\"error_code\\":\\"RESTORE_CONFIRMATION_REQUIRED\\"}"]]'
 		);
 		expect(JSON.stringify(output.error.mock.calls)).not.toContain('private-secret');
-		expect(JSON.stringify(output.error.mock.calls)).not.toContain('private/object-key');
+		expect(JSON.stringify(output.error.mock.calls)).not.toContain(canonicalBackupKey);
 	});
 
 	it('rejects a non-HTTPS restore endpoint before credentials can be used', () => {
@@ -252,6 +322,42 @@ describe('offline restore command safety', () => {
 		expect(existsSync(join(dataDirectory, 'shop.restore.tmp'))).toBe(false);
 		expect(existsSync(join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite'))).toBe(false);
 	});
+
+	it('attempts every restore-temp cleanup and fails closed when mandatory removal fails', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		const before = readFileSync(databasePath);
+		await writeFile(join(dataDirectory, 'shop.restore.tmp'), Buffer.from('stale plaintext temp'), {
+			mode: 0o600
+		});
+		const attempted = new Set<string>();
+		const removeFile = async (path: string, options?: { force?: boolean }): Promise<void> => {
+			attempted.add(path);
+			if (path === join(dataDirectory, 'shop.restore.tmp')) {
+				throw new Error('private restore cleanup detail');
+			}
+			await rm(path, options);
+		};
+
+		await expect(
+			restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: transport,
+				now: () => restoreNow,
+				removeFile
+			} as Parameters<typeof restoreBackup>[0])
+		).rejects.toThrowError(/^RESTORE_CLEANUP_FAILED$/);
+		expect(attempted).toEqual(
+			new Set([
+				join(dataDirectory, 'shop.restore.tmp'),
+				join(dataDirectory, 'shop.restore.tmp-wal'),
+				join(dataDirectory, 'shop.restore.tmp-shm')
+			])
+		);
+		expect(readFileSync(databasePath)).toEqual(before);
+	}, 10_000);
 });
 
 describe('production-shaped backup and restore drill', () => {
@@ -322,4 +428,195 @@ describe('production-shaped backup and restore drill', () => {
 		expect(existsSync(join(dataDirectory, 'shop.restore.tmp-wal'))).toBe(false);
 		expect(existsSync(join(dataDirectory, 'shop.restore.tmp-shm'))).toBe(false);
 	});
+
+	it('materializes crash-left WAL state, removes stale sidecars, and restarts with restored rows', async () => {
+		const key = await createEncryptedBackup();
+		await createCrashLeftWalDatabase();
+		const detachedMain = join(root, 'detached-current-main.sqlite');
+		await copyFile(databasePath, detachedMain);
+		const mainWithoutWal = new Database(detachedMain, { readonly: true, fileMustExist: true });
+		try {
+			expect(
+				mainWithoutWal
+					.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'current_only'")
+					.get()
+			).toEqual({ count: 0 });
+		} finally {
+			mainWithoutWal.close();
+		}
+
+		const restored = await restoreBackup({
+			key,
+			encryptionKeyBase64: encryptionKey,
+			dataDirectory,
+			store: transport,
+			now: () => restoreNow
+		});
+
+		const previous = new Database(restored.preRestorePath, {
+			readonly: true,
+			fileMustExist: true
+		});
+		try {
+			expect(previous.prepare('SELECT marker FROM current_only').get()).toEqual({
+				marker: 'committed crash-left WAL row'
+			});
+			expect(previous.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
+		} finally {
+			previous.close();
+		}
+		expect(existsSync(`${databasePath}-wal`)).toBe(false);
+		expect(existsSync(`${databasePath}-shm`)).toBe(false);
+
+		let restarted = new Database(databasePath, { fileMustExist: true });
+		try {
+			expect(restarted.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
+			expect(restarted.prepare('SELECT COUNT(*) AS count FROM restore_proof').get()).toEqual({
+				count: 3
+			});
+			expect(
+				restarted
+					.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'current_only'")
+					.get()
+			).toEqual({ count: 0 });
+		} finally {
+			restarted.close();
+		}
+		restarted = new Database(databasePath, { readonly: true, fileMustExist: true });
+		try {
+			expect(restarted.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
+		} finally {
+			restarted.close();
+		}
+	});
+
+	it('syncs the materialized pre-restore copy and data directory before returning success', async () => {
+		const key = await createEncryptedBackup();
+		createCurrentDatabase();
+		const syncedFiles: string[] = [];
+		const syncedDirectories: string[] = [];
+
+		await restoreBackup({
+			key,
+			encryptionKeyBase64: encryptionKey,
+			dataDirectory,
+			store: transport,
+			now: () => restoreNow,
+			syncFile: async (path: string) => {
+				syncedFiles.push(path);
+			},
+			syncDirectory: async (path: string) => {
+				syncedDirectories.push(path);
+			}
+		} as Parameters<typeof restoreBackup>[0]);
+
+		expect(syncedFiles).toContain(join(dataDirectory, 'shop.pre-restore.20260717T040506Z.sqlite'));
+		expect(syncedDirectories).toEqual([dataDirectory, dataDirectory]);
+	});
+});
+
+describe('real S3-compatible HTTPS production path', () => {
+	it('backs up and restores through real signed S3Client PUT, GET, paginated LIST, and pair DELETE requests', async () => {
+		const fixture = await S3HttpsFixture.start();
+		const previousTlsOverride = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+		const bucket = 'restore-backups';
+		const prefix = 'drill-bucket';
+		const oldBase = `${prefix}/2026/06/01/shop-20260601T000000Z.sqlite.ssbk`;
+		fixture.seed(bucket, oldBase, Buffer.from('old encrypted object'), new Date('2026-06-01'));
+		fixture.seed(
+			bucket,
+			`${oldBase}.sha256`,
+			Buffer.from(`${'0'.repeat(64)}\n`),
+			new Date('2026-06-01')
+		);
+		try {
+			const configuration = {
+				endpoint: fixture.endpoint,
+				region: 'eu-north-1',
+				bucket,
+				accessKeyId: 'fixture-access-key',
+				secretAccessKey: 'fixture-secret-key',
+				forcePathStyle: true
+			};
+			const backupStore = createS3BackupStore(configuration);
+			const key = await createEncryptedBackup(backupStore, prefix);
+			const encrypted = fixture.object(bucket, key);
+			const companion = fixture.object(bucket, `${key}.sha256`);
+			expect(encrypted?.contentType).toBe('application/octet-stream');
+			expect(companion?.contentType).toBe('text/plain; charset=utf-8');
+			expect(Buffer.from(companion?.body ?? []).toString('ascii')).toBe(
+				`${backupChecksum(encrypted?.body ?? new Uint8Array())}\n`
+			);
+			expect(fixture.object(bucket, oldBase)).toBeUndefined();
+			expect(fixture.object(bucket, `${oldBase}.sha256`)).toBeUndefined();
+
+			const restoreStore = createRestoreStoreFromEnvironment({
+				S3_ENDPOINT: fixture.endpoint,
+				S3_BUCKET: bucket,
+				S3_REGION: configuration.region,
+				S3_ACCESS_KEY_ID: configuration.accessKeyId,
+				S3_SECRET_ACCESS_KEY: configuration.secretAccessKey,
+				S3_FORCE_PATH_STYLE: 'true'
+			});
+			createCurrentDatabase();
+			await restoreBackup({
+				key,
+				encryptionKeyBase64: encryptionKey,
+				dataDirectory,
+				store: restoreStore,
+				now: () => restoreNow
+			});
+
+			const restored = new Database(databasePath, { fileMustExist: true });
+			try {
+				migrate(restored, migrationsDirectory);
+				expect(restored.pragma('quick_check')).toEqual([{ quick_check: 'ok' }]);
+				expect(restored.prepare('SELECT COUNT(*) AS count FROM restore_proof').get()).toEqual({
+					count: 3
+				});
+				expect(restored.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
+					count: 3
+				});
+				const readiness = await checkRuntimeReadiness({
+					database: restored,
+					scheduler: null,
+					databasePath,
+					migrationsDirectory,
+					environment: {
+						STOREFRONT_ENABLED: 'false',
+						CHECKOUT_ENABLED: 'false',
+						MCP_ENABLED: 'false',
+						SCHEDULER_ENABLED: 'false',
+						DATABASE_BOOTSTRAP: 'false',
+						PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+						SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+						STRIPE_WEBHOOK_SECRET: 'whsec_real_s3_drill',
+						DATABASE_PATH: databasePath
+					}
+				});
+				expect(readiness.ready).toBe(true);
+			} finally {
+				restored.close();
+			}
+
+			const puts = fixture.requests.filter((request) => request.method === 'PUT');
+			const gets = fixture.requests.filter((request) => request.method === 'GET');
+			const lists = fixture.requests.filter((request) => request.method === 'LIST');
+			const deletes = fixture.requests.filter((request) => request.method === 'DELETE');
+			expect(puts.map((request) => request.key)).toEqual([key, `${key}.sha256`]);
+			expect(gets.map((request) => request.key).sort()).toEqual([key, `${key}.sha256`].sort());
+			expect(lists.some((request) => request.continuationToken !== undefined)).toBe(true);
+			expect(deletes).toHaveLength(1);
+			expect(deletes[0]?.deletedKeys?.sort()).toEqual([oldBase, `${oldBase}.sha256`].sort());
+			for (const request of fixture.requests) {
+				expect(request.authorization).toMatch(/^AWS4-HMAC-SHA256 /);
+			}
+		} finally {
+			if (previousTlsOverride === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+			else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTlsOverride;
+			await fixture.close();
+		}
+		expect(fixture.listening).toBe(false);
+	}, 10_000);
 });

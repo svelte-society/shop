@@ -80,9 +80,12 @@ docker run --rm \
 
 The command downloads the encrypted object and checksum, verifies SHA-256, authenticates and
 decrypts into `/data/shop.restore.tmp`, runs `PRAGMA quick_check`, closes SQLite, copies the current
-database to `/data/shop.pre-restore.<timestamp>.sqlite`, and atomically renames the verified restore
-over `/data/shop.sqlite`. Any failed check leaves the current database in place and removes restore
-temporary files. Success emits only `{"event":"restore_completed"}`.
+database's complete logical state (including committed pages in a crash-left WAL) through SQLite
+online backup to `/data/shop.pre-restore.<timestamp>.sqlite`, and runs `PRAGMA quick_check` against
+that materialized copy. Only after the copy is synchronized does it remove the stopped database's
+stale WAL/SHM files, atomically rename the verified restore over `/data/shop.sqlite`, and synchronize
+the data directory. Any failed check leaves the current logical state recoverable and removes
+restore temporary files. Success emits only `{"event":"restore_completed"}`.
 
 5. Before restarting, verify the restored file with a one-shot container:
 
@@ -119,24 +122,42 @@ logs.
 
 ## Roll back the restore
 
-The restore deliberately retains `/data/shop.pre-restore.<timestamp>.sqlite`.
+The restore deliberately retains `/data/shop.pre-restore.<timestamp>.sqlite`. It is a standalone,
+materialized SQLite database containing the prior committed logical state; it does not depend on
+the old `shop.sqlite-wal` or `shop.sqlite-shm` files.
 
 1. Put the service back into maintenance, stop the application container, and again prove no
    process has `/data` open.
-2. Preserve the failed restored database for investigation, copy the selected pre-restore file to
-   a temporary file on the same volume, and atomically replace the database:
+2. Preserve the failed restored database for investigation with SQLite online backup so committed
+   WAL pages are included. Copy the selected standalone pre-restore file to a temporary file on the
+   same volume, remove the stopped database's stale sidecars, and atomically replace the database:
 
 ```bash
 docker run --rm \
   --volume <coolify-data-volume>:/data \
-  --entrypoint sh \
-  <immutable-image> -eu -c '
-    stamp=$(date -u +%Y%m%dT%H%M%SZ)
-    cp /data/shop.sqlite "/data/shop.failed-restore.${stamp}.sqlite"
-    cp /data/shop.pre-restore.<timestamp>.sqlite /data/shop.rollback.tmp
-    chmod 0600 /data/shop.rollback.tmp
-    mv -f /data/shop.rollback.tmp /data/shop.sqlite
-  '
+  --entrypoint node \
+  <immutable-image> \
+  --input-type=module --eval '
+    import Database from "better-sqlite3";
+    import { chmod, copyFile, open, rename, rm } from "node:fs/promises";
+    const selected = process.argv[1];
+    const stamp = new Date().toISOString().slice(0, 19).replaceAll(/[-:]/g, "") + "Z";
+    const failed = new Database("/data/shop.sqlite", { fileMustExist: true });
+    try { await failed.backup(`/data/shop.failed-restore.${stamp}.sqlite`); }
+    finally { failed.close(); }
+    await copyFile(selected, "/data/shop.rollback.tmp");
+    await chmod("/data/shop.rollback.tmp", 0o600);
+    const rollback = await open("/data/shop.rollback.tmp", "r");
+    try { await rollback.sync(); } finally { await rollback.close(); }
+    await Promise.all([
+      rm("/data/shop.sqlite-wal", { force: true }),
+      rm("/data/shop.sqlite-shm", { force: true })
+    ]);
+    await rename("/data/shop.rollback.tmp", "/data/shop.sqlite");
+    const directory = await open("/data", "r");
+    try { await directory.sync(); } finally { await directory.close(); }
+  ' \
+  /data/shop.pre-restore.<timestamp>.sqlite
 ```
 
 3. Restart with `DATABASE_BOOTSTRAP=false`. Require successful migration startup, readiness, and
@@ -144,16 +165,19 @@ docker run --rm \
 
 ## Automated restore drill
 
-`tests/integration/backup-restore-drill.test.ts` is the self-cleaning production-shaped drill. It
-uses a temporary file-backed faithful object transport without external credentials, while
-the separate S3 adapter tests exercise the real AWS SDK commands, HTTPS configuration, pagination,
-and deletion batches. The drill proves:
+`tests/integration/backup-restore-drill.test.ts` is the self-cleaning production-shaped drill. Its
+failure cases use a temporary file transport, and its full path uses a bounded host-local
+S3-compatible HTTPS server with the production `createS3BackupStore` and
+`createRestoreStoreFromEnvironment` factories and real signed AWS SDK requests. The drill proves:
 
 - SQLite online backup of a migrated WAL database;
 - exact encryption/checksum compatibility with the offline restore program;
 - checksum and authenticated-decryption corruption rejection without replacement;
 - both destructive confirmation gates before any store construction;
 - `quick_check`, prior-database copy, atomic replacement, and temporary-file cleanup;
+- committed crash-left WAL recovery into the standalone prior-database copy, stale-sidecar removal,
+  and a clean restored restart;
+- real PUT/GET bodies, paginated LIST, encrypted/checksum pair deletion, and HTTPS fixture teardown;
 - restored migration ledger and exact row-count assertions; and
 - application readiness against the restored `/data/shop.sqlite` analogue.
 

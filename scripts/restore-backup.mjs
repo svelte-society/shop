@@ -1,6 +1,6 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import Database from 'better-sqlite3';
-import { constants as filesystemConstants, copyFile, open, rename, rm } from 'node:fs/promises';
+import { chmod, open, rename, rm } from 'node:fs/promises';
 import { createDecipheriv, createHash, timingSafeEqual } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +10,7 @@ const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const HEADER_BYTES = MAGIC.length + IV_BYTES + TAG_BYTES;
 const BASE64_32_BYTE_KEY = /^[A-Za-z0-9+/]{43}=$/;
+const MAX_S3_KEY_BYTES = 1_024;
 const SAFE_ERROR_CODES = new Set([
 	'RESTORE_ARGUMENTS_INVALID',
 	'RESTORE_CONFIRMATION_REQUIRED',
@@ -20,6 +21,7 @@ const SAFE_ERROR_CODES = new Set([
 	'RESTORE_FORMAT_INVALID',
 	'RESTORE_DECRYPT_FAILED',
 	'RESTORE_INTEGRITY_FAILED',
+	'RESTORE_CLEANUP_FAILED',
 	'RESTORE_FAILED'
 ]);
 
@@ -35,9 +37,36 @@ function exactValue(value) {
 
 /** @param {unknown} value @returns {value is string} */
 function validObjectKey(value) {
-	return (
-		exactValue(value) && value.length <= 1_024 && !value.startsWith('/') && !value.endsWith('/')
-	);
+	const hasControlCharacter =
+		typeof value === 'string' &&
+		[...value].some((character) => {
+			const codePoint = character.codePointAt(0) ?? 0;
+			return codePoint <= 0x1f || codePoint === 0x7f;
+		});
+	if (
+		!exactValue(value) ||
+		hasControlCharacter ||
+		Buffer.byteLength(`${value}.sha256`, 'utf8') > MAX_S3_KEY_BYTES
+	) {
+		return false;
+	}
+	const match =
+		/^(.+)\/(\d{4})\/(\d{2})\/(\d{2})\/shop-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.sqlite\.ssbk$/u.exec(
+			value
+		);
+	if (!match) return false;
+	const [, prefix, pathYear, pathMonth, pathDay, year, month, day, hour, minute, second] = match;
+	if (
+		prefix.split('/').some((part) => !part || part === '.' || part === '..') ||
+		pathYear !== year ||
+		pathMonth !== month ||
+		pathDay !== day
+	) {
+		return false;
+	}
+	const timestamp = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
+	const parsed = new Date(timestamp);
+	return Number.isFinite(parsed.getTime()) && parsed.toISOString() === timestamp;
 }
 
 /** @param {unknown} value */
@@ -156,13 +185,30 @@ function timestamp(date) {
 	return `${date.toISOString().slice(0, 19).replace(/[-:]/gu, '')}Z`;
 }
 
-/** @param {string} path */
-async function removeRestoreTemps(path) {
+/**
+ * @param {string[]} paths
+ * @param {(path: string, options?: { force?: boolean }) => Promise<void>} removeFile
+ */
+async function removeRequired(paths, removeFile) {
+	let failed = false;
 	await Promise.all(
-		[path, `${path}-shm`, `${path}-wal`].map((candidate) =>
-			rm(candidate, { force: true }).catch(() => undefined)
-		)
+		paths.map(async (path) => {
+			try {
+				await removeFile(path, { force: true });
+			} catch {
+				failed = true;
+			}
+		})
 	);
+	if (failed) throw new Error('RESTORE_CLEANUP_FAILED');
+}
+
+/**
+ * @param {string} path
+ * @param {(path: string, options?: { force?: boolean }) => Promise<void>} removeFile
+ */
+async function removeRestoreTemps(path, removeFile) {
+	await removeRequired([path, `${path}-shm`, `${path}-wal`], removeFile);
 }
 
 /** @param {string} path @param {Uint8Array} bytes */
@@ -176,6 +222,48 @@ async function writeSynced(path, bytes) {
 	}
 }
 
+/** @param {string} path */
+async function syncPath(path) {
+	const handle = await open(path, 'r');
+	try {
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
+}
+
+/**
+ * @param {string} databasePath
+ * @param {string} preRestorePath
+ * @param {string} dataDirectory
+ * @param {(path: string, options?: { force?: boolean }) => Promise<void>} removeFile
+ * @param {(path: string) => Promise<void>} syncFile
+ * @param {(path: string) => Promise<void>} syncDirectory
+ */
+async function materializeCurrentDatabase(
+	databasePath,
+	preRestorePath,
+	dataDirectory,
+	removeFile,
+	syncFile,
+	syncDirectory
+) {
+	const reservation = await open(preRestorePath, 'wx', 0o600);
+	await reservation.close();
+	let current;
+	try {
+		current = new Database(databasePath, { fileMustExist: true });
+		await current.backup(preRestorePath);
+	} finally {
+		if (current?.open) current.close();
+	}
+	await chmod(preRestorePath, 0o600);
+	quickCheck(preRestorePath);
+	await removeRequired([`${preRestorePath}-shm`, `${preRestorePath}-wal`], removeFile);
+	await syncFile(preRestorePath);
+	await syncDirectory(dataDirectory);
+}
+
 /**
  * @param {{
  *   key: string;
@@ -183,6 +271,9 @@ async function writeSynced(path, bytes) {
  *   dataDirectory?: string;
  *   store: { get(key: string): Promise<Uint8Array> };
  *   now?: () => Date;
+ *   removeFile?: (path: string, options?: { force?: boolean }) => Promise<void>;
+ *   syncFile?: (path: string) => Promise<void>;
+ *   syncDirectory?: (path: string) => Promise<void>;
  * }} options
  */
 export async function restoreBackup(options) {
@@ -196,10 +287,15 @@ export async function restoreBackup(options) {
 		dataDirectory,
 		`shop.pre-restore.${timestamp((options.now ?? (() => new Date()))())}.sqlite`
 	);
+	const removeFile = options.removeFile ?? rm;
+	const syncFile = options.syncFile ?? syncPath;
+	const syncDirectory = options.syncDirectory ?? syncPath;
 	let plaintext;
+	let result;
+	let failure;
 
-	await removeRestoreTemps(restorePath);
 	try {
+		await removeRestoreTemps(restorePath, removeFile);
 		let encrypted;
 		let companion;
 		try {
@@ -214,19 +310,35 @@ export async function restoreBackup(options) {
 		plaintext = decrypt(encrypted, options.encryptionKeyBase64);
 		await writeSynced(restorePath, plaintext);
 		quickCheck(restorePath);
-		await rm(`${restorePath}-shm`, { force: true });
-		await rm(`${restorePath}-wal`, { force: true });
-		await copyFile(databasePath, preRestorePath, filesystemConstants.COPYFILE_EXCL);
+		await removeRequired([`${restorePath}-shm`, `${restorePath}-wal`], removeFile);
+		await materializeCurrentDatabase(
+			databasePath,
+			preRestorePath,
+			dataDirectory,
+			removeFile,
+			syncFile,
+			syncDirectory
+		);
+		await removeRequired([`${databasePath}-shm`, `${databasePath}-wal`], removeFile);
 		await rename(restorePath, databasePath);
-		return { databasePath, preRestorePath };
+		await syncDirectory(dataDirectory);
+		result = { databasePath, preRestorePath };
 	} catch (error) {
-		if (error instanceof Error && SAFE_ERROR_CODES.has(error.message)) throw error;
-		// eslint-disable-next-line preserve-caught-error -- provider, path, and credential details must not escape as a cause
-		throw new Error('RESTORE_FAILED');
+		failure =
+			error instanceof Error && SAFE_ERROR_CODES.has(error.message)
+				? error
+				: new Error('RESTORE_FAILED');
 	} finally {
 		plaintext?.fill(0);
-		await removeRestoreTemps(restorePath);
+		try {
+			await removeRestoreTemps(restorePath, removeFile);
+		} catch {
+			failure = new Error('RESTORE_CLEANUP_FAILED');
+		}
 	}
+	if (failure) throw failure;
+	if (!result) throw new Error('RESTORE_FAILED');
+	return result;
 }
 
 class S3RestoreStore {
