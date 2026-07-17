@@ -52,7 +52,7 @@ function validObjectKey(value) {
 		return false;
 	}
 	const match =
-		/^(.+)\/(\d{4})\/(\d{2})\/(\d{2})\/shop-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z\.sqlite\.ssbk$/u.exec(
+		/^(.+)\/(\d{4})\/(\d{2})\/(\d{2})\/shop-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.sqlite\.ssbk$/u.exec(
 			value
 		);
 	if (!match) return false;

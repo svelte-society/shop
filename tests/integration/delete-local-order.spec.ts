@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
 import {
+	createConfirmedEncryptedDeletionBackup,
 	deleteLocalOrder,
 	parseDeleteLocalOrderArguments,
 	runDeleteLocalOrderCommand
@@ -15,6 +16,47 @@ const targetDraftId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const otherOrderId = '22222222-2222-4222-8222-222222222222';
 const otherDraftId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const migrationsDirectory = resolve('migrations');
+const backupEnvironment = {
+	S3_PREFIX: 'reviewed-deletions',
+	BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64')
+};
+
+class MemoryDeletionBackupStore {
+	readonly objects = new Map<string, Buffer>();
+	readonly putCalls: Array<{ key: string; contentType: string; ifNoneMatch: string | undefined }> =
+		[];
+	readonly deleteCalls: string[][] = [];
+	collideNextPut = false;
+	collision: { key: string; body: Buffer } | undefined;
+
+	async put(
+		key: string,
+		body: Uint8Array,
+		contentType: string,
+		options?: { ifNoneMatch?: string }
+	): Promise<void> {
+		this.putCalls.push({ key, contentType, ifNoneMatch: options?.ifNoneMatch });
+		if (this.collideNextPut) {
+			this.collideNextPut = false;
+			const collisionBody = Buffer.from('pre-existing successful backup');
+			this.collision = { key, body: collisionBody };
+			this.objects.set(key, collisionBody);
+		}
+		if (options?.ifNoneMatch === '*' && this.objects.has(key)) {
+			throw new Error('private object-store precondition failure');
+		}
+		this.objects.set(key, Buffer.from(body));
+	}
+
+	async list(prefix: string): Promise<string[]> {
+		return [...this.objects.keys()].filter((key) => key.startsWith(prefix));
+	}
+
+	async delete(keys: string[]): Promise<void> {
+		this.deleteCalls.push([...keys]);
+		for (const key of keys) this.objects.delete(key);
+	}
+}
 
 let root: string;
 let databasePath: string;
@@ -253,6 +295,86 @@ afterEach(() => {
 });
 
 describe('reviewed local-order deletion', () => {
+	it('creates distinct immutable object and checksum keys for backups at the same timestamp', async () => {
+		const store = new MemoryDeletionBackupStore();
+		const now = new Date('2026-07-17T08:05:00.000Z');
+
+		await createConfirmedEncryptedDeletionBackup({
+			database,
+			environment: backupEnvironment,
+			store,
+			now,
+			temporaryDirectory: root
+		});
+		await createConfirmedEncryptedDeletionBackup({
+			database,
+			environment: backupEnvironment,
+			store,
+			now,
+			temporaryDirectory: root
+		});
+
+		const objectKeys = store.putCalls
+			.map(({ key }) => key)
+			.filter((key) => !key.endsWith('.sha256'));
+		const checksumKeys = store.putCalls
+			.map(({ key }) => key)
+			.filter((key) => key.endsWith('.sha256'));
+		expect(objectKeys).toHaveLength(2);
+		expect(new Set(objectKeys).size).toBe(2);
+		expect(checksumKeys).toEqual(objectKeys.map((key) => `${key}.sha256`));
+		expect(new Set(checksumKeys).size).toBe(2);
+		expect(store.objects.size).toBe(4);
+		for (const objectKey of objectKeys) {
+			expect(objectKey).toMatch(
+				/^reviewed-deletions\/2026\/07\/17\/shop-20260717T080500Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.sqlite\.ssbk$/
+			);
+			expect(store.objects.has(`${objectKey}.sha256`)).toBe(true);
+		}
+	});
+
+	it('requests conditional non-overwrite creation for backup and checksum uploads', async () => {
+		const store = new MemoryDeletionBackupStore();
+
+		await createConfirmedEncryptedDeletionBackup({
+			database,
+			environment: backupEnvironment,
+			store,
+			now: new Date('2026-07-17T08:05:00.000Z'),
+			temporaryDirectory: root
+		});
+
+		expect(store.putCalls).toHaveLength(2);
+		expect(store.putCalls.map(({ ifNoneMatch }) => ifNoneMatch)).toEqual(['*', '*']);
+	});
+
+	it('fails closed on a forced key collision without deleting the successful backup', async () => {
+		const store = new MemoryDeletionBackupStore();
+		const now = new Date('2026-07-17T08:05:00.000Z');
+		const options = {
+			database,
+			environment: backupEnvironment,
+			store,
+			now,
+			temporaryDirectory: root
+		};
+
+		await createConfirmedEncryptedDeletionBackup(options);
+		const successfulBackup = new Map(store.objects);
+		store.collideNextPut = true;
+
+		await expect(createConfirmedEncryptedDeletionBackup(options)).rejects.toThrowError(
+			/^LOCAL_ORDER_DELETE_BACKUP_FAILED$/
+		);
+
+		for (const [key, body] of successfulBackup) {
+			expect(store.objects.get(key)).toEqual(body);
+		}
+		expect(store.collision).toBeDefined();
+		expect(store.objects.get(store.collision?.key ?? '')).toEqual(store.collision?.body);
+		expect(store.deleteCalls).toEqual([]);
+	});
+
 	it('requires the exact confirmation and internal order ID', () => {
 		expect(() => parseDeleteLocalOrderArguments([])).toThrowError(
 			/^LOCAL_ORDER_DELETE_ARGUMENTS_INVALID$/

@@ -85,6 +85,8 @@ const backupNow = new Date('2026-07-17T02:30:45.000Z');
 const restoreNow = new Date('2026-07-17T04:05:06.000Z');
 const encryptionKey = randomBytes(32).toString('base64');
 const canonicalBackupKey = 'drill-bucket/2026/07/17/shop-20260717T023045Z.sqlite.ssbk';
+const deletionBackupKey =
+	'drill-bucket/2026/07/17/shop-20260717T023045Z-33333333-3333-4333-8333-333333333333.sqlite.ssbk';
 let root: string;
 let sourcePath: string;
 let dataDirectory: string;
@@ -258,6 +260,17 @@ describe('offline restore command safety', () => {
 				'--confirm-replace'
 			])
 		).toEqual({ key: canonicalBackupKey });
+	});
+
+	it('accepts deletion backup keys with an immutable UUID suffix', () => {
+		expect(
+			parseRestoreArguments([
+				'--key',
+				deletionBackupKey,
+				'--confirm-app-stopped',
+				'--confirm-replace'
+			])
+		).toEqual({ key: deletionBackupKey });
 	});
 
 	it.each([
@@ -551,7 +564,7 @@ describe('production-shaped backup and restore drill', () => {
 			count: 3
 		});
 		expect(database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 4
+			count: 5
 		});
 
 		const readiness = await checkRuntimeReadiness({

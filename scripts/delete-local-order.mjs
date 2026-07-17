@@ -70,8 +70,10 @@ function normalizedPrefix(value) {
 	if (
 		!prefix ||
 		prefix.split('/').some((part) => !part || part === '.' || part === '..') ||
-		Buffer.byteLength(`${prefix}/0000/00/00/shop-00000000T000000Z.sqlite.ssbk.sha256`, 'utf8') >
-			MAX_S3_KEY_BYTES
+		Buffer.byteLength(
+			`${prefix}/0000/00/00/shop-00000000T000000Z-00000000-0000-0000-0000-000000000000.sqlite.ssbk.sha256`,
+			'utf8'
+		) > MAX_S3_KEY_BYTES
 	) {
 		throw new Error('LOCAL_ORDER_DELETE_BACKUP_FAILED');
 	}
@@ -106,13 +108,15 @@ function encryptBackup(plaintext, keyBase64) {
 	}
 }
 
-/** @param {Date} now @param {string} prefix */
-function backupObjectKey(now, prefix) {
+/** @param {Date} now @param {string} prefix @param {string} backupId */
+function backupObjectKey(now, prefix, backupId) {
 	const iso = now.toISOString();
-	if (!Number.isFinite(now.getTime())) throw new Error('LOCAL_ORDER_DELETE_BACKUP_FAILED');
+	if (!Number.isFinite(now.getTime()) || !UUID_PATTERN.test(backupId)) {
+		throw new Error('LOCAL_ORDER_DELETE_BACKUP_FAILED');
+	}
 	return `${prefix}/${iso.slice(0, 4)}/${iso.slice(5, 7)}/${iso.slice(8, 10)}/shop-${iso
 		.slice(0, 19)
-		.replace(/[-:]/gu, '')}Z.sqlite.ssbk`;
+		.replace(/[-:]/gu, '')}Z-${backupId}.sqlite.ssbk`;
 }
 
 class S3DeletionBackupStore {
@@ -122,10 +126,16 @@ class S3DeletionBackupStore {
 		this.client = client;
 	}
 
-	/** @param {string} key @param {Uint8Array} body @param {string} contentType */
-	async put(key, body, contentType) {
+	/** @param {string} key @param {Uint8Array} body @param {string} contentType @param {{ ifNoneMatch: '*' }} options */
+	async put(key, body, contentType, options) {
 		await this.client.send(
-			new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType })
+			new PutObjectCommand({
+				Bucket: this.bucket,
+				Key: key,
+				Body: body,
+				ContentType: contentType,
+				IfNoneMatch: options.ifNoneMatch
+			})
 		);
 	}
 
@@ -194,7 +204,7 @@ function createBackupStore(environment) {
  * @param {{
  *   database: Database.Database;
  *   environment: Record<string, string | undefined>;
- *   store?: { put(key: string, body: Uint8Array, contentType: string): Promise<void>; list(prefix: string): Promise<string[]>; delete(keys: string[]): Promise<void> };
+ *   store?: { put(key: string, body: Uint8Array, contentType: string, options: { ifNoneMatch: '*' }): Promise<void>; list(prefix: string): Promise<string[]>; delete(keys: string[]): Promise<void> };
  *   now?: Date;
  *   temporaryDirectory?: string;
  * }} options
@@ -203,7 +213,7 @@ export async function createConfirmedEncryptedDeletionBackup(options) {
 	const prefix = normalizedPrefix(options.environment.S3_PREFIX);
 	const store = options.store ?? createBackupStore(options.environment);
 	const now = options.now ?? new Date();
-	const key = backupObjectKey(now, prefix);
+	const key = backupObjectKey(now, prefix, randomUUID());
 	const checksumKey = `${key}.sha256`;
 	const runDirectory = join(
 		options.temporaryDirectory ?? options.environment.TMPDIR ?? tmpdir(),
@@ -231,12 +241,13 @@ export async function createConfirmedEncryptedDeletionBackup(options) {
 		plaintext.fill(0);
 		plaintext = undefined;
 		const checksum = createHash('sha256').update(encrypted).digest('hex');
-		await store.put(key, encrypted, 'application/octet-stream');
+		await store.put(key, encrypted, 'application/octet-stream', { ifNoneMatch: '*' });
 		uploaded.push(key);
 		await store.put(
 			checksumKey,
 			Buffer.from(`${checksum}\n`, 'ascii'),
-			'text/plain; charset=utf-8'
+			'text/plain; charset=utf-8',
+			{ ifNoneMatch: '*' }
 		);
 		uploaded.push(checksumKey);
 		const listing = await store.list(`${prefix}/`);
