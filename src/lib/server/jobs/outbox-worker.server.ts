@@ -4,6 +4,9 @@ import type { OutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { PlunkGateway } from '$lib/server/plunk/gateway';
 import { PlunkError } from '$lib/server/plunk/gateway';
+import { loadShippingOrder, type ShippingEmailSender } from '$lib/server/plunk/shipping-email';
+import { StripeFulfillmentError } from '$lib/server/stripe/client.server';
+import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { nextOutboxAttempt } from './backoff';
 
 const DEFAULT_BATCH_LIMIT = 25;
@@ -24,6 +27,11 @@ export type PaidOrderAlertOutboxWorkerDependencies = {
 	outbox: OutboxRepository;
 	plunk: PlunkGateway;
 	alertEmail: PaidOrderAlertEmailConfig;
+	shipping?: {
+		stripe: StripeFulfillmentGateway;
+		sender: ShippingEmailSender;
+		supportEmail: string;
+	};
 };
 
 type PaidOrderAlertRow = {
@@ -46,6 +54,8 @@ class OutboxWorkerError extends Error {
 			| 'OUTBOX_JOB_KIND_UNSUPPORTED'
 			| 'PAID_ORDER_ALERT_JOB_INVALID'
 			| 'PAID_ORDER_ALERT_DATA_INVALID'
+			| 'SHIPPING_EMAIL_SERVICE_UNAVAILABLE'
+			| 'SHIPPING_EMAIL_JOB_INVALID'
 	) {
 		super(code);
 		this.name = 'OutboxWorkerError';
@@ -89,9 +99,30 @@ function loadPaidOrderAlert(database: ShopDatabase, job: OutboxJob): PaidOrderAl
 }
 
 function stableErrorCode(error: unknown): string {
-	if (error instanceof PlunkError || error instanceof RepositoryError) return error.code;
+	if (
+		error instanceof PlunkError ||
+		error instanceof RepositoryError ||
+		error instanceof StripeFulfillmentError
+	)
+		return error.code;
 	if (error instanceof OutboxWorkerError) return error.code;
 	return 'PAID_ORDER_ALERT_FAILED';
+}
+
+function shippingReference(job: OutboxJob, trackingNumber: string) {
+	if (
+		job.kind !== 'shipping-email' ||
+		job.orderId === null ||
+		job.idempotencyKey !== `shipping:${job.orderId}:${trackingNumber}`
+	) {
+		throw new OutboxWorkerError('SHIPPING_EMAIL_JOB_INVALID');
+	}
+	return {
+		orderId: job.orderId,
+		kind: 'shipping' as const,
+		trackingNumber,
+		idempotencyKey: job.idempotencyKey
+	};
 }
 
 function paidOrderAlertHtml(order: PaidOrderAlert): string {
@@ -117,15 +148,11 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 
 		for (const job of jobs) {
 			try {
-				const order = loadPaidOrderAlert(this.dependencies.database, job);
-				await this.dependencies.plunk.send({
-					to: this.dependencies.alertEmail.to,
-					from: this.dependencies.alertEmail.from,
-					replyTo: this.dependencies.alertEmail.replyTo,
-					subject: PAID_ORDER_ALERT_SUBJECT,
-					html: paidOrderAlertHtml(order)
-				});
-				this.dependencies.outbox.complete(job.id, now);
+				if (job.kind === 'shipping-email') {
+					await this.sendShipping(job, now);
+				} else {
+					await this.sendPaidOrderAlert(job, now);
+				}
 				completed += 1;
 			} catch (error) {
 				const attempt = job.attemptCount + 1;
@@ -140,5 +167,39 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 		}
 
 		return { completed, rescheduled };
+	}
+
+	private async sendPaidOrderAlert(job: OutboxJob, now: Date): Promise<void> {
+		const order = loadPaidOrderAlert(this.dependencies.database, job);
+		await this.dependencies.plunk.send({
+			to: this.dependencies.alertEmail.to,
+			from: this.dependencies.alertEmail.from,
+			replyTo: this.dependencies.alertEmail.replyTo,
+			subject: PAID_ORDER_ALERT_SUBJECT,
+			html: paidOrderAlertHtml(order)
+		});
+		this.dependencies.outbox.complete(job.id, now);
+	}
+
+	private async sendShipping(job: OutboxJob, now: Date): Promise<void> {
+		const shipping = this.dependencies.shipping;
+		if (!shipping) throw new OutboxWorkerError('SHIPPING_EMAIL_SERVICE_UNAVAILABLE');
+		if (job.orderId === null) throw new OutboxWorkerError('SHIPPING_EMAIL_JOB_INVALID');
+		const order = loadShippingOrder(this.dependencies.database, job.orderId);
+		const reference = shippingReference(job, order.trackingNumber);
+		if (!this.dependencies.outbox.beginEmailDelivery(reference)) {
+			this.dependencies.outbox.complete(job.id, now);
+			return;
+		}
+		// Stripe remains the source of truth. Retrieve the current address object only at send time,
+		// use its email, and discard the rest without persisting it.
+		const details = await shipping.stripe.retrieveFulfillmentDetails(order.checkoutSessionId);
+		const delivery = await shipping.sender.send({
+			recipientEmail: details.email,
+			productSummary: order.productSummary,
+			trackingNumber: order.trackingNumber,
+			supportEmail: shipping.supportEmail
+		});
+		this.dependencies.outbox.completeEmailDelivery(reference, delivery.deliveryId, now, job.id);
 	}
 }

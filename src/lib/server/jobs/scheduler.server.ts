@@ -1,18 +1,26 @@
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
+import type { StyriaSyncJob } from './styria-sync.server';
 
 export const OUTBOX_JOB_NAME = 'outbox';
+export const STYRIA_SYNC_JOB_NAME = 'styria-sync';
 const OUTBOX_INTERVAL_MS = 60_000;
 const OUTBOX_LEASE_TTL_MS = 55_000;
 const OUTBOX_LEASE_HEARTBEAT_MS = 20_000;
-const OUTBOX_DRAIN_LIMIT = 3;
+// A shipping job can spend up to three 10-second Stripe attempts plus one 10-second Plunk call.
+// One job keeps that worst case inside the 55-second outbox lease.
+const OUTBOX_DRAIN_LIMIT = 1;
 const OUTBOX_DRAIN_ERROR_CODE = 'OUTBOX_DRAIN_FAILED';
+const STYRIA_SYNC_INTERVAL_MS = 60 * 60_000;
+const STYRIA_SYNC_LEASE_TTL_MS = 55 * 60_000;
+const STYRIA_SYNC_ERROR_CODE = 'STYRIA_SYNC_FAILED';
 
 export interface Scheduler {
 	start(): void;
 	stop(): Promise<void>;
 	runOutboxOnce(now?: Date): Promise<void>;
+	runStyriaSyncOnce(now?: Date): Promise<void>;
 }
 
 export type SchedulerTimerHandle = {
@@ -25,6 +33,7 @@ export type OutboxSchedulerOptions = {
 	database: ShopDatabase;
 	leases: LeaseRepository;
 	worker: OutboxWorker;
+	styriaSync?: StyriaSyncJob;
 	enabled: boolean;
 	ownerId: string;
 	clock?: () => Date;
@@ -51,8 +60,11 @@ export class OutboxScheduler implements Scheduler {
 	private started = false;
 	private acceptingScheduledRuns = false;
 	private timer: SchedulerTimerHandle | undefined;
+	private styriaTimer: SchedulerTimerHandle | undefined;
 	private activeRun: Promise<void> | undefined;
+	private activeStyriaRun: Promise<void> | undefined;
 	private readonly reportedRuns = new WeakSet<Promise<void>>();
+	private readonly reportedStyriaRuns = new WeakSet<Promise<void>>();
 
 	constructor(private readonly options: OutboxSchedulerOptions) {
 		this.clock = options.clock ?? (() => new Date());
@@ -70,6 +82,14 @@ export class OutboxScheduler implements Scheduler {
 		this.timer = this.schedule(() => this.launchScheduledRun(), OUTBOX_INTERVAL_MS);
 		this.timer.unref?.();
 		this.launchScheduledRun();
+		if (this.options.styriaSync) {
+			this.styriaTimer = this.schedule(
+				() => this.launchScheduledStyriaRun(),
+				STYRIA_SYNC_INTERVAL_MS
+			);
+			this.styriaTimer.unref?.();
+			this.launchScheduledStyriaRun();
+		}
 	}
 
 	async stop(): Promise<void> {
@@ -78,15 +98,34 @@ export class OutboxScheduler implements Scheduler {
 			this.cancel(this.timer);
 			this.timer = undefined;
 		}
+		if (this.styriaTimer) {
+			this.cancel(this.styriaTimer);
+			this.styriaTimer = undefined;
+		}
 
 		const activeRun = this.activeRun;
-		if (activeRun) {
-			try {
-				await activeRun;
-			} catch {
-				// Scheduled failures are already recorded and reported; shutdown still waits for cleanup.
-			}
-		}
+		const activeStyriaRun = this.activeStyriaRun;
+		await Promise.all(
+			[activeRun, activeStyriaRun].filter(Boolean).map(async (run) => {
+				try {
+					await run;
+				} catch {
+					// Scheduled failures are already recorded and reported; shutdown still waits for cleanup.
+				}
+			})
+		);
+	}
+
+	runStyriaSyncOnce(now = this.clock()): Promise<void> {
+		if (!this.options.styriaSync) return Promise.resolve();
+		if (this.activeStyriaRun) return this.activeStyriaRun;
+
+		const execution = Promise.resolve().then(() => this.executeStyriaRun(now));
+		const trackedRun = execution.finally(() => {
+			if (this.activeStyriaRun === trackedRun) this.activeStyriaRun = undefined;
+		});
+		this.activeStyriaRun = trackedRun;
+		return trackedRun;
 	}
 
 	runOutboxOnce(now = this.clock()): Promise<void> {
@@ -106,6 +145,14 @@ export class OutboxScheduler implements Scheduler {
 		if (this.reportedRuns.has(run)) return;
 		this.reportedRuns.add(run);
 		void run.catch(() => this.reportError(OUTBOX_DRAIN_ERROR_CODE));
+	}
+
+	private launchScheduledStyriaRun(): void {
+		if (!this.acceptingScheduledRuns || !this.options.styriaSync) return;
+		const run = this.runStyriaSyncOnce();
+		if (this.reportedStyriaRuns.has(run)) return;
+		this.reportedStyriaRuns.add(run);
+		void run.catch(() => this.reportError(STYRIA_SYNC_ERROR_CODE));
 	}
 
 	private async executeRun(now: Date): Promise<void> {
@@ -151,6 +198,39 @@ export class OutboxScheduler implements Scheduler {
 		} finally {
 			if (heartbeat) this.cancel(heartbeat);
 			this.options.leases.release(OUTBOX_JOB_NAME, this.options.ownerId);
+		}
+	}
+
+	private async executeStyriaRun(now: Date): Promise<void> {
+		if (
+			!this.options.leases.acquire(
+				STYRIA_SYNC_JOB_NAME,
+				this.options.ownerId,
+				now,
+				STYRIA_SYNC_LEASE_TTL_MS
+			)
+		) {
+			return;
+		}
+
+		let runId: number | undefined;
+		try {
+			const insert = this.options.database
+				.prepare(
+					`INSERT INTO job_runs (name, owner_id, started_at)
+					VALUES (?, ?, ?)`
+				)
+				.run(STYRIA_SYNC_JOB_NAME, this.options.ownerId, now.toISOString());
+			runId = Number(insert.lastInsertRowid);
+			await this.options.styriaSync?.run(now);
+			this.finishRun(runId, this.clock(), 'completed', null);
+		} catch (error) {
+			if (runId !== undefined) {
+				this.finishRun(runId, this.clock(), 'failed', STYRIA_SYNC_ERROR_CODE);
+			}
+			throw error;
+		} finally {
+			this.options.leases.release(STYRIA_SYNC_JOB_NAME, this.options.ownerId);
 		}
 	}
 

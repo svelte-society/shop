@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import type { PlunkGateway } from '$lib/server/plunk/gateway';
 import type { FulfillmentDetails, StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import type { StyriaOrder } from '$lib/server/styria/types';
@@ -18,7 +19,11 @@ const environment = {
 	STYRIA_SECRET_KEY: 'runtime-secret',
 	STYRIA_BASE_URL: 'https://styria.runtime.test',
 	STYRIA_TIMEOUT_MS: '4321',
-	STYRIA_BRAND_NAME: 'Svelte Society'
+	STYRIA_BRAND_NAME: 'Svelte Society',
+	PLUNK_SECRET_KEY: 'plunk-runtime-secret',
+	PLUNK_FROM_NAME: 'Svelte Society Shop',
+	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
 };
 
 type JsonRpcResponse = {
@@ -49,7 +54,7 @@ function seedPendingOrder(database: ShopDatabase): void {
 			) VALUES ('order_runtime', 'cs_runtime', 'pi_runtime', 'cus_runtime', 'draft_runtime',
 				'eur', 2799, 0, 1000, 950, 4749, 'SE', 'paid', 'pending_review',
 				'styria-secret-runtime', 'provider-secret-runtime', 'tracking-secret-runtime',
-				NULL, NULL, '2026-07-17T08:30:00.000Z', NULL)`
+				NULL, NULL, '2026-07-16T08:30:00.000Z', NULL)`
 		)
 		.run();
 	database
@@ -90,6 +95,10 @@ function styriaGateway(): StyriaGateway {
 		create: vi.fn(unavailable),
 		get: vi.fn(unavailable)
 	};
+}
+
+function plunkGateway(): PlunkGateway {
+	return { send: vi.fn(async () => ({ deliveryId: 'plunk-runtime-delivery' })) };
 }
 
 function rpcRequest(
@@ -143,13 +152,18 @@ describe('runtime MCP composition', () => {
 		databases.push(database);
 		migrate(database, migrationsDirectory);
 		seedPendingOrder(database);
-		const createStripeGateway = vi.fn(() => stripeGateway());
-		const createStyriaGateway = vi.fn(() => styriaGateway());
+		const stripe = stripeGateway();
+		const styria = styriaGateway();
+		const plunk = plunkGateway();
+		const createStripeGateway = vi.fn(() => stripe);
+		const createStyriaGateway = vi.fn(() => styria);
+		const createPlunkGateway = vi.fn(() => plunk);
 		let composed: ReturnType<typeof createRuntimeMcpServices> | undefined;
 		const compose = vi.fn(() => {
 			composed = createRuntimeMcpServices(database, environment, {
 				createStripeGateway,
-				createStyriaGateway
+				createStyriaGateway,
+				createPlunkGateway
 			});
 			return composed;
 		});
@@ -176,8 +190,8 @@ describe('runtime MCP composition', () => {
 		expect(composed?.preparation).toBeDefined();
 		expect(composed?.submission).toBeDefined();
 		expect(composed?.reconciliation).toBeDefined();
-		expect(composed?.status).toBeUndefined();
-		expect(composed?.shipping).toBeUndefined();
+		expect(composed?.status).toBeDefined();
+		expect(composed?.shipping).toBeDefined();
 		expect(createStripeGateway).toHaveBeenCalledWith('sk_test_runtime');
 		expect(createStyriaGateway).toHaveBeenCalledWith({
 			appId: 'runtime-app',
@@ -185,6 +199,7 @@ describe('runtime MCP composition', () => {
 			baseUrl: 'https://styria.runtime.test',
 			timeoutMs: 4321
 		});
+		expect(createPlunkGateway).toHaveBeenCalledWith('plunk-runtime-secret');
 
 		const called = await handler({
 			request: rpcRequest(
@@ -215,5 +230,103 @@ describe('runtime MCP composition', () => {
 		expect(serialized).not.toContain('styria-secret-runtime');
 		expect(serialized).not.toContain('provider-secret-runtime');
 		expect(serialized).not.toContain('tracking-secret-runtime');
+
+		vi.mocked(styria.get).mockResolvedValueOnce({
+			id: 'styria-secret-runtime',
+			external_id: 'cs_runtime',
+			created_at: '2026-07-17T08:30:00.000Z',
+			status: 'unexpected provider status',
+			deleted: false,
+			shipping_address: { country: 'Sweden' },
+			shipping: { shippingMethod: 'courier', trackingNumber: null, shiped_at: null },
+			items: []
+		});
+		const statusCalled = await handler({
+			request: rpcRequest(
+				{
+					jsonrpc: '2.0',
+					id: 3,
+					method: 'tools/call',
+					params: { name: 'check_fulfillment_status', arguments: { order_id: 'order_runtime' } }
+				},
+				{ sessionId }
+			)
+		} as Parameters<typeof handler>[0]);
+		const statusMessage = await eventData(statusCalled);
+		expect(statusMessage.result).toMatchObject({
+			structuredContent: {
+				orderId: 'order_runtime',
+				fulfillmentStatus: 'review_required',
+				styriaStatus: 'unexpected provider status',
+				trackingNumber: 'tracking-secret-runtime'
+			}
+		});
+
+		const previewed = await handler({
+			request: rpcRequest(
+				{
+					jsonrpc: '2.0',
+					id: 4,
+					method: 'tools/call',
+					params: { name: 'resend_shipping_email', arguments: { order_id: 'order_runtime' } }
+				},
+				{ sessionId }
+			)
+		} as Parameters<typeof handler>[0]);
+		const previewMessage = await eventData(previewed);
+		expect(previewMessage.result).toMatchObject({
+			structuredContent: {
+				order_id: 'order_runtime',
+				mode: 'preview',
+				email: 'ada@example.test',
+				tracking_number: 'tracking-secret-runtime',
+				sent: false
+			}
+		});
+
+		const sent = await handler({
+			request: rpcRequest(
+				{
+					jsonrpc: '2.0',
+					id: 5,
+					method: 'tools/call',
+					params: {
+						name: 'resend_shipping_email',
+						arguments: {
+							order_id: 'order_runtime',
+							mode: 'send',
+							expected_email: 'ada@example.test',
+							expected_tracking_number: 'tracking-secret-runtime'
+						}
+					}
+				},
+				{ sessionId }
+			)
+		} as Parameters<typeof handler>[0]);
+		const sentMessage = await eventData(sent);
+		expect(sentMessage.result).toMatchObject({
+			structuredContent: { order_id: 'order_runtime', mode: 'send', sent: true }
+		});
+		expect(plunk.send).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: 'ada@example.test',
+				replyTo: 'merch@sveltesociety.dev',
+				subject: 'Your Svelte Society order is on the way'
+			})
+		);
+		expect(
+			database
+				.prepare('SELECT kind, tracking_reference, provider_delivery_id FROM email_deliveries')
+				.all()
+		).toEqual([
+			{
+				kind: 'shipping-support',
+				tracking_reference: 'tracking-secret-runtime',
+				provider_delivery_id: 'plunk-runtime-delivery'
+			}
+		]);
+		const persisted = JSON.stringify(database.prepare('SELECT * FROM email_deliveries').all());
+		expect(persisted).not.toContain('ada@example.test');
+		expect(persisted).not.toContain('Currentgatan');
 	});
 });

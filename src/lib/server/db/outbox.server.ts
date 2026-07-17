@@ -4,10 +4,25 @@ import type { ShopDatabase } from './types';
 
 export interface OutboxRepository {
 	enqueue(input: NewOutboxJob): void;
+	ensureShipping(orderId: string, trackingNumber: string, now: Date): boolean;
 	claimDue(now: Date, limit: number): OutboxJob[];
 	complete(id: number, now: Date): void;
 	reschedule(id: number, attemptCount: number, nextAttemptAt: Date, errorCode: string): void;
+	beginEmailDelivery(input: EmailDeliveryReference): boolean;
+	completeEmailDelivery(
+		input: EmailDeliveryReference,
+		providerDeliveryId: string,
+		now: Date,
+		outboxJobId?: number
+	): void;
 }
+
+export type EmailDeliveryReference = {
+	orderId: string;
+	kind: 'shipping' | 'shipping-support';
+	trackingNumber: string;
+	idempotencyKey: string;
+};
 
 type OutboxRow = {
 	id: unknown;
@@ -18,6 +33,17 @@ type OutboxRow = {
 	next_attempt_at: unknown;
 	completed_at: unknown;
 	last_error_code: unknown;
+};
+
+type EmailDeliveryRow = {
+	id: unknown;
+	order_id: unknown;
+	kind: unknown;
+	tracking_reference: unknown;
+	idempotency_key: unknown;
+	provider_delivery_id: unknown;
+	attempt_count: unknown;
+	completed_at: unknown;
 };
 
 const CLAIM_LEASE_MILLISECONDS = 5 * 60_000;
@@ -81,6 +107,53 @@ function validateNewJob(input: NewOutboxJob): string {
 	return isoTimestamp(input.nextAttemptAt, 'OUTBOX_JOB_INVALID');
 }
 
+function shippingReference(orderId: string, trackingNumber: string): EmailDeliveryReference {
+	if (!isNonEmptyString(orderId) || !isNonEmptyString(trackingNumber)) {
+		fail('SHIPPING_EMAIL_REFERENCE_INVALID');
+	}
+	return {
+		orderId,
+		kind: 'shipping',
+		trackingNumber,
+		idempotencyKey: `shipping:${orderId}:${trackingNumber}`
+	};
+}
+
+function validateEmailReference(input: EmailDeliveryReference): void {
+	if (
+		!input ||
+		!isNonEmptyString(input.orderId) ||
+		(input.kind !== 'shipping' && input.kind !== 'shipping-support') ||
+		!isNonEmptyString(input.trackingNumber) ||
+		!isNonEmptyString(input.idempotencyKey)
+	) {
+		fail('SHIPPING_EMAIL_REFERENCE_INVALID');
+	}
+	if (
+		input.kind === 'shipping' &&
+		input.idempotencyKey !== `shipping:${input.orderId}:${input.trackingNumber}`
+	) {
+		fail('SHIPPING_EMAIL_REFERENCE_INVALID');
+	}
+}
+
+function validateEmailRow(row: EmailDeliveryRow, input: EmailDeliveryReference): void {
+	if (
+		!Number.isSafeInteger(row.id) ||
+		(row.id as number) < 1 ||
+		row.order_id !== input.orderId ||
+		row.kind !== input.kind ||
+		row.tracking_reference !== input.trackingNumber ||
+		row.idempotency_key !== input.idempotencyKey ||
+		(row.provider_delivery_id !== null && !isNonEmptyString(row.provider_delivery_id)) ||
+		!Number.isSafeInteger(row.attempt_count) ||
+		(row.attempt_count as number) < 0
+	) {
+		fail('EMAIL_DELIVERY_ROW_INVALID');
+	}
+	if (row.completed_at !== null) dateFromIso(row.completed_at, 'EMAIL_DELIVERY_ROW_INVALID');
+}
+
 export class SqliteOutboxRepository implements OutboxRepository {
 	constructor(private readonly database: ShopDatabase) {}
 
@@ -107,6 +180,51 @@ export class SqliteOutboxRepository implements OutboxRepository {
 
 		try {
 			enqueueJob.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('OUTBOX_ENQUEUE_FAILED');
+		}
+	}
+
+	ensureShipping(orderId: string, trackingNumber: string, now: Date): boolean {
+		const reference = shippingReference(orderId, trackingNumber);
+		const timestamp = isoTimestamp(now, 'SHIPPING_EMAIL_REFERENCE_INVALID');
+		const findDelivery = this.database.prepare(
+			'SELECT * FROM email_deliveries WHERE idempotency_key = ?'
+		);
+		const findJob = this.database.prepare('SELECT * FROM outbox_jobs WHERE idempotency_key = ?');
+		const insert = this.database.prepare(`
+			INSERT INTO outbox_jobs (
+				kind, idempotency_key, order_id, attempt_count,
+				next_attempt_at, completed_at, last_error_code
+			) VALUES ('shipping-email', ?, ?, 0, ?, NULL, NULL)
+		`);
+		const reopen = this.database.prepare(`
+			UPDATE outbox_jobs SET completed_at = NULL, next_attempt_at = ?, last_error_code = NULL
+			WHERE id = ? AND completed_at IS NOT NULL
+		`);
+		const ensure = this.database.transaction(() => {
+			const delivery = findDelivery.get(reference.idempotencyKey) as EmailDeliveryRow | undefined;
+			if (delivery) {
+				validateEmailRow(delivery, reference);
+				if (delivery.completed_at !== null) return false;
+			}
+			const row = findJob.get(reference.idempotencyKey) as OutboxRow | undefined;
+			if (!row) {
+				insert.run(reference.idempotencyKey, reference.orderId, timestamp);
+				return true;
+			}
+			const job = mapJob(row);
+			if (job.kind !== 'shipping-email' || job.orderId !== orderId) {
+				fail('OUTBOX_IDEMPOTENCY_CONFLICT');
+			}
+			if (job.completedAt === null) return false;
+			if (reopen.run(timestamp, job.id).changes !== 1) fail('OUTBOX_ENQUEUE_FAILED');
+			return true;
+		});
+
+		try {
+			return ensure.immediate();
 		} catch (error) {
 			if (error instanceof RepositoryError) throw error;
 			fail('OUTBOX_ENQUEUE_FAILED');
@@ -208,6 +326,87 @@ export class SqliteOutboxRepository implements OutboxRepository {
 		} catch (error) {
 			if (error instanceof RepositoryError) throw error;
 			fail('OUTBOX_RESCHEDULE_FAILED');
+		}
+	}
+
+	beginEmailDelivery(input: EmailDeliveryReference): boolean {
+		validateEmailReference(input);
+		const find = this.database.prepare('SELECT * FROM email_deliveries WHERE idempotency_key = ?');
+		const insert = this.database.prepare(`
+			INSERT INTO email_deliveries (
+				order_id, kind, tracking_reference, idempotency_key,
+				provider_delivery_id, attempt_count, completed_at
+			) VALUES (?, ?, ?, ?, NULL, 1, NULL)
+		`);
+		const increment = this.database.prepare(`
+			UPDATE email_deliveries SET attempt_count = attempt_count + 1
+			WHERE id = ? AND completed_at IS NULL
+		`);
+		const begin = this.database.transaction(() => {
+			const row = find.get(input.idempotencyKey) as EmailDeliveryRow | undefined;
+			if (!row) {
+				insert.run(input.orderId, input.kind, input.trackingNumber, input.idempotencyKey);
+				return true;
+			}
+			validateEmailRow(row, input);
+			if (row.completed_at !== null) return false;
+			if (increment.run(row.id).changes !== 1) fail('EMAIL_DELIVERY_ATTEMPT_FAILED');
+			return true;
+		});
+
+		try {
+			return begin.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('EMAIL_DELIVERY_ATTEMPT_FAILED');
+		}
+	}
+
+	completeEmailDelivery(
+		input: EmailDeliveryReference,
+		providerDeliveryId: string,
+		now: Date,
+		outboxJobId?: number
+	): void {
+		validateEmailReference(input);
+		if (!isNonEmptyString(providerDeliveryId)) fail('EMAIL_DELIVERY_COMPLETION_INVALID');
+		if (outboxJobId !== undefined && (!Number.isSafeInteger(outboxJobId) || outboxJobId < 1)) {
+			fail('EMAIL_DELIVERY_COMPLETION_INVALID');
+		}
+		const timestamp = isoTimestamp(now, 'EMAIL_DELIVERY_COMPLETION_INVALID');
+		const find = this.database.prepare('SELECT * FROM email_deliveries WHERE idempotency_key = ?');
+		const updateDelivery = this.database.prepare(`
+			UPDATE email_deliveries
+			SET provider_delivery_id = ?, completed_at = ?
+			WHERE id = ? AND completed_at IS NULL
+		`);
+		const updateJob = this.database.prepare(`
+			UPDATE outbox_jobs SET completed_at = ?, last_error_code = NULL
+			WHERE id = ? AND completed_at IS NULL
+		`);
+		const complete = this.database.transaction(() => {
+			const row = find.get(input.idempotencyKey) as EmailDeliveryRow | undefined;
+			if (!row) fail('EMAIL_DELIVERY_NOT_FOUND');
+			validateEmailRow(row, input);
+			if (row.completed_at !== null) {
+				if (row.provider_delivery_id !== providerDeliveryId) {
+					fail('EMAIL_DELIVERY_COMPLETION_CONFLICT');
+				}
+				return;
+			}
+			if (updateDelivery.run(providerDeliveryId, timestamp, row.id).changes !== 1) {
+				fail('EMAIL_DELIVERY_COMPLETION_CONFLICT');
+			}
+			if (outboxJobId !== undefined && updateJob.run(timestamp, outboxJobId).changes !== 1) {
+				fail('OUTBOX_COMPLETION_CONFLICT');
+			}
+		});
+
+		try {
+			complete.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('EMAIL_DELIVERY_COMPLETE_FAILED');
 		}
 	}
 }

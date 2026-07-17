@@ -10,10 +10,12 @@ import type { ShopDatabase } from '$lib/server/db/types';
 import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
+import type { StyriaSyncJob } from './styria-sync.server';
 import { SqliteLeaseRepository } from './leases.server';
 import {
 	OUTBOX_JOB_NAME,
 	OutboxScheduler,
+	STYRIA_SYNC_JOB_NAME,
 	type SchedulerTimer,
 	type SchedulerTimerHandle
 } from './scheduler.server';
@@ -27,7 +29,11 @@ const schedulerRuntimeEnvironment = {
 	ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
 	PLUNK_FROM_NAME: 'Svelte Society Shop',
 	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	STRIPE_SECRET_KEY: 'sk_test_scheduler_stripe',
+	STYRIA_APP_ID: 'scheduler-app',
+	STYRIA_SECRET_KEY: 'scheduler-secret',
+	STYRIA_BASE_URL: 'https://styria.scheduler.test'
 };
 
 function deferred<T>() {
@@ -101,7 +107,8 @@ describe('application runtime', () => {
 		const scheduler = {
 			start: vi.fn(() => sequence.push('scheduler-started')),
 			stop: vi.fn(async () => undefined),
-			runOutboxOnce: vi.fn(async () => undefined)
+			runOutboxOnce: vi.fn(async () => undefined),
+			runStyriaSyncOnce: vi.fn(async () => undefined)
 		};
 		const dependencies: ApplicationRuntimeDependencies = {
 			migrationsDirectory,
@@ -215,7 +222,10 @@ describe('application runtime', () => {
 		'ADMIN_EMAIL',
 		'PLUNK_FROM_NAME',
 		'PLUNK_FROM_EMAIL',
-		'SUPPORT_EMAIL'
+		'SUPPORT_EMAIL',
+		'STRIPE_SECRET_KEY',
+		'STYRIA_APP_ID',
+		'STYRIA_SECRET_KEY'
 	])('rejects enabled production scheduler wiring without %s', async (missingName) => {
 		closeDatabase();
 		let openedDatabase: ShopDatabase | undefined;
@@ -237,6 +247,27 @@ describe('application runtime', () => {
 		expect(openedDatabase?.open).toBe(false);
 	});
 
+	it('rejects a Styria timeout that would violate the bounded 55-minute sync lease', async () => {
+		closeDatabase();
+		let openedDatabase: ShopDatabase | undefined;
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			openDatabase(path) {
+				openedDatabase = openDatabase(path);
+				return openedDatabase;
+			}
+		});
+
+		await expect(
+			application.start({
+				environment: { ...schedulerRuntimeEnvironment, STYRIA_TIMEOUT_MS: '10001' },
+				building: false,
+				test: false
+			})
+		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
+		expect(openedDatabase?.open).toBe(false);
+	});
+
 	it('wires the enabled production scheduler to migrated SQLite and records its immediate run', async () => {
 		closeDatabase();
 		const application = createApplicationLifecycle({ migrationsDirectory });
@@ -251,7 +282,10 @@ describe('application runtime', () => {
 		await runtime?.scheduler?.stop();
 		expect(
 			runtime?.database.prepare('SELECT name, result, error_code FROM job_runs ORDER BY id').all()
-		).toEqual([{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null }]);
+		).toEqual([
+			{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null },
+			{ name: STYRIA_SYNC_JOB_NAME, result: 'completed', error_code: null }
+		]);
 		await application.stop();
 		expect(runtime?.database.open).toBe(false);
 	});
@@ -308,7 +342,8 @@ describe('application runtime', () => {
 				throw new Error('SCHEDULER_START_FAILED');
 			}),
 			stop: vi.fn(async () => undefined),
-			runOutboxOnce: vi.fn(async () => undefined)
+			runOutboxOnce: vi.fn(async () => undefined),
+			runStyriaSyncOnce: vi.fn(async () => undefined)
 		};
 		const createScheduler = vi.fn(() => scheduler);
 		const application = createApplicationLifecycle({ migrationsDirectory, createScheduler });
@@ -345,7 +380,8 @@ describe('application runtime', () => {
 				await cleanup.promise;
 				sequence.push('scheduler-stopped');
 			}),
-			runOutboxOnce: vi.fn(async () => undefined)
+			runOutboxOnce: vi.fn(async () => undefined),
+			runStyriaSyncOnce: vi.fn(async () => undefined)
 		};
 		const application = createApplicationLifecycle({
 			migrationsDirectory,
@@ -447,7 +483,7 @@ describe('OutboxScheduler', () => {
 		await scheduler.runOutboxOnce();
 
 		expect(worker.drain).toHaveBeenCalledOnce();
-		expect(worker.drain).toHaveBeenCalledWith(initialNow, 3);
+		expect(worker.drain).toHaveBeenCalledWith(initialNow, 1);
 		expect(timers.handles(60_000)).toHaveLength(1);
 		expect(timers.handles(60_000)[0].unref).toHaveBeenCalledOnce();
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
@@ -583,13 +619,13 @@ describe('OutboxScheduler', () => {
 		await scheduler.stop();
 	});
 
-	it('finishes its three-timeout drain bound before exact-expiry takeover', async () => {
+	it('keeps one shipping job with Stripe retries plus Plunk inside the 55-second lease', async () => {
 		const timers = timerHarness();
 		let current = initialNow;
 		const boundedDrain = deferred<{ completed: number; rescheduled: number }>();
 		const worker: OutboxWorker = {
 			drain: vi.fn((_runAt, limit) => {
-				expect(limit).toBe(3);
+				expect(limit).toBe(1);
 				return boundedDrain.promise;
 			})
 		};
@@ -610,10 +646,10 @@ describe('OutboxScheduler', () => {
 		await Promise.resolve();
 		expect(worker.drain).toHaveBeenCalledOnce();
 
-		current = new Date(initialNow.getTime() + 3 * PLUNK_DEFAULT_TIMEOUT_MS);
+		current = new Date(initialNow.getTime() + 4 * PLUNK_DEFAULT_TIMEOUT_MS);
 		boundedDrain.resolve({ completed: 0, rescheduled: 0 });
 		await expect(activeRun).resolves.toBeUndefined();
-		expect(current.getTime() - initialNow.getTime()).toBe(30_000);
+		expect(current.getTime() - initialNow.getTime()).toBe(40_000);
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 
 		current = new Date(initialNow.getTime() + 55_000);
@@ -743,5 +779,103 @@ describe('OutboxScheduler', () => {
 		timers.fireCaptured();
 		await Promise.resolve();
 		expect(worker.drain).toHaveBeenCalledOnce();
+	});
+
+	it('runs Styria sync immediately and hourly under a separate 55-minute lease', async () => {
+		const timers = timerHarness();
+		let current = initialNow;
+		const sync: StyriaSyncJob = {
+			run: vi.fn(async (runAt) => {
+				expect(runAt).toEqual(current);
+				expect(
+					database
+						.prepare('SELECT owner_id, expires_at FROM job_leases WHERE name = ?')
+						.get(STYRIA_SYNC_JOB_NAME)
+				).toEqual({
+					owner_id: 'scheduler-sync-owner',
+					expires_at: new Date(current.getTime() + 55 * 60_000).toISOString()
+				});
+				return { checked: 1, updated: 1, shippingQueued: 1 };
+			})
+		};
+		const worker: OutboxWorker = {
+			drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 }))
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			styriaSync: sync,
+			enabled: true,
+			ownerId: 'scheduler-sync-owner',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		await scheduler.runStyriaSyncOnce();
+
+		expect(sync.run).toHaveBeenCalledOnce();
+		expect(timers.handles(60 * 60_000)).toHaveLength(1);
+		expect(timers.handles(60 * 60_000)[0].unref).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(
+			database.prepare('SELECT name, result, error_code FROM job_runs ORDER BY id').all()
+		).toEqual([
+			{ name: OUTBOX_JOB_NAME, result: 'completed', error_code: null },
+			{ name: STYRIA_SYNC_JOB_NAME, result: 'completed', error_code: null }
+		]);
+
+		current = new Date(initialNow.getTime() + 60 * 60_000);
+		timers.fire(60 * 60_000);
+		await scheduler.runStyriaSyncOnce();
+		expect(sync.run).toHaveBeenCalledTimes(2);
+		await scheduler.stop();
+		expect(timers.cancel).toHaveBeenCalledWith(timers.handles(60 * 60_000)[0]);
+	});
+
+	it('does not overlap hourly Styria runs and recovers after a failed run', async () => {
+		const timers = timerHarness();
+		const first = deferred<{ checked: number; updated: number; shippingQueued: number }>();
+		const reportError = vi.fn();
+		const sync: StyriaSyncJob = {
+			run: vi
+				.fn<StyriaSyncJob['run']>()
+				.mockImplementationOnce(() => first.promise)
+				.mockRejectedValueOnce(new Error('private provider failure'))
+				.mockResolvedValue({ checked: 0, updated: 0, shippingQueued: 0 })
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			styriaSync: sync,
+			enabled: true,
+			ownerId: 'scheduler-sync-recovery',
+			clock: () => initialNow,
+			schedule: timers.schedule,
+			cancel: timers.cancel,
+			reportError
+		});
+
+		scheduler.start();
+		const active = scheduler.runStyriaSyncOnce();
+		await Promise.resolve();
+		timers.fire(60 * 60_000);
+		const overlapping = scheduler.runStyriaSyncOnce();
+		expect(sync.run).toHaveBeenCalledOnce();
+		first.resolve({ checked: 0, updated: 0, shippingQueued: 0 });
+		await Promise.all([active, overlapping]);
+
+		timers.fire(60 * 60_000);
+		await expect(scheduler.runStyriaSyncOnce()).rejects.toThrow('private provider failure');
+		expect(reportError).toHaveBeenCalledWith('STYRIA_SYNC_FAILED');
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+
+		timers.fire(60 * 60_000);
+		await expect(scheduler.runStyriaSyncOnce()).resolves.toBeUndefined();
+		expect(sync.run).toHaveBeenCalledTimes(3);
+		await scheduler.stop();
 	});
 });

@@ -1,10 +1,13 @@
 import { resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import { createPlunkClient } from '$lib/server/plunk/client.server';
+import { PlunkError } from '$lib/server/plunk/gateway';
+import type { ShippingEmailSender } from '$lib/server/plunk/shipping-email';
+import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { PaidOrderAlertOutboxWorker } from './outbox-worker.server';
 
 const migrationsDirectory = resolve('migrations');
@@ -39,11 +42,15 @@ function insertOrder(
 		totalAmount?: number;
 		destinationCountry?: string;
 		quantities?: number[];
+		fulfillmentStatus?: 'pending_review' | 'shipped';
+		trackingNumber?: string | null;
 	}
 ): void {
 	const totalAmount = input.totalAmount ?? 4567;
 	const destinationCountry = input.destinationCountry ?? 'SE';
 	const quantities = input.quantities ?? [2, 1];
+	const fulfillmentStatus = input.fulfillmentStatus ?? 'pending_review';
+	const trackingNumber = input.trackingNumber ?? null;
 	const draftId = `draft_${input.id}`;
 	database
 		.prepare(
@@ -66,8 +73,8 @@ function insertOrder(
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
 				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
-				updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, ?, ?, 'paid', 'pending_review', ?)`
+				tracking_number, shipped_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, ?, ?, 'paid', ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
@@ -78,6 +85,9 @@ function insertOrder(
 			totalAmount,
 			totalAmount,
 			destinationCountry,
+			fulfillmentStatus,
+			trackingNumber,
+			fulfillmentStatus === 'shipped' ? now.toISOString() : null,
 			now.toISOString()
 		);
 	const insertLine = database.prepare(
@@ -322,5 +332,215 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			completed_at: null,
 			last_error_code: 'OUTBOX_JOB_KIND_UNSUPPORTED'
 		});
+	});
+});
+
+describe('shipping email outbox', () => {
+	function shippingDependencies(input: {
+		stripe?: StripeFulfillmentGateway;
+		sender?: ShippingEmailSender;
+	}) {
+		const stripe =
+			input.stripe ??
+			({
+				retrieveFulfillmentDetails: vi.fn(async () => ({
+					recipient: {
+						firstName: 'Ada',
+						lastName: 'Lovelace',
+						company: 'Analytical Engines AB',
+						phone: '+46 70 123 45 67'
+					},
+					address: {
+						line1: 'Currentgatan 9',
+						line2: '',
+						city: 'Stockholm',
+						state: '',
+						postalCode: '111 22',
+						countryCode: 'SE'
+					},
+					email: 'ada@example.test'
+				}))
+			} satisfies StripeFulfillmentGateway);
+		const sender =
+			input.sender ??
+			({
+				send: vi.fn(async () => ({ deliveryId: 'plunk_shipping_2042' }))
+			} satisfies ShippingEmailSender);
+		return { stripe, sender, supportEmail: 'merch@sveltesociety.dev' };
+	}
+
+	it('fetches the current Stripe email immediately before send and atomically records the delivery ID', async () => {
+		insertOrder(database, {
+			id: 'order_shipping',
+			quantities: [2],
+			fulfillmentStatus: 'shipped',
+			trackingNumber: 'TRACK-2042'
+		});
+		outbox.enqueue({
+			kind: 'shipping-email',
+			idempotencyKey: 'shipping:order_shipping:TRACK-2042',
+			orderId: 'order_shipping',
+			nextAttemptAt: now
+		});
+		const sequence: string[] = [];
+		const stripe = shippingDependencies({}).stripe;
+		vi.mocked(stripe.retrieveFulfillmentDetails).mockImplementation(async () => {
+			sequence.push('stripe-current-email');
+			return {
+				recipient: {
+					firstName: 'Ada',
+					lastName: 'Lovelace',
+					company: 'Analytical Engines AB',
+					phone: '+46 70 123 45 67'
+				},
+				address: {
+					line1: 'Currentgatan 9',
+					line2: '',
+					city: 'Stockholm',
+					state: '',
+					postalCode: '111 22',
+					countryCode: 'SE'
+				},
+				email: 'current@example.test'
+			};
+		});
+		const sender: ShippingEmailSender = {
+			send: vi.fn(async (input) => {
+				sequence.push('plunk-send');
+				expect(input).toEqual({
+					recipientEmail: 'current@example.test',
+					productSummary: '2 × Private product fixture 0 (Private variant fixture 0)',
+					trackingNumber: 'TRACK-2042',
+					supportEmail: 'merch@sveltesociety.dev'
+				});
+				return { deliveryId: 'plunk_shipping_2042' };
+			})
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ stripe, sender })
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 1, rescheduled: 0 });
+		expect(sequence).toEqual(['stripe-current-email', 'plunk-send']);
+		expect(stripe.retrieveFulfillmentDetails).toHaveBeenCalledWith('cs_order_shipping');
+		expect(database.prepare('SELECT * FROM email_deliveries').all()).toEqual([
+			expect.objectContaining({
+				order_id: 'order_shipping',
+				kind: 'shipping',
+				tracking_reference: 'TRACK-2042',
+				idempotency_key: 'shipping:order_shipping:TRACK-2042',
+				provider_delivery_id: 'plunk_shipping_2042',
+				attempt_count: 1,
+				completed_at: now.toISOString()
+			})
+		]);
+		const persisted = JSON.stringify({
+			outbox: database.prepare('SELECT * FROM outbox_jobs').all(),
+			deliveries: database.prepare('SELECT * FROM email_deliveries').all()
+		});
+		expect(persisted).not.toContain('current@example.test');
+		expect(persisted).not.toContain('Currentgatan');
+		expect(persisted).not.toContain('+46 70');
+		expect(persisted).not.toContain('Analytical Engines');
+	});
+
+	it('does not mark success before Plunk accepts and retries an interrupted local completion', async () => {
+		insertOrder(database, {
+			id: 'order_at_least_once',
+			quantities: [1],
+			fulfillmentStatus: 'shipped',
+			trackingNumber: 'TRACK-RETRY'
+		});
+		outbox.enqueue({
+			kind: 'shipping-email',
+			idempotencyKey: 'shipping:order_at_least_once:TRACK-RETRY',
+			orderId: 'order_at_least_once',
+			nextAttemptAt: now
+		});
+		database
+			.prepare(
+				`CREATE TRIGGER reject_delivery_completion BEFORE UPDATE OF completed_at ON email_deliveries
+				WHEN NEW.completed_at IS NOT NULL
+				BEGIN SELECT RAISE(ABORT, 'completion interrupted'); END`
+			)
+			.run();
+		const sender: ShippingEmailSender = {
+			send: vi
+				.fn<ShippingEmailSender['send']>()
+				.mockResolvedValueOnce({ deliveryId: 'plunk_first_accept' })
+				.mockResolvedValueOnce({ deliveryId: 'plunk_retry_accept' })
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender })
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 0, rescheduled: 1 });
+		expect(sender.send).toHaveBeenCalledOnce();
+		expect(
+			database
+				.prepare('SELECT provider_delivery_id, attempt_count, completed_at FROM email_deliveries')
+				.get()
+		).toEqual({ provider_delivery_id: null, attempt_count: 1, completed_at: null });
+		database.prepare('DROP TRIGGER reject_delivery_completion').run();
+		const retryAt = new Date(now.getTime() + 2 * 60_000);
+
+		await expect(worker.drain(retryAt)).resolves.toEqual({ completed: 1, rescheduled: 0 });
+		expect(sender.send).toHaveBeenCalledTimes(2);
+		expect(
+			database
+				.prepare('SELECT provider_delivery_id, attempt_count, completed_at FROM email_deliveries')
+				.get()
+		).toEqual({
+			provider_delivery_id: 'plunk_retry_accept',
+			attempt_count: 2,
+			completed_at: retryAt.toISOString()
+		});
+	});
+
+	it('keeps both delivery and outbox incomplete when Plunk rejects the message', async () => {
+		insertOrder(database, {
+			id: 'order_plunk_rejects',
+			quantities: [1],
+			fulfillmentStatus: 'shipped',
+			trackingNumber: 'TRACK-PLUNK-REJECTS'
+		});
+		outbox.enqueue({
+			kind: 'shipping-email',
+			idempotencyKey: 'shipping:order_plunk_rejects:TRACK-PLUNK-REJECTS',
+			orderId: 'order_plunk_rejects',
+			nextAttemptAt: now
+		});
+		const sender: ShippingEmailSender = {
+			send: vi.fn(async () => {
+				throw new PlunkError('PLUNK_UNAVAILABLE');
+			})
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender })
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 0, rescheduled: 1 });
+		expect(database.prepare('SELECT * FROM email_deliveries').all()).toEqual([
+			expect.objectContaining({
+				provider_delivery_id: null,
+				attempt_count: 1,
+				completed_at: null
+			})
+		]);
+		expect(
+			database.prepare('SELECT attempt_count, completed_at, last_error_code FROM outbox_jobs').get()
+		).toEqual({ attempt_count: 1, completed_at: null, last_error_code: 'PLUNK_UNAVAILABLE' });
 	});
 });

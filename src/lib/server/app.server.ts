@@ -4,10 +4,18 @@ import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import { SqliteFulfillmentRepository } from '$lib/server/fulfillment/repository.server';
 import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
+import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
 import { createPlunkClient, PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
+import { createShippingEmailSender } from '$lib/server/plunk/shipping-email';
+import {
+	createStripeClient,
+	createStripeFulfillmentGateway
+} from '$lib/server/stripe/client.server';
+import { createStyriaClient } from '$lib/server/styria/client.server';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
@@ -51,6 +59,21 @@ function schedulerEnabled(environment: RuntimeEnvironment): boolean {
 	throw new Error('APPLICATION_CONFIG_INVALID');
 }
 
+function optionalPositiveInteger(
+	environment: RuntimeEnvironment,
+	name: string,
+	maximum: number
+): number | undefined {
+	const value = environment[name];
+	if (value === undefined) return undefined;
+	if (!/^[1-9]\d*$/.test(value)) throw new Error('APPLICATION_CONFIG_INVALID');
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed > maximum) {
+		throw new Error('APPLICATION_CONFIG_INVALID');
+	}
+	return parsed;
+}
+
 function createRuntimeScheduler(
 	database: ShopDatabase,
 	environment: RuntimeEnvironment
@@ -60,6 +83,20 @@ function createRuntimeScheduler(
 		secretKey: requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY'),
 		baseUrl: environment.PLUNK_BASE_URL,
 		timeoutMs: PLUNK_DEFAULT_TIMEOUT_MS
+	});
+	const stripe = createStripeFulfillmentGateway(
+		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'))
+	);
+	const styria = createStyriaClient({
+		appId: requiredEnvironmentValue(environment, 'STYRIA_APP_ID'),
+		secretKey: requiredEnvironmentValue(environment, 'STYRIA_SECRET_KEY'),
+		baseUrl: environment.STYRIA_BASE_URL,
+		timeoutMs: optionalPositiveInteger(environment, 'STYRIA_TIMEOUT_MS', 10_000)
+	});
+	const supportEmail = requiredEnvironmentValue(environment, 'SUPPORT_EMAIL');
+	const sender = createShippingEmailSender(plunk, {
+		name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
+		email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
 	});
 	const worker = new PaidOrderAlertOutboxWorker({
 		database,
@@ -71,14 +108,18 @@ function createRuntimeScheduler(
 				name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
 				email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
 			},
-			replyTo: requiredEnvironmentValue(environment, 'SUPPORT_EMAIL')
-		}
+			replyTo: supportEmail
+		},
+		shipping: { stripe, sender, supportEmail }
 	});
+	const fulfillment = new SqliteFulfillmentRepository(database);
+	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox });
 
 	return new OutboxScheduler({
 		database,
 		leases: new SqliteLeaseRepository(database),
 		worker,
+		styriaSync,
 		enabled: true,
 		ownerId: randomUUID()
 	});
