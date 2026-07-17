@@ -75,10 +75,24 @@ function validateMessageInput(input: ShippingEmailInput): void {
 
 export function shippingEmailMessage(
 	input: ShippingEmailInput,
-	from: { name: string; email: string }
+	from: { name: string; email: string },
+	productionOrigin: string
 ): PlunkSendInput {
 	validateMessageInput(input);
 	if (!from || !exactString(from.name, 200) || !exactString(from.email)) {
+		fail('SHIPPING_EMAIL_CONFIG_INVALID');
+	}
+	let withdrawalUrl: string;
+	try {
+		const origin = new URL(productionOrigin);
+		if (
+			origin.protocol !== 'https:' ||
+			origin.origin !== productionOrigin ||
+			origin.pathname !== '/'
+		)
+			fail('SHIPPING_EMAIL_CONFIG_INVALID');
+		withdrawalUrl = new URL('/withdraw', origin).href;
+	} catch {
 		fail('SHIPPING_EMAIL_CONFIG_INVALID');
 	}
 	const productSummary = escapeHtml(input.productSummary);
@@ -94,17 +108,19 @@ export function shippingEmailMessage(
 			`<p>${productSummary}</p>` +
 			`<p>Tracking: ${trackingNumber}</p>` +
 			'<p>Thanks for being part of the Svelte community.</p>' +
+			`<p><a href="${withdrawalUrl}">Withdraw from this purchase</a>.</p>` +
 			`<p>Questions? Email ${supportEmail}.</p>`
 	};
 }
 
 export function createShippingEmailSender(
 	plunk: PlunkGateway,
-	from: { name: string; email: string }
+	from: { name: string; email: string },
+	productionOrigin = process.env.PRODUCTION_ORIGIN ?? ''
 ): ShippingEmailSender {
 	return {
 		send(input, signal) {
-			const message = shippingEmailMessage(input, from);
+			const message = shippingEmailMessage(input, from, productionOrigin);
 			return signal ? plunk.send(message, signal) : plunk.send(message);
 		}
 	};

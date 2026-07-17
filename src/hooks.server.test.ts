@@ -200,6 +200,23 @@ function securityEvent(
 }
 
 describe('HTTP security hook', () => {
+	it.each([
+		['GET', '/withdraw'],
+		['POST', '/withdraw?/review'],
+		['GET', '/withdraw/receipt/WDR-AAAAAAAAAAAAAAAAAAAAAA']
+	])(
+		'adds private no-store and no-referrer to withdrawal %s responses',
+		async (method, pathname) => {
+			const handle = createSecurityHandle(SECURITY_ENV, { production: true, emit: vi.fn() });
+			const event = securityEvent(pathname, { method, routeId: '/withdraw' });
+			const response = await handle({
+				event,
+				resolve: async () => new Response('withdrawal')
+			} as never);
+			expect(response.headers.get('cache-control')).toBe('private, no-store');
+			expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+		}
+	);
 	it('uses only SvelteKit getClientAddress for direct and adapter-provided proxy addresses', async () => {
 		const emitted: unknown[] = [];
 		const handle = createSecurityHandle(SECURITY_ENV, {

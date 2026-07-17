@@ -69,6 +69,9 @@ describe('configured policy documents', () => {
 		expect(returns).toContain('does not limit your statutory right');
 		expect(returns).toContain('14 days');
 		expect(returns).toContain('Model withdrawal notice');
+		expect(
+			createPolicyDocuments(config).returns.sections.flatMap((section) => section.links ?? [])
+		).toContainEqual({ label: 'Submit a withdrawal notice', href: '/withdraw' });
 		expect(returns).toContain('Ordered on');
 		expect(returns).toContain('Received on');
 		expect(returns).toContain('Name of consumer');
@@ -110,8 +113,9 @@ describe('configured policy documents', () => {
 			'SQLite does not store customer names, postal addresses, phone numbers, VAT numbers, or payment-method data'
 		);
 		expect(privacy).toContain('Encrypted backups roll off after 30 days');
-		expect(privacy).toContain('no automatic deletion schedule in this MVP');
-		expect(privacy).toContain('reviewed deletion when required');
+		expect(privacy).toContain('withdrawal case fields are encrypted while the case is active');
+		expect(privacy).toContain('90 days after closure');
+		expect(privacy).not.toContain('no automatic deletion schedule in this MVP');
 	});
 
 	it('identifies the configured seller and states the scoped commercial terms', () => {

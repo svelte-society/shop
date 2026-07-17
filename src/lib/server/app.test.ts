@@ -50,12 +50,23 @@ describe('application withdrawal runtime', () => {
 		expect(runtime?.withdrawal.repository).toBeDefined();
 		expect(runtime?.withdrawal.worker).toBeDefined();
 		expect(runtime?.withdrawal.submission).toBeDefined();
+		expect(runtime?.withdrawal.reader).toBeDefined();
+		expect(runtime?.withdrawal.seller).toEqual({
+			legalName: 'Svelte Society Merch AB',
+			registrationNumber: '559999-0000',
+			addressLine1: 'Registered Street 1',
+			postalCode: '111 11',
+			city: 'Stockholm',
+			country: 'Sweden',
+			email: 'merch@sveltesociety.dev'
+		});
 		expect(runtime?.withdrawal.dataKey.equals(Buffer.from(dataKey, 'base64'))).toBe(true);
 		expect(runtime?.environment.STRIPE_SECRET_KEY).toBeUndefined();
 		expect(runtime?.environment.STYRIA_SECRET_KEY).toBeUndefined();
 
 		const readiness = await checkRuntimeReadiness(runtime!, { ignoreSchedulerLatch: true });
 		expect(JSON.stringify(readiness)).not.toContain(dataKey);
+		expect(JSON.stringify(readiness)).not.toContain('Registered Street 1');
 		await application.stop();
 		expect(runtime?.database.open).toBe(false);
 	});

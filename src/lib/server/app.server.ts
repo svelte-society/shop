@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Buffer } from 'node:buffer';
-import { parseWithdrawalConfig } from '$lib/config/private.server';
+import { parseWithdrawalConfig, type WithdrawalSellerIdentity } from '$lib/config/private.server';
 import { SqliteBackupService } from '$lib/server/backups/service.server';
 import {
 	createS3BackupStore,
@@ -54,8 +54,10 @@ export type ApplicationRuntime = {
 export type WithdrawalRuntime = {
 	submission: WithdrawalSubmissionService;
 	repository: SqliteWithdrawalRepository;
+	reader: WithdrawalCaseReader;
 	worker: WithdrawalMessageWorker;
 	dataKey: Buffer;
+	seller: WithdrawalSellerIdentity;
 };
 
 export type ApplicationRuntimeDependencies = {
@@ -202,10 +204,14 @@ function createRuntimeScheduler(
 		timeoutMs: optionalPositiveInteger(environment, 'STYRIA_TIMEOUT_MS', 10_000)
 	});
 	const supportEmail = requiredEnvironmentValue(environment, 'SUPPORT_EMAIL');
-	const sender = createShippingEmailSender(plunk, {
-		name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
-		email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
-	});
+	const sender = createShippingEmailSender(
+		plunk,
+		{
+			name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
+			email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
+		},
+		requiredEnvironmentValue(environment, 'PRODUCTION_ORIGIN')
+	);
 	const worker = new PaidOrderAlertOutboxWorker({
 		database,
 		outbox,
@@ -419,13 +425,15 @@ export function createApplicationLifecycle(
 			});
 			const withdrawal: WithdrawalRuntime = {
 				repository,
+				reader,
 				worker,
 				submission: new WithdrawalSubmissionService({
 					repository,
 					dispatcher: worker,
 					dataKey: withdrawalConfig.dataKey
 				}),
-				dataKey: withdrawalConfig.dataKey
+				dataKey: withdrawalConfig.dataKey,
+				seller: withdrawalConfig.seller
 			};
 			runtimePlunk = plunk;
 			runtimeAlerts = alerts;

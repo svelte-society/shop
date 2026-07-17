@@ -1,4 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const SHARED_FIXTURE_ENV = {
 	NODE_ENV: 'test',
@@ -45,6 +47,41 @@ function fixtureServer(
 	};
 }
 
+function withdrawalServer() {
+	return {
+		command: 'pnpm exec vite dev --host 127.0.0.1 --port 4277 --strictPort',
+		env: {
+			NODE_ENV: 'development',
+			STOREFRONT_ENABLED: 'false',
+			CHECKOUT_ENABLED: 'false',
+			DATABASE_BOOTSTRAP: 'true',
+			SCHEDULER_ENABLED: 'false',
+			DATABASE_PATH: join(tmpdir(), `svelte-society-withdrawal-e2e-${process.pid}.sqlite`),
+			PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+			SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+			PLUNK_SECRET_KEY: 'sk_test_withdrawal_e2e',
+			PLUNK_FROM_NAME: 'Svelte Society Shop',
+			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+			PLUNK_BASE_URL: 'https://127.0.0.1:1',
+			WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 23).toString('base64'),
+			SELLER_LEGAL_NAME: 'Svelte School AB',
+			SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
+			SELLER_VAT_NUMBER: 'reviewed-vat-number',
+			SELLER_ADDRESS_LINE1: 'Reviewed street 1',
+			SELLER_POSTAL_CODE: '123 45',
+			SELLER_CITY: 'Reviewed city',
+			SELLER_COUNTRY: 'Sweden',
+			SELLER_EMAIL: 'merchant@example.com',
+			DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
+			DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+			POLICY_EFFECTIVE_DATE: '2026-07-17'
+		},
+		port: 4277,
+		reuseExistingServer: false,
+		timeout: 120_000
+	};
+}
+
 export default defineConfig({
 	testDir: 'tests/e2e',
 	testMatch: '**/*.spec.ts',
@@ -60,7 +97,8 @@ export default defineConfig({
 		fixtureServer(4273, true, 'available'),
 		fixtureServer(4274, true, 'unavailable'),
 		fixtureServer(4275, false, 'guard-proof'),
-		fixtureServer(4276, true, 'available', true, 'verified')
+		fixtureServer(4276, true, 'available', true, 'verified'),
+		withdrawalServer()
 	],
 	projects: [
 		{

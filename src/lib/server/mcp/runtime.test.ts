@@ -14,6 +14,7 @@ import { createMcpResponder } from './transport.server';
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
 const TOKEN = 'runtime-test-token';
 const environment = {
+	PRODUCTION_ORIGIN: 'https://shop.runtime.test',
 	STRIPE_SECRET_KEY: 'sk_test_runtime',
 	STYRIA_APP_ID: 'runtime-app',
 	STYRIA_SECRET_KEY: 'runtime-secret',
@@ -155,6 +156,7 @@ describe('runtime MCP composition', () => {
 		const stripe = stripeGateway();
 		const styria = styriaGateway();
 		const plunk = plunkGateway();
+		const plunkSend = vi.mocked(plunk.send);
 		const createStripeGateway = vi.fn(() => stripe);
 		const createStyriaGateway = vi.fn(() => styria);
 		const createPlunkGateway = vi.fn(() => plunk);
@@ -311,9 +313,13 @@ describe('runtime MCP composition', () => {
 			expect.objectContaining({
 				to: 'ada@example.test',
 				replyTo: 'merch@sveltesociety.dev',
-				subject: 'Your Svelte Society order is on the way'
+				subject: 'Your Svelte Society order is on the way',
+				html: expect.stringContaining(
+					'<a href="https://shop.runtime.test/withdraw">Withdraw from this purchase</a>'
+				)
 			})
 		);
+		expect(JSON.stringify(plunkSend.mock.calls)).not.toContain('order_runtime?');
 		expect(
 			database
 				.prepare('SELECT kind, tracking_reference, provider_delivery_id FROM email_deliveries')

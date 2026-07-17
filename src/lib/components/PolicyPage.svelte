@@ -7,6 +7,7 @@
 	const informationPages = [
 		{ label: 'Shipping', href: '/shipping' },
 		{ label: 'Returns', href: '/returns' },
+		{ label: 'Submit a withdrawal notice', href: '/withdraw' },
 		{ label: 'Privacy', href: '/privacy' },
 		{ label: 'Terms', href: '/terms' },
 		{ label: 'About', href: '/about' }

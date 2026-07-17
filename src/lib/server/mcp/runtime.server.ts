@@ -82,10 +82,14 @@ export function createRuntimeMcpServices(
 		? dependencies.createPlunkGateway(plunkSecretKey)
 		: createPlunkClient({ secretKey: plunkSecretKey, baseUrl: environment.PLUNK_BASE_URL });
 	const supportEmail = requiredEnvironmentValue(environment, 'SUPPORT_EMAIL');
-	const sender = createShippingEmailSender(plunk, {
-		name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
-		email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
-	});
+	const sender = createShippingEmailSender(
+		plunk,
+		{
+			name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
+			email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
+		},
+		requiredEnvironmentValue(environment, 'PRODUCTION_ORIGIN')
+	);
 	const status = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
 	const shipping = new SqliteShippingEmailService({
 		database,

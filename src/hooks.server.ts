@@ -300,6 +300,10 @@ export function createSecurityHandle(
 		}
 
 		response = applySecurityHeaders(response, environment, production);
+		if (event.url.pathname === '/withdraw' || event.url.pathname.startsWith('/withdraw/')) {
+			response.headers.set('cache-control', 'private, no-store');
+			response.headers.set('referrer-policy', 'no-referrer');
+		}
 		response.headers.set('x-request-id', id);
 		const duration = Math.max(0, Math.round(now() - startedAt));
 		const code =

@@ -103,6 +103,7 @@ function returnsDocument(config: PolicyContentConfig): PolicyDocument {
 					'We currently claim no merchandise-specific exclusion from the statutory right of withdrawal. Any future exclusion requires qualified legal review before it is published.'
 				],
 				links: [
+					{ label: 'Submit a withdrawal notice', href: '/withdraw' },
 					{ label: 'Swedish Distance Contracts Act', href: distanceContractsAct },
 					{ label: 'EU Consumer Rights Directive', href: consumerRightsDirective }
 				]
@@ -182,7 +183,7 @@ function privacyDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Retention',
 				paragraphs: [
-					'Encrypted backups roll off after 30 days. Local operational records have no automatic deletion schedule in this MVP, but the documented maintenance process supports reviewed deletion when required.',
+					'Encrypted backups roll off after 30 days. Personal withdrawal case fields are encrypted while the case is active and are scheduled for purge 90 days after closure.',
 					'Provider records and structured logs are retained according to the applicable provider settings, operating schedule, contracts, and legal duties. Contact us for current details about a particular order.'
 				]
 			},

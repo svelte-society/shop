@@ -10,6 +10,7 @@
 		</div>
 
 		<nav aria-label="Shop information">
+			<a href={resolve('/withdraw' as '/')}>Withdraw from purchase</a>
 			<a href={resolve('/shipping' as '/')}>Shipping</a>
 			<a href={resolve('/returns' as '/')}>Returns</a>
 			<a href={resolve('/privacy' as '/')}>Privacy</a>
