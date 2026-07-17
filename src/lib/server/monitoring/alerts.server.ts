@@ -13,7 +13,8 @@ export type AlertCode =
 	| 'CHECKOUT_UNAVAILABLE'
 	| 'MCP_AUTH_REPEATED_FAILURE'
 	| 'DISK_LOW'
-	| 'SQLITE_NOT_READY';
+	| 'SQLITE_NOT_READY'
+	| 'WITHDRAWAL_NOTICE_RECEIVED';
 
 export type AlertRecord = {
 	code: AlertCode;
@@ -36,7 +37,8 @@ const alertCodes = new Set<AlertCode>([
 	'CHECKOUT_UNAVAILABLE',
 	'MCP_AUTH_REPEATED_FAILURE',
 	'DISK_LOW',
-	'SQLITE_NOT_READY'
+	'SQLITE_NOT_READY',
+	'WITHDRAWAL_NOTICE_RECEIVED'
 ]);
 const dailyCodes = new Set<AlertCode>(['ORDER_PENDING_REVIEW', 'BACKUP_MISSED']);
 const SAFE_SUBJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
@@ -55,7 +57,8 @@ const nextActions: Record<AlertCode, string> = {
 	MCP_AUTH_REPEATED_FAILURE:
 		'Verify the Codex host configuration and rotate the bearer secret if needed.',
 	DISK_LOW: 'Free space or expand the persistent data volume.',
-	SQLITE_NOT_READY: 'Stop checkout and inspect the SQLite file, volume, and migrations.'
+	SQLITE_NOT_READY: 'Stop checkout and inspect the SQLite file, volume, and migrations.',
+	WITHDRAWAL_NOTICE_RECEIVED: 'Open Codex and inspect the withdrawal notice before reconciliation.'
 };
 
 export class AlertError extends Error {

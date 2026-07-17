@@ -138,4 +138,26 @@ describe('operational alerts', () => {
 			parseAlertIdempotencyKey('alert:DISK_LOW:customer@example.com:2026-07-17T08')
 		).toThrowError('ALERT_JOB_INVALID');
 	});
+
+	it('accepts the PII-free withdrawal notice alert and renders only its public reference', () => {
+		alerts.enqueueAlert(
+			'WITHDRAWAL_NOTICE_RECEIVED',
+			'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+			new Date('2026-07-17T08:12:34.000Z')
+		);
+		const row = database.prepare('SELECT idempotency_key FROM outbox_jobs').get() as {
+			idempotency_key: string;
+		};
+		const message = alertMessage(parseAlertIdempotencyKey(row.idempotency_key));
+
+		expect(row.idempotency_key).toBe(
+			'alert:WITHDRAWAL_NOTICE_RECEIVED:WDR-AAAAAAAAAAAAAAAAAAAAAA:2026-07-17T08'
+		);
+		expect(message.subject).toBe('[WITHDRAWAL_NOTICE_RECEIVED] Shop operational alert');
+		expect(message.html).toContain('Subject: WDR-AAAAAAAAAAAAAAAAAAAAAA');
+		expect(message.html).toContain(
+			'Open Codex and inspect the withdrawal notice before reconciliation.'
+		);
+		expect(JSON.stringify(message)).not.toContain('customer@example.com');
+	});
 });

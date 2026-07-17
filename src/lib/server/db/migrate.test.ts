@@ -174,6 +174,72 @@ describe('migrate', () => {
 				.prepare("SELECT name, [notnull] FROM pragma_table_info('support_notes') ORDER BY cid")
 				.all()
 		).toContainEqual({ name: 'note', notnull: 0 });
+		expect(
+			database
+				.prepare(
+					`SELECT name FROM sqlite_schema
+					 WHERE type = 'table' AND name IN (
+						'withdrawal_cases', 'withdrawal_case_events', 'withdrawal_messages'
+					 ) ORDER BY name`
+				)
+				.all()
+		).toEqual([
+			{ name: 'withdrawal_case_events' },
+			{ name: 'withdrawal_cases' },
+			{ name: 'withdrawal_messages' }
+		]);
+	});
+
+	it('upgrades a migration-0004 database without changing existing rows', () => {
+		const directory = temporaryDirectory();
+		for (const name of [
+			'0001_initial.sql',
+			'0002_support_note_text.sql',
+			'0003_styria_sync_cursor.sql',
+			'0004_operational_alert_metadata.sql'
+		]) {
+			writeFileSync(
+				join(directory, name),
+				readFileSync(join(initialMigrationsDirectory, name), 'utf8')
+			);
+		}
+		const database = openDatabase(':memory:');
+		migrate(database, directory);
+		database
+			.prepare(
+				`INSERT INTO outbox_jobs (
+					kind, idempotency_key, order_id, attempt_count, next_attempt_at,
+					alert_code, alert_subject_id, alert_observed_at
+				) VALUES ('operational-alert', 'alert:DISK_LOW:data-volume:2026-07-17T08', NULL, 0,
+					'2026-07-17T08:00:00.000Z', 'DISK_LOW', 'data-volume',
+					'2026-07-17T08:00:00.000Z')`
+			)
+			.run();
+		writeFileSync(
+			join(directory, '0005_withdrawal_cases.sql'),
+			readFileSync(join(initialMigrationsDirectory, '0005_withdrawal_cases.sql'), 'utf8')
+		);
+
+		migrate(database, directory);
+
+		expect(database.prepare('SELECT idempotency_key FROM outbox_jobs').get()).toEqual({
+			idempotency_key: 'alert:DISK_LOW:data-volume:2026-07-17T08'
+		});
+		expect(
+			database
+				.prepare('SELECT name FROM _migrations ORDER BY name')
+				.all()
+				.map((row) => (row as { name: string }).name)
+		).toEqual([
+			'0001_initial.sql',
+			'0002_support_note_text.sql',
+			'0003_styria_sync_cursor.sql',
+			'0004_operational_alert_metadata.sql',
+			'0005_withdrawal_cases.sql'
+		]);
+		expect(
+			database.prepare("SELECT name FROM sqlite_schema WHERE name = 'withdrawal_cases'").get()
+		).toEqual({ name: 'withdrawal_cases' });
 	});
 
 	it('adds nullable support note text to an existing database without losing rows', () => {

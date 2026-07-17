@@ -10,7 +10,7 @@ const initialMigrationsDirectory = fileURLToPath(
 
 type ColumnShape = {
 	name: string;
-	type: 'INTEGER' | 'TEXT';
+	type: 'BLOB' | 'INTEGER' | 'TEXT';
 	notnull: 0 | 1;
 	dflt_value: string | null;
 	pk: number;
@@ -166,6 +166,49 @@ const expectedColumns = {
 		column('finished_at', 'TEXT', 0),
 		column('result', 'TEXT', 0),
 		column('error_code', 'TEXT', 0)
+	],
+	withdrawal_cases: [
+		column('id', 'TEXT', 0, null, 1),
+		column('public_reference', 'TEXT', 1),
+		column('status', 'TEXT', 1),
+		column('revision', 'INTEGER', 1, '1'),
+		column('scope', 'TEXT', 1),
+		column('eligibility', 'TEXT', 1),
+		column('outcome_code', 'TEXT', 0),
+		column('schema_version', 'INTEGER', 0),
+		column('encryption_key_version', 'INTEGER', 0),
+		column('encrypted_payload', 'BLOB', 0),
+		column('payload_nonce', 'BLOB', 0),
+		column('payload_tag', 'BLOB', 0),
+		column('dedupe_fingerprint', 'TEXT', 0),
+		column('created_at', 'TEXT', 1),
+		column('updated_at', 'TEXT', 1),
+		column('reconciled_at', 'TEXT', 0),
+		column('closed_at', 'TEXT', 0),
+		column('pii_purge_due_at', 'TEXT', 0),
+		column('purged_at', 'TEXT', 0)
+	],
+	withdrawal_case_events: [
+		column('id', 'INTEGER', 0, null, 1),
+		column('case_id', 'TEXT', 1),
+		column('actor', 'TEXT', 1),
+		column('action', 'TEXT', 1),
+		column('prior_status', 'TEXT', 0),
+		column('next_status', 'TEXT', 1),
+		column('result_code', 'TEXT', 1),
+		column('created_at', 'TEXT', 1)
+	],
+	withdrawal_messages: [
+		column('id', 'INTEGER', 0, null, 1),
+		column('case_id', 'TEXT', 1),
+		column('kind', 'TEXT', 1),
+		column('resend_of_message_id', 'INTEGER', 0),
+		column('idempotency_key', 'TEXT', 1),
+		column('attempt_count', 'INTEGER', 1, '0'),
+		column('next_attempt_at', 'TEXT', 1),
+		column('provider_delivery_id', 'TEXT', 0),
+		column('completed_at', 'TEXT', 0),
+		column('last_error_code', 'TEXT', 0)
 	]
 } as const satisfies Record<string, readonly ColumnShape[]>;
 
@@ -204,7 +247,31 @@ const expectedForeignKeys = {
 	email_deliveries: foreignKey('orders', 'order_id'),
 	support_notes: foreignKey('orders', 'order_id'),
 	job_leases: [],
-	job_runs: []
+	job_runs: [],
+	withdrawal_cases: [],
+	withdrawal_case_events: foreignKey('withdrawal_cases', 'case_id'),
+	withdrawal_messages: [
+		{
+			id: 0,
+			seq: 0,
+			table: 'withdrawal_messages',
+			from: 'resend_of_message_id',
+			to: 'id',
+			on_update: 'NO ACTION',
+			on_delete: 'NO ACTION',
+			match: 'NONE'
+		},
+		{
+			id: 1,
+			seq: 0,
+			table: 'withdrawal_cases',
+			from: 'case_id',
+			to: 'id',
+			on_update: 'NO ACTION',
+			on_delete: 'NO ACTION',
+			match: 'NONE'
+		}
+	]
 } satisfies Record<TableName, ForeignKeyShape[]>;
 
 type DraftInput = {
@@ -376,7 +443,7 @@ afterEach(() => {
 });
 
 describe('initial schema metadata', () => {
-	it('contains exactly the 12 application tables with exact column shapes', () => {
+	it('contains exactly the 15 application tables with exact column shapes', () => {
 		const applicationTables = database
 			.prepare(
 				`SELECT name FROM sqlite_schema
@@ -395,7 +462,7 @@ describe('initial schema metadata', () => {
 		}
 	});
 
-	it('contains exactly the four custom indexes and accounts for automatic indexes separately', () => {
+	it('contains exactly the nine custom indexes and accounts for automatic indexes separately', () => {
 		type IndexRow = { name: string; tbl_name: string; sql: string | null };
 		const indexes = database
 			.prepare(
@@ -427,6 +494,31 @@ describe('initial schema metadata', () => {
 				name: 'idx_outbox_due',
 				tbl_name: 'outbox_jobs',
 				sql: 'CREATE INDEX idx_outbox_due ON outbox_jobs(completed_at, next_attempt_at)'
+			},
+			{
+				name: 'withdrawal_case_events_case_idx',
+				tbl_name: 'withdrawal_case_events',
+				sql: 'CREATE INDEX withdrawal_case_events_case_idx ON withdrawal_case_events(case_id, id)'
+			},
+			{
+				name: 'withdrawal_cases_dedupe_idx',
+				tbl_name: 'withdrawal_cases',
+				sql: 'CREATE INDEX withdrawal_cases_dedupe_idx ON withdrawal_cases(dedupe_fingerprint, created_at)'
+			},
+			{
+				name: 'withdrawal_cases_purge_idx',
+				tbl_name: 'withdrawal_cases',
+				sql: 'CREATE INDEX withdrawal_cases_purge_idx ON withdrawal_cases(pii_purge_due_at) WHERE purged_at IS NULL'
+			},
+			{
+				name: 'withdrawal_cases_status_idx',
+				tbl_name: 'withdrawal_cases',
+				sql: 'CREATE INDEX withdrawal_cases_status_idx ON withdrawal_cases(status, created_at)'
+			},
+			{
+				name: 'withdrawal_messages_due_idx',
+				tbl_name: 'withdrawal_messages',
+				sql: 'CREATE INDEX withdrawal_messages_due_idx ON withdrawal_messages(completed_at, next_attempt_at, id)'
 			}
 		]);
 		expect(
@@ -447,16 +539,23 @@ describe('initial schema metadata', () => {
 			orders: 5,
 			outbox_jobs: 1,
 			stripe_events: 1,
-			submission_approvals: 1
+			submission_approvals: 1,
+			withdrawal_cases: 2,
+			withdrawal_messages: 1
 		});
-		expect(automatic).toHaveLength(14);
+		expect(automatic).toHaveLength(17);
 		expect(automatic.every((index) => index.name.startsWith('sqlite_autoindex_'))).toBe(true);
 
 		const expectedIndexColumns = {
 			idx_order_events_order: ['order_id', 'created_at'],
 			idx_orders_fulfillment_status: ['fulfillment_status', 'updated_at'],
 			idx_orders_styria_sync: ['styria_last_checked_at', 'updated_at', 'id'],
-			idx_outbox_due: ['completed_at', 'next_attempt_at']
+			idx_outbox_due: ['completed_at', 'next_attempt_at'],
+			withdrawal_case_events_case_idx: ['case_id', 'id'],
+			withdrawal_cases_dedupe_idx: ['dedupe_fingerprint', 'created_at'],
+			withdrawal_cases_purge_idx: ['pii_purge_due_at'],
+			withdrawal_cases_status_idx: ['status', 'created_at'],
+			withdrawal_messages_due_idx: ['completed_at', 'next_attempt_at', 'id']
 		};
 		for (const [name, columns] of Object.entries(expectedIndexColumns)) {
 			const actual = (database.pragma(`index_info(${name})`) as Array<{ name: string }>).map(
@@ -601,6 +700,87 @@ describe('initial schema CHECK constraints', () => {
 		expect(() => database.prepare("UPDATE support_notes SET actor = 'operator'").run()).toThrow(
 			/CHECK constraint failed/
 		);
+	});
+
+	it('enforces withdrawal states, revisions, encrypted-or-purged shape, actors, and message kinds', () => {
+		database
+			.prepare(
+				`INSERT INTO withdrawal_cases (
+					id, public_reference, status, revision, scope, eligibility,
+					schema_version, encryption_key_version, encrypted_payload,
+					payload_nonce, payload_tag, dedupe_fingerprint, created_at, updated_at
+				) VALUES (?, ?, 'submitted', 1, 'specific_items', 'pending', 1, 1, ?, ?, ?, ?, ?, ?)`
+			)
+			.run(
+				'case_1',
+				'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				Buffer.from('ciphertext'),
+				Buffer.alloc(12),
+				Buffer.alloc(16),
+				'a'.repeat(64),
+				'2026-07-17T08:00:00.000Z',
+				'2026-07-17T08:00:00.000Z'
+			);
+
+		for (const sql of [
+			"UPDATE withdrawal_cases SET status = 'unknown' WHERE id = 'case_1'",
+			"UPDATE withdrawal_cases SET revision = 0 WHERE id = 'case_1'",
+			"UPDATE withdrawal_cases SET scope = 'some_items' WHERE id = 'case_1'",
+			"UPDATE withdrawal_cases SET eligibility = 'approved' WHERE id = 'case_1'",
+			"UPDATE withdrawal_cases SET encrypted_payload = NULL WHERE id = 'case_1'",
+			"UPDATE withdrawal_cases SET purged_at = '2026-07-18T08:00:00.000Z' WHERE id = 'case_1'"
+		]) {
+			expect(() => database.prepare(sql).run()).toThrow(/CHECK constraint failed/);
+		}
+
+		database
+			.prepare(
+				`INSERT INTO withdrawal_case_events (
+					case_id, actor, action, prior_status, next_status, result_code, created_at
+				) VALUES ('case_1', 'customer', 'submitted', NULL, 'submitted',
+					'NOTICE_RECEIVED', '2026-07-17T08:00:00.000Z')`
+			)
+			.run();
+		expect(() =>
+			database
+				.prepare(
+					`INSERT INTO withdrawal_case_events (
+						case_id, actor, action, next_status, result_code, created_at
+					) VALUES ('case_1', 'operator', 'reviewed', 'submitted', 'OK',
+						'2026-07-17T08:00:00.000Z')`
+				)
+				.run()
+		).toThrow(/CHECK constraint failed/);
+
+		const insertMessage = database.prepare(
+			`INSERT INTO withdrawal_messages (
+				case_id, kind, resend_of_message_id, idempotency_key, attempt_count, next_attempt_at
+			) VALUES ('case_1', ?, ?, ?, ?, '2026-07-17T08:00:00.000Z')`
+		);
+		insertMessage.run('receipt', null, 'withdrawal:receipt:case_1', 0);
+		expect(() => insertMessage.run('unknown', null, 'unknown', 0)).toThrow(
+			/CHECK constraint failed/
+		);
+		expect(() => insertMessage.run('resend', null, 'resend-missing', 0)).toThrow(
+			/CHECK constraint failed/
+		);
+		expect(() => insertMessage.run('receipt', 1, 'receipt-with-source', 0)).toThrow(
+			/CHECK constraint failed/
+		);
+		expect(() => insertMessage.run('receipt', null, 'negative-attempt', -1)).toThrow(
+			/CHECK constraint failed/
+		);
+		insertMessage.run('resend', 1, 'resend-valid', 0);
+
+		database
+			.prepare(
+				`UPDATE withdrawal_cases SET
+					schema_version = NULL, encryption_key_version = NULL,
+					encrypted_payload = NULL, payload_nonce = NULL, payload_tag = NULL,
+					dedupe_fingerprint = NULL, purged_at = '2026-07-18T08:00:00.000Z'
+				 WHERE id = 'case_1'`
+			)
+			.run();
 	});
 });
 

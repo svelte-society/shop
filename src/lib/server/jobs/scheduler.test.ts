@@ -436,7 +436,7 @@ describe('application runtime', () => {
 		expect(bootstrapRuntime?.scheduler).toBeNull();
 		expect(
 			bootstrapRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
-		).toHaveLength(4);
+		).toHaveLength(5);
 		await bootstrap.stop();
 
 		const production = createApplicationLifecycle({ migrationsDirectory });
@@ -453,7 +453,7 @@ describe('application runtime', () => {
 		expect(productionRuntime?.database.open).toBe(true);
 		expect(
 			productionRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
-		).toHaveLength(4);
+		).toHaveLength(5);
 		await production.stop();
 	});
 
@@ -476,7 +476,8 @@ describe('application runtime', () => {
 			{ name: '0001_initial.sql' },
 			{ name: '0002_support_note_text.sql' },
 			{ name: '0003_styria_sync_cursor.sql' },
-			{ name: '0004_operational_alert_metadata.sql' }
+			{ name: '0004_operational_alert_metadata.sql' },
+			{ name: '0005_withdrawal_cases.sql' }
 		]);
 		await application.stop();
 		expect(application.current()).toBeNull();
@@ -496,7 +497,7 @@ describe('application runtime', () => {
 		expect(runtime?.scheduler).toBeNull();
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 4
+			count: 5
 		});
 		await application.stop();
 	});
