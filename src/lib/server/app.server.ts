@@ -28,6 +28,9 @@ export type ApplicationStartOptions = {
 export type ApplicationRuntime = {
 	database: ShopDatabase;
 	scheduler: Scheduler | null;
+	databasePath: string;
+	migrationsDirectory: string;
+	environment: RuntimeEnvironment;
 };
 
 export type ApplicationRuntimeDependencies = {
@@ -149,7 +152,13 @@ export function createApplicationLifecycle(
 				? createScheduler(database, options.environment)
 				: null;
 			scheduler?.start();
-			runtime = { database, scheduler };
+			runtime = {
+				database,
+				scheduler,
+				databasePath,
+				migrationsDirectory,
+				environment: { ...options.environment }
+			};
 			return runtime;
 		} catch (error) {
 			let cleanupError: unknown;

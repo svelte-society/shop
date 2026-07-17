@@ -111,13 +111,17 @@ describe('disabled storefront request gate', () => {
 		expect(rootHtml).toContain('The collection is getting ready.');
 	});
 
-	it.each(['/privacy', '/health/live'])(
-		'leaves non-commerce request %s unaffected',
-		async (path) => {
-			const response = await fetch(new URL(path, baseUrl), { redirect: 'manual' });
+	it('leaves an unimplemented policy route unaffected', async () => {
+		const response = await fetch(new URL('/privacy', baseUrl), { redirect: 'manual' });
 
-			expect(response.status).toBe(404);
-			expect(response.headers.get('location')).toBeNull();
-		}
-	);
+		expect(response.status).toBe(404);
+		expect(response.headers.get('location')).toBeNull();
+	});
+
+	it('serves static liveness while the storefront is disabled', async () => {
+		const response = await fetch(new URL('/health/live', baseUrl));
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({ status: 'live' });
+	});
 });

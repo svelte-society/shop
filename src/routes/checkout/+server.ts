@@ -10,6 +10,7 @@ import {
 } from '$lib/server/checkout/service.server';
 import { openDatabase } from '$lib/server/db/connection.server';
 import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
+import { checkReadiness } from '$lib/server/health/readiness.server';
 import { requireStorefront } from '$lib/server/storefront/guard.server';
 import { createStripeCheckoutGateway } from '$lib/server/stripe/checkout.server';
 import { createStripeClient } from '$lib/server/stripe/client.server';
@@ -20,6 +21,7 @@ type CheckoutServiceFactory = (
 	config: PrivateConfig,
 	runtimeEnv: RuntimeEnvironment
 ) => CheckoutService;
+type ReadinessCheck = () => Promise<{ ready: boolean }>;
 
 type Problem = {
 	type: 'about:blank';
@@ -82,7 +84,8 @@ function checkoutProblem(error: CheckoutError): Response {
 
 export function _createCheckoutPost(
 	runtimeEnv: RuntimeEnvironment,
-	createService: CheckoutServiceFactory = defaultCheckoutServiceFactory
+	createService: CheckoutServiceFactory = defaultCheckoutServiceFactory,
+	readiness: ReadinessCheck = checkReadiness
 ): RequestHandler {
 	let service: CheckoutService | undefined;
 
@@ -95,6 +98,14 @@ export function _createCheckoutPost(
 			}
 			if (!publicConfig.checkoutEnabled) {
 				return problem(503, 'Checkout unavailable', 'CHECKOUT_DISABLED');
+			}
+
+			try {
+				if (!(await readiness()).ready) {
+					return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
+				}
+			} catch {
+				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
 			}
 			if (!isJsonRequest(request)) {
 				return problem(415, 'JSON request required', 'CHECKOUT_JSON_REQUIRED');

@@ -11,6 +11,29 @@ function deferred<T>() {
 }
 
 describe('server application hook', () => {
+	it('serves static liveness without starting the database lifecycle', async () => {
+		const application: ApplicationLifecycle = {
+			current: () => null,
+			start: vi.fn(),
+			stop: vi.fn(async () => undefined)
+		};
+		const handle = createApplicationHandle(application, {
+			environment: {},
+			building: false,
+			test: false
+		});
+		const resolve = vi.fn(async () => new Response('live'));
+
+		const response = await handle({
+			event: { url: new URL('https://shop.sveltesociety.dev/health/live') },
+			resolve
+		} as unknown as Parameters<typeof handle>[0]);
+
+		expect(response).toBeInstanceOf(Response);
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(application.start).not.toHaveBeenCalled();
+	});
+
 	it('starts the application once before resolving repeated requests', async () => {
 		const order: string[] = [];
 		const ready = deferred<null>();
@@ -45,7 +68,7 @@ describe('server application hook', () => {
 		expect(order).toEqual(['application-start', 'resolve', 'resolve']);
 	});
 
-	it('does not resolve a request when startup readiness fails and retries startup later', async () => {
+	it('keeps local-independent routes available when startup readiness fails and retries later', async () => {
 		const application: ApplicationLifecycle = {
 			current: () => null,
 			start: vi
@@ -62,11 +85,11 @@ describe('server application hook', () => {
 		const resolve = vi.fn(async () => new Response('ok'));
 		const input = { event: {}, resolve } as unknown as Parameters<typeof handle>[0];
 
-		await expect(handle(input)).rejects.toThrowError('STARTUP_NOT_READY');
-		expect(resolve).not.toHaveBeenCalled();
+		await expect(handle(input)).resolves.toBeInstanceOf(Response);
+		expect(resolve).toHaveBeenCalledOnce();
 		await expect(handle(input)).resolves.toBeInstanceOf(Response);
 
 		expect(application.start).toHaveBeenCalledTimes(2);
-		expect(resolve).toHaveBeenCalledOnce();
+		expect(resolve).toHaveBeenCalledTimes(2);
 	});
 });

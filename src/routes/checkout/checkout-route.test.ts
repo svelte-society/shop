@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CheckoutService } from '$lib/server/checkout/service.server';
 import { CheckoutError } from '$lib/server/checkout/service.server';
 import { _createCheckoutPost } from './+server';
@@ -45,21 +45,26 @@ function routeFixture(
 	options: {
 		env?: Record<string, string | undefined>;
 		start?: (input: unknown) => ReturnType<CheckoutService['start']>;
+		readiness?: () => Promise<{ ready: boolean }>;
 	} = {}
 ) {
 	const starts: unknown[] = [];
 	let serviceFactories = 0;
-	const handler = _createCheckoutPost(options.env ?? BASE_ENV, () => {
-		serviceFactories += 1;
-		return {
-			async start(input) {
-				starts.push(structuredClone(input));
-				return options.start
-					? options.start(input)
-					: { redirectUrl: 'https://checkout.stripe.com/c/pay/cs_test_route' };
-			}
-		};
-	});
+	const handler = _createCheckoutPost(
+		options.env ?? BASE_ENV,
+		() => {
+			serviceFactories += 1;
+			return {
+				async start(input) {
+					starts.push(structuredClone(input));
+					return options.start
+						? options.start(input)
+						: { redirectUrl: 'https://checkout.stripe.com/c/pay/cs_test_route' };
+				}
+			};
+		},
+		options.readiness ?? (async () => ({ ready: true }))
+	);
 
 	return {
 		handler,
@@ -115,6 +120,40 @@ describe('POST /checkout', () => {
 			status: 503,
 			code: 'CHECKOUT_DISABLED'
 		});
+		expect(fixture.serviceFactories).toBe(0);
+	});
+
+	it('fails closed with SERVICE_NOT_READY before provider construction when local readiness is red', async () => {
+		const readiness = vi.fn(async () => ({ ready: false }));
+		const fixture = routeFixture({ readiness });
+
+		const response = await invoke(fixture.handler, request());
+
+		expect(response.status).toBe(503);
+		await expect(responseBody(response)).resolves.toEqual({
+			type: 'about:blank',
+			title: 'Checkout unavailable',
+			status: 503,
+			code: 'SERVICE_NOT_READY'
+		});
+		expect(readiness).toHaveBeenCalledOnce();
+		expect(fixture.serviceFactories).toBe(0);
+		expect(fixture.starts).toEqual([]);
+	});
+
+	it('fails closed with SERVICE_NOT_READY when local readiness cannot complete', async () => {
+		const fixture = routeFixture({
+			readiness: async () => {
+				throw new Error('private readiness failure');
+			}
+		});
+
+		const response = await invoke(fixture.handler, request());
+		const text = await response.text();
+
+		expect(response.status).toBe(503);
+		expect(JSON.parse(text)).toMatchObject({ code: 'SERVICE_NOT_READY' });
+		expect(text).not.toContain('private readiness failure');
 		expect(fixture.serviceFactories).toBe(0);
 	});
 

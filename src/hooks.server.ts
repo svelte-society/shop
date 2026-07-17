@@ -15,14 +15,16 @@ export function createApplicationHandle(
 	let startup: ReturnType<ApplicationLifecycle['start']> | undefined;
 
 	return async ({ event, resolve }) => {
+		if (event.url?.pathname === '/health/live') return resolve(event);
+
 		if (!started) {
 			const activeStartup = (startup ??= application.start(options));
 			try {
 				await activeStartup;
 				started = true;
-			} catch (error) {
+			} catch {
 				if (startup === activeStartup) startup = undefined;
-				throw error;
+				return resolve(event);
 			}
 		}
 		return resolve(event);

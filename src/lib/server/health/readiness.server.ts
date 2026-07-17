@@ -1,0 +1,297 @@
+import { env } from '$env/dynamic/private';
+import { parsePublicConfig } from '$lib/config/public';
+import { applicationLifecycle, type ApplicationRuntime } from '$lib/server/app.server';
+import type { ShopDatabase } from '$lib/server/db/types';
+import {
+	open as openFile,
+	readdir as readDirectory,
+	stat as statPath,
+	statfs as statFileSystem,
+	unlink as unlinkFile
+} from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+const MINIMUM_FREE_BYTES = 256n * 1024n * 1024n;
+
+export type ReadinessResult = {
+	ready: boolean;
+	checks: {
+		configuration: 'ok' | 'failed';
+		database: 'ok' | 'failed';
+		migrations: 'ok' | 'failed';
+		volume: 'ok' | 'failed';
+		disk: 'ok' | 'low' | 'failed';
+	};
+};
+
+type ReadinessContext = {
+	database: ShopDatabase | null;
+	databasePath: string;
+	environment: Record<string, string | undefined>;
+	migrationsDirectory: string;
+};
+
+type ReadinessFileHandle = {
+	sync(): Promise<void>;
+	close(): Promise<void>;
+};
+
+type ReadinessDirectoryEntry = {
+	name: string;
+	isFile(): boolean;
+};
+
+export type ReadinessDependencies = {
+	getRuntime: () => ReadinessContext | null;
+	validateConfiguration?: (environment: Record<string, string | undefined>) => boolean;
+	quickCheck?: (database: ShopDatabase) => boolean;
+	openFile?: (path: string, flags: 'wx', mode: number) => Promise<ReadinessFileHandle>;
+	readDirectory?: (path: string) => Promise<ReadinessDirectoryEntry[]>;
+	statPath?: (path: string) => Promise<{ isFile(): boolean }>;
+	statFileSystem?: (path: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
+	unlinkFile?: (path: string) => Promise<void>;
+	randomId?: () => string;
+};
+
+function exactValue(environment: Record<string, string | undefined>, name: string): boolean {
+	const value = environment[name];
+	return (
+		typeof value === 'string' && value.length > 0 && value === value.trim() && !/[\r\n]/.test(value)
+	);
+}
+
+function exactBoolean(environment: Record<string, string | undefined>, name: string): boolean {
+	return environment[name] === 'true' || environment[name] === 'false';
+}
+
+function optionalHttpsUrl(environment: Record<string, string | undefined>, name: string): boolean {
+	const value = environment[name];
+	if (value === undefined) return true;
+	try {
+		return exactValue(environment, name) && new URL(value).protocol === 'https:';
+	} catch {
+		return false;
+	}
+}
+
+function validStyriaTimeout(environment: Record<string, string | undefined>): boolean {
+	const value = environment.STYRIA_TIMEOUT_MS;
+	if (value === undefined) return true;
+	if (!/^[1-9]\d*$/.test(value)) return false;
+	const timeout = Number(value);
+	return Number.isSafeInteger(timeout) && timeout <= 10_000;
+}
+
+function productionConfigurationIsValid(environment: Record<string, string | undefined>): boolean {
+	try {
+		const publicConfig = parsePublicConfig(environment);
+		if (
+			!exactBoolean(environment, 'MCP_ENABLED') ||
+			!exactBoolean(environment, 'SCHEDULER_ENABLED') ||
+			!exactValue(environment, 'DATABASE_PATH') ||
+			!isAbsolute(environment.DATABASE_PATH as string) ||
+			!exactValue(environment, 'STRIPE_WEBHOOK_SECRET')
+		) {
+			return false;
+		}
+
+		const commerceEnabled = publicConfig.storefrontEnabled || publicConfig.checkoutEnabled;
+		if (
+			commerceEnabled &&
+			(!exactValue(environment, 'STRIPE_SECRET_KEY') ||
+				!exactValue(environment, 'STRIPE_PAID_SHIPPING_RATE_ID') ||
+				!exactValue(environment, 'STRIPE_FREE_SHIPPING_RATE_ID'))
+		) {
+			return false;
+		}
+		if (publicConfig.checkoutEnabled && !publicConfig.storefrontEnabled) return false;
+
+		const fulfillmentEnabled =
+			environment.MCP_ENABLED === 'true' || environment.SCHEDULER_ENABLED === 'true';
+		if (
+			fulfillmentEnabled &&
+			(!exactValue(environment, 'STRIPE_SECRET_KEY') ||
+				!exactValue(environment, 'STYRIA_APP_ID') ||
+				!exactValue(environment, 'STYRIA_SECRET_KEY') ||
+				!exactValue(environment, 'PLUNK_SECRET_KEY') ||
+				!exactValue(environment, 'PLUNK_FROM_NAME') ||
+				!exactValue(environment, 'PLUNK_FROM_EMAIL') ||
+				!optionalHttpsUrl(environment, 'STYRIA_BASE_URL') ||
+				!optionalHttpsUrl(environment, 'PLUNK_BASE_URL') ||
+				!validStyriaTimeout(environment))
+		) {
+			return false;
+		}
+
+		if (
+			environment.MCP_ENABLED === 'true' &&
+			(!exactValue(environment, 'MCP_BEARER_TOKEN') ||
+				!exactValue(environment, 'STYRIA_BRAND_NAME'))
+		) {
+			return false;
+		}
+		if (environment.SCHEDULER_ENABLED === 'true' && !exactValue(environment, 'ADMIN_EMAIL')) {
+			return false;
+		}
+
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function defaultQuickCheck(database: ShopDatabase): boolean {
+	const rows = database.pragma('quick_check') as Array<Record<string, unknown>>;
+	return rows.length === 1 && rows[0]?.quick_check === 'ok';
+}
+
+function defaultRuntime(): ReadinessContext {
+	const runtime: ApplicationRuntime | null = applicationLifecycle.current();
+	if (runtime) {
+		return {
+			database: runtime.database,
+			databasePath: runtime.databasePath,
+			environment: runtime.environment,
+			migrationsDirectory: runtime.migrationsDirectory
+		};
+	}
+	return {
+		database: null,
+		databasePath: env.DATABASE_PATH ?? '',
+		environment: env,
+		migrationsDirectory: resolve('migrations')
+	};
+}
+
+function databaseDirectory(databasePath: string): string | null {
+	return isAbsolute(databasePath) ? dirname(databasePath) : null;
+}
+
+export function createReadinessChecker(
+	dependencies: ReadinessDependencies
+): () => Promise<ReadinessResult> {
+	const validateConfiguration =
+		dependencies.validateConfiguration ?? productionConfigurationIsValid;
+	const runQuickCheck = dependencies.quickCheck ?? defaultQuickCheck;
+	const open =
+		dependencies.openFile ??
+		((path: string, flags: 'wx', mode: number) => openFile(path, flags, mode));
+	const read =
+		dependencies.readDirectory ?? ((path: string) => readDirectory(path, { withFileTypes: true }));
+	const inspectPath = dependencies.statPath ?? ((path: string) => statPath(path));
+	const inspectFileSystem = dependencies.statFileSystem ?? ((path: string) => statFileSystem(path));
+	const remove = dependencies.unlinkFile ?? ((path: string) => unlinkFile(path));
+	const randomId = dependencies.randomId ?? randomUUID;
+
+	return async (): Promise<ReadinessResult> => {
+		const context = dependencies.getRuntime();
+		if (!context) {
+			return {
+				ready: false,
+				checks: {
+					configuration: 'failed',
+					database: 'failed',
+					migrations: 'failed',
+					volume: 'failed',
+					disk: 'failed'
+				}
+			};
+		}
+
+		const configuration = validateConfiguration(context.environment) ? 'ok' : 'failed';
+		const directory = databaseDirectory(context.databasePath);
+
+		let databaseCheck: 'ok' | 'failed' = 'failed';
+		if (context.database?.open && directory !== null) {
+			try {
+				const databaseFile = await inspectPath(context.databasePath);
+				if (databaseFile.isFile() && runQuickCheck(context.database)) databaseCheck = 'ok';
+			} catch {
+				databaseCheck = 'failed';
+			}
+		}
+
+		let migrations: 'ok' | 'failed' = 'failed';
+		if (context.database?.open) {
+			try {
+				const committed = (await read(context.migrationsDirectory))
+					.filter((entry) => entry.isFile() && entry.name.endsWith('.sql'))
+					.map((entry) => entry.name)
+					.sort();
+				const applied = (
+					context.database.prepare('SELECT name FROM _migrations ORDER BY name').all() as Array<{
+						name: unknown;
+					}>
+				).map((row) => row.name);
+				if (
+					committed.length === applied.length &&
+					committed.every((name, index) => name === applied[index])
+				) {
+					migrations = 'ok';
+				}
+			} catch {
+				migrations = 'failed';
+			}
+		}
+
+		let volume: 'ok' | 'failed' = 'failed';
+		if (directory !== null) {
+			const sentinel = `${context.databasePath}.readiness-${randomId()}`;
+			let handle: ReadinessFileHandle | undefined;
+			let created = false;
+			try {
+				handle = await open(sentinel, 'wx', 0o600);
+				created = true;
+				await handle.sync();
+				await handle.close();
+				handle = undefined;
+				await remove(sentinel);
+				created = false;
+				volume = 'ok';
+			} catch {
+				try {
+					await handle?.close();
+				} catch {
+					// A failed close is part of the failed volume check.
+				}
+				if (created) {
+					try {
+						await remove(sentinel);
+					} catch {
+						// Best-effort cleanup must not replace the stable readiness result.
+					}
+				}
+			}
+		}
+
+		let disk: 'ok' | 'low' | 'failed' = 'failed';
+		if (directory !== null) {
+			try {
+				const filesystem = await inspectFileSystem(directory);
+				const available = BigInt(filesystem.bavail) * BigInt(filesystem.bsize);
+				disk = available < MINIMUM_FREE_BYTES ? 'low' : 'ok';
+			} catch {
+				disk = 'failed';
+			}
+		}
+
+		const checks: ReadinessResult['checks'] = {
+			configuration,
+			database: databaseCheck,
+			migrations,
+			volume,
+			disk
+		};
+		return {
+			ready: Object.values(checks).every((status) => status === 'ok'),
+			checks
+		};
+	};
+}
+
+const defaultChecker = createReadinessChecker({ getRuntime: defaultRuntime });
+
+export function checkReadiness(): Promise<ReadinessResult> {
+	return defaultChecker();
+}
