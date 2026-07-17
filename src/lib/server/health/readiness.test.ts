@@ -353,6 +353,23 @@ describe('local readiness', () => {
 		expect(result.checks.disk).toBe('low');
 	});
 
+	it('best-effort enqueues local readiness alerts without contacting email providers', async () => {
+		const alerts = { enqueueAlert: vi.fn() };
+		const observedAt = new Date('2026-07-17T08:15:00.000Z');
+		const result = await checker({
+			quickCheck: () => false,
+			statFileSystem: async () => ({ bavail: MINIMUM_FREE_BYTES - 1, bsize: 1 }),
+			alerts,
+			clock: () => observedAt
+		})();
+
+		expect(result.ready).toBe(false);
+		expect(alerts.enqueueAlert.mock.calls).toEqual([
+			['DISK_LOW', 'data-volume', observedAt],
+			['SQLITE_NOT_READY', 'shop-database', observedAt]
+		]);
+	});
+
 	it('reports disk okay at exactly the 256 MiB threshold', async () => {
 		const statFileSystem = vi.fn(async () => ({
 			bavail: MINIMUM_FREE_BYTES,

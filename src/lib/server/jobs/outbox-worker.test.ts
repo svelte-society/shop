@@ -8,6 +8,7 @@ import { createPlunkClient } from '$lib/server/plunk/client.server';
 import { PlunkError } from '$lib/server/plunk/gateway';
 import type { ShippingEmailSender } from '$lib/server/plunk/shipping-email';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
+import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { PaidOrderAlertOutboxWorker } from './outbox-worker.server';
 
 const migrationsDirectory = resolve('migrations');
@@ -138,6 +139,41 @@ afterEach(() => {
 });
 
 describe('PaidOrderAlertOutboxWorker', () => {
+	it('sends fixed operational mail only to the configured admin and completes the alert', async () => {
+		new SqliteAlertService(outbox).enqueueAlert(
+			'BACKUP_FAILED',
+			'daily-backup',
+			new Date('2026-07-16T08:31:00.000Z')
+		);
+		const requests: CapturedRequest[] = [];
+		const fetch: typeof globalThis.fetch = async (input, init) => {
+			requests.push({ input, init });
+			return successfulResponse('delivery_operational_123');
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			alertEmail
+		});
+
+		await expect(worker.drain(new Date('2026-07-16T08:31:00.000Z'))).resolves.toEqual({
+			completed: 1,
+			rescheduled: 0
+		});
+		expect(JSON.parse(String(requests[0].init?.body))).toEqual({
+			to: alertEmail.to,
+			from: alertEmail.from,
+			reply: alertEmail.replyTo,
+			subject: '[BACKUP_FAILED] Shop operational alert',
+			body:
+				'<p>Code: BACKUP_FAILED</p>' +
+				'<p>Subject: daily-backup</p>' +
+				'<p>Observed UTC: 2026-07-16T08:31:00.000Z</p>' +
+				'<p>Next action: Inspect the backup job run and storage configuration before the next cadence.</p>'
+		});
+	});
+
 	it('sends the approved PII-free paid-order alert and completes it exactly once', async () => {
 		insertOrder(database, { id: 'order_internal_123' });
 		enqueueAlert(outbox, 'order_internal_123');
@@ -332,6 +368,33 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			completed_at: null,
 			last_error_code: 'OUTBOX_JOB_KIND_UNSUPPORTED'
 		});
+	});
+
+	it('reschedules a corrupt operational alert row with only a stable parser code', async () => {
+		database
+			.prepare(
+				`INSERT INTO outbox_jobs (
+					kind, idempotency_key, order_id, attempt_count, next_attempt_at,
+					alert_code, alert_subject_id, alert_observed_at
+				) VALUES ('operational-alert', 'alert:DISK_LOW:customer@example.test:private', NULL, 0, ?,
+					'DISK_LOW', 'customer@example.test', '2026-07-16T08:30:00.000Z')`
+			)
+			.run(now.toISOString());
+		const fetch = vi.fn(async () => successfulResponse('must_not_send'));
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			alertEmail
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 0, rescheduled: 1 });
+		expect(fetch).not.toHaveBeenCalled();
+		expect(
+			database
+				.prepare('SELECT attempt_count, last_error_code FROM outbox_jobs WHERE kind = ?')
+				.get('operational-alert')
+		).toEqual({ attempt_count: 1, last_error_code: 'ALERT_JOB_INVALID' });
 	});
 });
 
@@ -545,6 +608,7 @@ describe('shipping email outbox', () => {
 		};
 		const recoveryFailureOutbox: OutboxRepository = {
 			enqueue: outbox.enqueue.bind(outbox),
+			enqueueOperationalAlert: outbox.enqueueOperationalAlert.bind(outbox),
 			ensureShipping: outbox.ensureShipping.bind(outbox),
 			claimDue: outbox.claimDue.bind(outbox),
 			complete: outbox.complete.bind(outbox),
@@ -695,5 +759,53 @@ describe('shipping email outbox', () => {
 		expect(
 			database.prepare('SELECT attempt_count, completed_at, last_error_code FROM outbox_jobs').get()
 		).toEqual({ attempt_count: 1, completed_at: null, last_error_code: 'PLUNK_UNAVAILABLE' });
+	});
+
+	it('enqueues a privacy-safe operator alert on the sixth failed shipping attempt', async () => {
+		insertOrder(database, {
+			id: 'order_sixth_failure',
+			quantities: [1],
+			fulfillmentStatus: 'shipped',
+			trackingNumber: 'PRIVATE-TRACKING-6'
+		});
+		outbox.enqueue({
+			kind: 'shipping-email',
+			idempotencyKey: 'shipping:order_sixth_failure:PRIVATE-TRACKING-6',
+			orderId: 'order_sixth_failure',
+			nextAttemptAt: now
+		});
+		database
+			.prepare('UPDATE outbox_jobs SET attempt_count = 5 WHERE kind = ?')
+			.run('shipping-email');
+		const sender: ShippingEmailSender = {
+			send: vi.fn(async () => {
+				throw new PlunkError('PLUNK_UNAVAILABLE');
+			})
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender }),
+			alerts: new SqliteAlertService(outbox)
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 0, rescheduled: 1 });
+		expect(
+			database.prepare('SELECT kind, idempotency_key, order_id FROM outbox_jobs ORDER BY id').all()
+		).toEqual([
+			expect.objectContaining({ kind: 'shipping-email', order_id: 'order_sixth_failure' }),
+			{
+				kind: 'operational-alert',
+				idempotency_key: 'alert:SHIPPING_EMAIL_UNSENT:order_sixth_failure:2026-07-16T08',
+				order_id: null
+			}
+		]);
+		expect(
+			JSON.stringify(
+				database.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'").all()
+			)
+		).not.toContain('PRIVATE-TRACKING-6');
 	});
 });

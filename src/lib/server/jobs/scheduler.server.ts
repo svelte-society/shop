@@ -1,12 +1,15 @@
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { BackupService } from '$lib/server/backups/service.server';
+import type { AlertCode, AlertService } from '$lib/server/monitoring/alerts.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
+import type { OperationalChecksJob } from './stale-orders.server';
 import type { StyriaSyncJob } from './styria-sync.server';
 
 export const OUTBOX_JOB_NAME = 'outbox';
 export const STYRIA_SYNC_JOB_NAME = 'styria-sync';
 export const BACKUP_JOB_NAME = 'backup';
+export const OPERATIONAL_CHECKS_JOB_NAME = 'operational-checks';
 const OUTBOX_INTERVAL_MS = 60_000;
 const OUTBOX_LEASE_TTL_MS = 55_000;
 const OUTBOX_LEASE_HEARTBEAT_MS = 20_000;
@@ -20,6 +23,8 @@ const STYRIA_SYNC_LEASE_TTL_MS = 55 * 60_000;
 const STYRIA_SYNC_ERROR_CODE = 'STYRIA_SYNC_FAILED';
 const BACKUP_LEASE_TTL_MS = 120 * 60_000;
 const BACKUP_ERROR_CODE = 'BACKUP_FAILED';
+const OPERATIONAL_CHECKS_LEASE_TTL_MS = 30 * 60_000;
+const OPERATIONAL_CHECKS_ERROR_CODE = 'OPERATIONAL_CHECKS_FAILED';
 
 export interface Scheduler {
 	start(): void;
@@ -27,6 +32,7 @@ export interface Scheduler {
 	runOutboxOnce(now?: Date): Promise<void>;
 	runStyriaSyncOnce(now?: Date): Promise<void>;
 	runBackupOnce(now?: Date): Promise<void>;
+	runOperationalChecksOnce?(now?: Date): Promise<void>;
 }
 
 export type SchedulerTimerHandle = {
@@ -41,11 +47,14 @@ export type OutboxSchedulerOptions = {
 	worker: OutboxWorker;
 	styriaSync?: StyriaSyncJob;
 	backup?: BackupService;
+	operationalChecks?: OperationalChecksJob;
+	alerts?: AlertService;
 	enabled: boolean;
 	ownerId: string;
 	clock?: () => Date;
 	schedule?: SchedulerTimer;
 	scheduleBackup?: SchedulerTimer;
+	scheduleOperationalChecks?: SchedulerTimer;
 	cancel?: (handle: SchedulerTimerHandle) => void;
 	reportError?: (errorCode: string) => void;
 };
@@ -65,6 +74,7 @@ export class OutboxScheduler implements Scheduler {
 	private readonly clock: () => Date;
 	private readonly schedule: SchedulerTimer;
 	private readonly scheduleBackup: SchedulerTimer;
+	private readonly scheduleOperationalChecks: SchedulerTimer;
 	private readonly cancel: (handle: SchedulerTimerHandle) => void;
 	private readonly reportError: (errorCode: string) => void;
 	private started = false;
@@ -73,20 +83,25 @@ export class OutboxScheduler implements Scheduler {
 	private timer: SchedulerTimerHandle | undefined;
 	private styriaTimer: SchedulerTimerHandle | undefined;
 	private backupTimer: SchedulerTimerHandle | undefined;
+	private operationalChecksTimer: SchedulerTimerHandle | undefined;
 	private activeRun: Promise<void> | undefined;
 	private activeStyriaRun: Promise<void> | undefined;
 	private activeBackupRun: Promise<void> | undefined;
+	private activeOperationalChecksRun: Promise<void> | undefined;
 	private activeRunController: AbortController | undefined;
 	private activeStyriaRunController: AbortController | undefined;
 	private activeBackupRunController: AbortController | undefined;
+	private activeOperationalChecksRunController: AbortController | undefined;
 	private readonly reportedRuns = new WeakSet<Promise<void>>();
 	private readonly reportedStyriaRuns = new WeakSet<Promise<void>>();
 	private readonly reportedBackupRuns = new WeakSet<Promise<void>>();
+	private readonly reportedOperationalChecksRuns = new WeakSet<Promise<void>>();
 
 	constructor(private readonly options: OutboxSchedulerOptions) {
 		this.clock = options.clock ?? (() => new Date());
 		this.schedule = options.schedule ?? scheduleEvery;
 		this.scheduleBackup = options.scheduleBackup ?? scheduleAfter;
+		this.scheduleOperationalChecks = options.scheduleOperationalChecks ?? scheduleAfter;
 		this.cancel = options.cancel ?? cancelScheduled;
 		this.reportError = options.reportError ?? reportSchedulerError;
 	}
@@ -109,6 +124,7 @@ export class OutboxScheduler implements Scheduler {
 			this.launchScheduledStyriaRun();
 		}
 		if (this.options.backup) this.scheduleNextBackup();
+		if (this.options.operationalChecks) this.scheduleNextOperationalChecks();
 	}
 
 	async stop(): Promise<void> {
@@ -128,22 +144,53 @@ export class OutboxScheduler implements Scheduler {
 			this.cancel(this.backupTimer);
 			this.backupTimer = undefined;
 		}
+		if (this.operationalChecksTimer) {
+			this.cancel(this.operationalChecksTimer);
+			this.operationalChecksTimer = undefined;
+		}
 
 		const activeRun = this.activeRun;
 		const activeStyriaRun = this.activeStyriaRun;
 		const activeBackupRun = this.activeBackupRun;
+		const activeOperationalChecksRun = this.activeOperationalChecksRun;
 		this.activeRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
 		this.activeStyriaRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
 		this.activeBackupRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
+		this.activeOperationalChecksRunController?.abort(new Error('OUTBOX_SCHEDULER_STOPPING'));
 		await Promise.all(
-			[activeRun, activeStyriaRun, activeBackupRun].filter(Boolean).map(async (run) => {
-				try {
-					await run;
-				} catch {
-					// Scheduled failures are already recorded and reported; shutdown still waits for cleanup.
-				}
-			})
+			[activeRun, activeStyriaRun, activeBackupRun, activeOperationalChecksRun]
+				.filter(Boolean)
+				.map(async (run) => {
+					try {
+						await run;
+					} catch {
+						// Scheduled failures are already recorded and reported; shutdown still waits for cleanup.
+					}
+				})
 		);
+	}
+
+	runOperationalChecksOnce(now = this.clock()): Promise<void> {
+		if (this.stopping) return Promise.resolve();
+		if (!this.options.operationalChecks) return Promise.resolve();
+		if (this.activeOperationalChecksRun) return this.activeOperationalChecksRun;
+
+		const controller = new AbortController();
+		this.activeOperationalChecksRunController = controller;
+		const execution = Promise.resolve()
+			.then(() => this.executeOperationalChecksRun(now, controller.signal))
+			.catch((error) => {
+				this.enqueueFailureAlert('SCHEDULER_FAILED', OPERATIONAL_CHECKS_JOB_NAME, now);
+				throw error;
+			});
+		const trackedRun = execution.finally(() => {
+			if (this.activeOperationalChecksRun === trackedRun) {
+				this.activeOperationalChecksRun = undefined;
+				this.activeOperationalChecksRunController = undefined;
+			}
+		});
+		this.activeOperationalChecksRun = trackedRun;
+		return trackedRun;
 	}
 
 	runBackupOnce(now = this.clock()): Promise<void> {
@@ -153,7 +200,13 @@ export class OutboxScheduler implements Scheduler {
 
 		const controller = new AbortController();
 		this.activeBackupRunController = controller;
-		const execution = Promise.resolve().then(() => this.executeBackupRun(now, controller.signal));
+		const execution = Promise.resolve()
+			.then(() => this.executeBackupRun(now, controller.signal))
+			.catch((error) => {
+				this.enqueueFailureAlert('BACKUP_FAILED', 'daily-backup', now);
+				this.enqueueFailureAlert('SCHEDULER_FAILED', BACKUP_JOB_NAME, now);
+				throw error;
+			});
 		const trackedRun = execution.finally(() => {
 			if (this.activeBackupRun === trackedRun) {
 				this.activeBackupRun = undefined;
@@ -171,7 +224,12 @@ export class OutboxScheduler implements Scheduler {
 
 		const controller = new AbortController();
 		this.activeStyriaRunController = controller;
-		const execution = Promise.resolve().then(() => this.executeStyriaRun(now, controller.signal));
+		const execution = Promise.resolve()
+			.then(() => this.executeStyriaRun(now, controller.signal))
+			.catch((error) => {
+				this.enqueueFailureAlert('SCHEDULER_FAILED', STYRIA_SYNC_JOB_NAME, now);
+				throw error;
+			});
 		const trackedRun = execution.finally(() => {
 			if (this.activeStyriaRun === trackedRun) {
 				this.activeStyriaRun = undefined;
@@ -188,7 +246,12 @@ export class OutboxScheduler implements Scheduler {
 
 		const controller = new AbortController();
 		this.activeRunController = controller;
-		const execution = Promise.resolve().then(() => this.executeRun(now, controller.signal));
+		const execution = Promise.resolve()
+			.then(() => this.executeRun(now, controller.signal))
+			.catch((error) => {
+				this.enqueueFailureAlert('SCHEDULER_FAILED', OUTBOX_JOB_NAME, now);
+				throw error;
+			});
 		const trackedRun = execution.finally(() => {
 			if (this.activeRun === trackedRun) {
 				this.activeRun = undefined;
@@ -235,6 +298,34 @@ export class OutboxScheduler implements Scheduler {
 		if (this.reportedBackupRuns.has(run)) return;
 		this.reportedBackupRuns.add(run);
 		void run.catch(() => this.reportError(BACKUP_ERROR_CODE));
+	}
+
+	private scheduleNextOperationalChecks(): void {
+		if (
+			!this.acceptingScheduledRuns ||
+			!this.options.operationalChecks ||
+			this.operationalChecksTimer
+		) {
+			return;
+		}
+		const delayMs = millisecondsUntilNextOperationalChecks(this.clock());
+		const handle = this.scheduleOperationalChecks(() => {
+			if (this.operationalChecksTimer !== handle) return;
+			this.operationalChecksTimer = undefined;
+			if (!this.acceptingScheduledRuns) return;
+			this.scheduleNextOperationalChecks();
+			this.launchScheduledOperationalChecksRun();
+		}, delayMs);
+		this.operationalChecksTimer = handle;
+		handle.unref?.();
+	}
+
+	private launchScheduledOperationalChecksRun(): void {
+		if (!this.acceptingScheduledRuns || !this.options.operationalChecks) return;
+		const run = this.runOperationalChecksOnce();
+		if (this.reportedOperationalChecksRuns.has(run)) return;
+		this.reportedOperationalChecksRuns.add(run);
+		void run.catch(() => this.reportError(OPERATIONAL_CHECKS_ERROR_CODE));
 	}
 
 	private async executeRun(now: Date, signal: AbortSignal): Promise<void> {
@@ -344,6 +435,47 @@ export class OutboxScheduler implements Scheduler {
 		}
 	}
 
+	private async executeOperationalChecksRun(now: Date, signal: AbortSignal): Promise<void> {
+		if (
+			!this.options.leases.acquire(
+				OPERATIONAL_CHECKS_JOB_NAME,
+				this.options.ownerId,
+				now,
+				OPERATIONAL_CHECKS_LEASE_TTL_MS
+			)
+		) {
+			return;
+		}
+
+		let runId: number | undefined;
+		try {
+			const insert = this.options.database
+				.prepare(
+					`INSERT INTO job_runs (name, owner_id, started_at)
+					VALUES (?, ?, ?)`
+				)
+				.run(OPERATIONAL_CHECKS_JOB_NAME, this.options.ownerId, now.toISOString());
+			runId = Number(insert.lastInsertRowid);
+			await this.options.operationalChecks?.run(now, signal);
+			this.finishRun(runId, this.clock(), 'completed', null);
+		} catch (error) {
+			if (runId !== undefined) {
+				this.finishRun(runId, this.clock(), 'failed', OPERATIONAL_CHECKS_ERROR_CODE);
+			}
+			throw error;
+		} finally {
+			this.options.leases.release(OPERATIONAL_CHECKS_JOB_NAME, this.options.ownerId);
+		}
+	}
+
+	private enqueueFailureAlert(code: AlertCode, subjectId: string, now: Date): void {
+		try {
+			this.options.alerts?.enqueueAlert(code, subjectId, now);
+		} catch {
+			// Alert persistence failure must not recurse or replace the scheduler's stable result.
+		}
+	}
+
 	private finishRun(
 		runId: number,
 		finishedAt: Date,
@@ -363,6 +495,14 @@ export class OutboxScheduler implements Scheduler {
 function millisecondsUntilNextBackup(now: Date): number {
 	const next = new Date(
 		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 2, 30, 0, 0)
+	);
+	if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+	return next.getTime() - now.getTime();
+}
+
+function millisecondsUntilNextOperationalChecks(now: Date): number {
+	const next = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 0, 0, 0)
 	);
 	if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
 	return next.getTime() - now.getTime();

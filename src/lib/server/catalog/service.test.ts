@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type Stripe from 'stripe';
 import type { CatalogSnapshot } from '$lib/domain/catalog';
 import {
@@ -499,5 +499,33 @@ describe('createCatalogService', () => {
 		await expect(
 			service.resolveCart([{ priceId: 'price_missing', quantity: 1 }])
 		).rejects.toThrowError('CATALOG_VARIANT_UNAVAILABLE');
+	});
+
+	it('alerts a provider outage without changing unavailable or recovered catalog behavior', async () => {
+		const alerts = { enqueueAlert: vi.fn() };
+		const gateway = {
+			loadMerchCatalog: vi
+				.fn()
+				.mockRejectedValueOnce(new Error('private Stripe response and stack'))
+				.mockResolvedValue({
+					products: [],
+					diagnostics: [],
+					loadedAt: new Date(STRIPE_CATALOG_LOADED_AT),
+					stale: false
+				}),
+			resolveVariants: vi.fn()
+		};
+		const observedAt = new Date(STRIPE_CATALOG_LOADED_AT);
+		const service = createCatalogService(gateway, { clock: () => observedAt }, alerts);
+
+		await expect(service.listPublic()).rejects.toThrow('CATALOG_UNAVAILABLE');
+		expect(alerts.enqueueAlert).toHaveBeenCalledWith(
+			'CATALOG_UNAVAILABLE',
+			'stripe-catalog',
+			observedAt
+		);
+		alerts.enqueueAlert.mockClear();
+		await expect(service.listPublic()).resolves.toEqual({ products: [], stale: false });
+		expect(alerts.enqueueAlert).not.toHaveBeenCalled();
 	});
 });

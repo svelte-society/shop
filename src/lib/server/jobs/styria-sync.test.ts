@@ -8,6 +8,7 @@ import { SqliteFulfillmentRepository } from '$lib/server/fulfillment/repository.
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import { StyriaError } from '$lib/server/styria/gateway';
 import type { StyriaOrder } from '$lib/server/styria/types';
+import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { SqliteStyriaSyncJob } from './styria-sync.server';
 
 const migrationsDirectory = resolve('migrations');
@@ -133,6 +134,46 @@ afterEach(() => {
 });
 
 describe('SqliteStyriaSyncJob', () => {
+	it('alerts review-required transitions and tracked-but-unsent delivery without provider retry data', async () => {
+		insertOrder(database, { id: 'review_transition', fulfillmentStatus: 'in_production' });
+		const outbox = new SqliteOutboxRepository(database);
+		const job = new SqliteStyriaSyncJob({
+			database,
+			styria: gateway(
+				vi.fn(async (id) => providerOrder(id, 'unknown-private-provider-status', 'TRACK-PRIVATE'))
+			),
+			fulfillment: new SqliteFulfillmentRepository(database),
+			outbox,
+			alerts: new SqliteAlertService(outbox)
+		});
+
+		await job.run(now);
+		expect(
+			database
+				.prepare(
+					"SELECT idempotency_key FROM outbox_jobs WHERE kind = 'operational-alert' ORDER BY id"
+				)
+				.all()
+		).toEqual([
+			{
+				idempotency_key: 'alert:STYRIA_REVIEW_REQUIRED:review_transition:2026-07-17T12'
+			},
+			{
+				idempotency_key: 'alert:SHIPPING_EMAIL_UNSENT:review_transition:2026-07-17T12'
+			}
+		]);
+		expect(
+			JSON.stringify(
+				database.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'").all()
+			)
+		).not.toContain('TRACK-PRIVATE');
+		expect(
+			JSON.stringify(
+				database.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'").all()
+			)
+		).not.toContain('unknown-private-provider-status');
+	});
+
 	it('polls only non-terminal orders, maps current states, and retains state when Styria is unavailable', async () => {
 		insertOrder(database, { id: 'production' });
 		insertOrder(database, {

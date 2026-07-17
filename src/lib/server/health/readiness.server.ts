@@ -4,6 +4,7 @@ import { backupEncryptionKeyIsValid } from '$lib/server/backups/format';
 import { s3BackupStoreOptionsAreValid } from '$lib/server/backups/s3.server';
 import { applicationLifecycle, type ApplicationRuntime } from '$lib/server/app.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import { enqueueAlert, type AlertService } from '$lib/server/monitoring/alerts.server';
 import * as v from 'valibot';
 import {
 	open as openFile,
@@ -63,6 +64,8 @@ export type ReadinessDependencies = {
 	statFileSystem?: (path: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
 	unlinkFile?: (path: string) => Promise<void>;
 	randomId?: () => string;
+	alerts?: AlertService;
+	clock?: () => Date;
 };
 
 function exactValue(environment: Record<string, string | undefined>, name: string): boolean {
@@ -267,6 +270,19 @@ export function createReadinessChecker(
 	const inspectFileSystem = dependencies.statFileSystem ?? ((path: string) => statFileSystem(path));
 	const remove = dependencies.unlinkFile ?? ((path: string) => unlinkFile(path));
 	const randomId = dependencies.randomId ?? randomUUID;
+	const alerts = dependencies.alerts ?? { enqueueAlert };
+	const clock = dependencies.clock ?? (() => new Date());
+
+	function notifyLocalFailure(
+		code: 'DISK_LOW' | 'SQLITE_NOT_READY',
+		subjectId: 'data-volume' | 'shop-database'
+	): void {
+		try {
+			alerts.enqueueAlert(code, subjectId, clock());
+		} catch {
+			// Readiness is local-only and must never depend on outbox or Plunk availability.
+		}
+	}
 
 	return async (): Promise<ReadinessResult> => {
 		const context = dependencies.getRuntime();
@@ -373,6 +389,10 @@ export function createReadinessChecker(
 			volume,
 			disk
 		};
+		if (disk === 'low') notifyLocalFailure('DISK_LOW', 'data-volume');
+		if (databaseCheck !== 'ok' || migrations !== 'ok' || volume !== 'ok') {
+			notifyLocalFailure('SQLITE_NOT_READY', 'shop-database');
+		}
 		return {
 			ready:
 				Object.values(checks).every((status) => status === 'ok') &&

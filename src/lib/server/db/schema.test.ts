@@ -129,7 +129,10 @@ const expectedColumns = {
 		column('attempt_count', 'INTEGER', 1, '0'),
 		column('next_attempt_at', 'TEXT', 1),
 		column('completed_at', 'TEXT', 0),
-		column('last_error_code', 'TEXT', 0)
+		column('last_error_code', 'TEXT', 0),
+		column('alert_code', 'TEXT', 0),
+		column('alert_subject_id', 'TEXT', 0),
+		column('alert_observed_at', 'TEXT', 0)
 	],
 	email_deliveries: [
 		column('id', 'INTEGER', 0, null, 1),

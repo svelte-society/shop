@@ -15,9 +15,13 @@ import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
+import type { OperationalChecksJob } from './stale-orders.server';
+import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
+import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import { SqliteLeaseRepository } from './leases.server';
 import {
 	BACKUP_JOB_NAME,
+	OPERATIONAL_CHECKS_JOB_NAME,
 	OUTBOX_JOB_NAME,
 	OutboxScheduler,
 	STYRIA_SYNC_JOB_NAME,
@@ -432,7 +436,7 @@ describe('application runtime', () => {
 		expect(bootstrapRuntime?.scheduler).toBeNull();
 		expect(
 			bootstrapRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
-		).toHaveLength(3);
+		).toHaveLength(4);
 		await bootstrap.stop();
 
 		const production = createApplicationLifecycle({ migrationsDirectory });
@@ -449,7 +453,7 @@ describe('application runtime', () => {
 		expect(productionRuntime?.database.open).toBe(true);
 		expect(
 			productionRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
-		).toHaveLength(3);
+		).toHaveLength(4);
 		await production.stop();
 	});
 
@@ -471,7 +475,8 @@ describe('application runtime', () => {
 		expect(runtime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
 			{ name: '0001_initial.sql' },
 			{ name: '0002_support_note_text.sql' },
-			{ name: '0003_styria_sync_cursor.sql' }
+			{ name: '0003_styria_sync_cursor.sql' },
+			{ name: '0004_operational_alert_metadata.sql' }
 		]);
 		await application.stop();
 		expect(application.current()).toBeNull();
@@ -491,7 +496,7 @@ describe('application runtime', () => {
 		expect(runtime?.scheduler).toBeNull();
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 3
+			count: 4
 		});
 		await application.stop();
 	});
@@ -1466,5 +1471,153 @@ describe('OutboxScheduler', () => {
 		await stopping;
 		expect(stopped).toBe(true);
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+	});
+
+	it('runs daily operational checks at 03:00 UTC under one lease and recalculates across rollover', async () => {
+		const timers = timerHarness();
+		let current = new Date('2026-12-31T23:00:00.000Z');
+		const operationalChecks: OperationalChecksJob = {
+			run: vi.fn(async (_runAt, signal) => {
+				expect(signal).toBeInstanceOf(AbortSignal);
+				expect(
+					database
+						.prepare('SELECT owner_id FROM job_leases WHERE name = ?')
+						.get(OPERATIONAL_CHECKS_JOB_NAME)
+				).toEqual({ owner_id: 'scheduler-operations-owner' });
+				return {
+					pendingReview: 0,
+					reviewRequired: 0,
+					shippingUnsent: 0,
+					backupMissed: false,
+					diskLow: false,
+					sqliteNotReady: false
+				};
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks,
+			enabled: true,
+			ownerId: 'scheduler-operations-owner',
+			clock: () => current,
+			schedule: timers.schedule,
+			scheduleBackup: timers.schedule,
+			scheduleOperationalChecks: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		expect(timers.handles(4 * 60 * 60_000)).toHaveLength(1);
+		current = new Date('2027-01-01T03:00:00.000Z');
+		timers.fire(4 * 60 * 60_000);
+		await scheduler.runOperationalChecksOnce();
+
+		expect(operationalChecks.run).toHaveBeenCalledOnce();
+		expect(timers.handles(24 * 60 * 60_000)).toHaveLength(1);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(
+			database
+				.prepare('SELECT name, result, error_code FROM job_runs WHERE name = ?')
+				.all(OPERATIONAL_CHECKS_JOB_NAME)
+		).toEqual([{ name: OPERATIONAL_CHECKS_JOB_NAME, result: 'completed', error_code: null }]);
+		await scheduler.stop();
+	});
+
+	it('coalesces operational checks, aborts and settles them on shutdown', async () => {
+		const timers = timerHarness();
+		let receivedSignal: AbortSignal | undefined;
+		const operationalChecks: OperationalChecksJob = {
+			run: vi.fn(
+				(_runAt, signal): ReturnType<OperationalChecksJob['run']> =>
+					new Promise((_, reject) => {
+						receivedSignal = signal;
+						signal?.addEventListener('abort', () => reject(new Error('checks aborted')), {
+							once: true
+						});
+					})
+			)
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			operationalChecks,
+			enabled: true,
+			ownerId: 'scheduler-operations-shutdown',
+			clock: () => initialNow,
+			schedule: timers.schedule,
+			scheduleOperationalChecks: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		scheduler.start();
+		const active = scheduler.runOperationalChecksOnce();
+		const overlapping = scheduler.runOperationalChecksOnce();
+		await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+		const stopping = scheduler.stop();
+
+		expect(receivedSignal?.aborted).toBe(true);
+		await expect(active).rejects.toThrow('checks aborted');
+		await expect(overlapping).rejects.toThrow('checks aborted');
+		await stopping;
+		expect(operationalChecks.run).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+	});
+
+	it('durably alerts backup and scheduler failures without recursive failure storms', async () => {
+		const alerts = new SqliteAlertService(new SqliteOutboxRepository(database));
+		const backup: BackupService = {
+			run: vi.fn(async () => {
+				throw new Error('private storage credential and stack');
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			backup,
+			alerts,
+			enabled: true,
+			ownerId: 'scheduler-alert-failure',
+			clock: () => initialNow
+		});
+
+		await expect(scheduler.runBackupOnce()).rejects.toThrow('private storage credential and stack');
+		expect(
+			database
+				.prepare(
+					"SELECT idempotency_key FROM outbox_jobs WHERE kind = 'operational-alert' ORDER BY id"
+				)
+				.all()
+		).toEqual([
+			{ idempotency_key: 'alert:BACKUP_FAILED:daily-backup:2026-07-16T08' },
+			{ idempotency_key: 'alert:SCHEDULER_FAILED:backup:2026-07-16T08' }
+		]);
+		expect(JSON.stringify(database.prepare('SELECT * FROM outbox_jobs').all())).not.toContain(
+			'private storage credential'
+		);
+
+		const failingAlerts = {
+			enqueueAlert: vi.fn(() => {
+				throw new Error('alert db failure');
+			})
+		};
+		const stormSafe = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: {
+				drain: vi.fn(async () => {
+					throw new Error('worker failure');
+				})
+			},
+			alerts: failingAlerts,
+			enabled: true,
+			ownerId: 'scheduler-alert-storm-safe',
+			clock: () => initialNow
+		});
+		await expect(stormSafe.runOutboxOnce()).rejects.toThrow('worker failure');
+		expect(failingAlerts.enqueueAlert).toHaveBeenCalledOnce();
 	});
 });

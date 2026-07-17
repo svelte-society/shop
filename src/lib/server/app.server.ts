@@ -15,8 +15,10 @@ import { SqliteFulfillmentRepository } from '$lib/server/fulfillment/repository.
 import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
+import { SqliteOperationalChecksJob } from '$lib/server/jobs/stale-orders.server';
 import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
 import { log } from '$lib/server/logging/logger.server';
+import { configureAlertService, SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { createPlunkClient, PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import { createShippingEmailSender } from '$lib/server/plunk/shipping-email';
 import {
@@ -164,9 +166,11 @@ function requiredBoolean(environment: RuntimeEnvironment, name: string): boolean
 function createRuntimeScheduler(
 	database: ShopDatabase,
 	environment: RuntimeEnvironment,
-	createBackupStore: (options: S3BackupStoreOptions) => BackupStore
+	createBackupStore: (options: S3BackupStoreOptions) => BackupStore,
+	migrationsDirectory: string
 ): Scheduler {
 	const outbox = new SqliteOutboxRepository(database);
+	const alerts = new SqliteAlertService(outbox);
 	const plunk = createPlunkClient({
 		secretKey: requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY'),
 		baseUrl: environment.PLUNK_BASE_URL,
@@ -198,10 +202,11 @@ function createRuntimeScheduler(
 			},
 			replyTo: supportEmail
 		},
-		shipping: { stripe, sender, supportEmail }
+		shipping: { stripe, sender, supportEmail },
+		alerts
 	});
 	const fulfillment = new SqliteFulfillmentRepository(database);
-	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox });
+	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
 	const backupStore = createBackupStore({
 		endpoint: requiredEnvironmentValue(environment, 'S3_ENDPOINT'),
 		region: requiredEnvironmentValue(environment, 'S3_REGION'),
@@ -217,6 +222,23 @@ function createRuntimeScheduler(
 		prefix: requiredEnvironmentValue(environment, 'S3_PREFIX'),
 		temporaryDirectory: environment.TMPDIR ?? tmpdir()
 	});
+	const operationalChecks = new SqliteOperationalChecksJob({
+		database,
+		alerts,
+		async readiness() {
+			const readiness = await import('$lib/server/health/readiness.server');
+			return readiness.checkRuntimeReadiness(
+				{
+					database,
+					scheduler: null,
+					databasePath: requiredEnvironmentValue(environment, 'DATABASE_PATH'),
+					migrationsDirectory,
+					environment
+				},
+				{ ignoreSchedulerLatch: true }
+			);
+		}
+	});
 
 	return new OutboxScheduler({
 		database,
@@ -224,6 +246,8 @@ function createRuntimeScheduler(
 		worker,
 		styriaSync,
 		backup,
+		operationalChecks,
+		alerts,
 		enabled: true,
 		ownerId: randomUUID()
 	});
@@ -239,7 +263,8 @@ export function createApplicationLifecycle(
 	const createBackupStore = dependencies.createBackupStore ?? createS3BackupStore;
 	const createScheduler =
 		dependencies.createScheduler ??
-		((database, environment) => createRuntimeScheduler(database, environment, createBackupStore));
+		((database, environment) =>
+			createRuntimeScheduler(database, environment, createBackupStore, migrationsDirectory));
 	const checkReadiness = dependencies.checkReadiness ?? checkRuntimeReadiness;
 	const scheduleActivation = dependencies.scheduleSchedulerActivation ?? scheduleAfter;
 	const cancelActivation = dependencies.cancelSchedulerActivation ?? cancelScheduled;
@@ -251,6 +276,7 @@ export function createApplicationLifecycle(
 	let activation: Promise<void> | null = null;
 	let activationTimer: ApplicationTimerHandle | undefined;
 	let acceptingActivation = false;
+	let clearAlertService: (() => void) | null = null;
 
 	const cancelActivationTimer = (): void => {
 		if (!activationTimer) return;
@@ -339,6 +365,10 @@ export function createApplicationLifecycle(
 		const database = open(databasePath, { fileMustExist: !bootstrap });
 		try {
 			applyMigrations(database, migrationsDirectory);
+			clearAlertService?.();
+			clearAlertService = configureAlertService(
+				new SqliteAlertService(new SqliteOutboxRepository(database))
+			);
 			runtime = {
 				database,
 				scheduler: null,
@@ -353,6 +383,8 @@ export function createApplicationLifecycle(
 			acceptingActivation = false;
 			cancelActivationTimer();
 			runtime = null;
+			clearAlertService?.();
+			clearAlertService = null;
 			close();
 			throw error;
 		}
@@ -401,6 +433,8 @@ export function createApplicationLifecycle(
 				}
 				close();
 				runtime = null;
+				clearAlertService?.();
+				clearAlertService = null;
 				try {
 					reportShutdown('database_closed', { schedulerActive });
 				} catch {

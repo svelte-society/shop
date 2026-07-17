@@ -20,6 +20,7 @@ import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { createStyriaClient, type StyriaClientOptions } from '$lib/server/styria/client.server';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import type { McpServices } from './server';
+import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
@@ -74,6 +75,7 @@ export function createRuntimeMcpServices(
 	});
 	const approvals = new SqliteApprovalRepository(database);
 	const outbox = new SqliteOutboxRepository(database);
+	const alerts = new SqliteAlertService(outbox);
 	const brandName = requiredEnvironmentValue(environment, 'STYRIA_BRAND_NAME');
 	const plunkSecretKey = requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY');
 	const plunk = dependencies.createPlunkGateway
@@ -84,7 +86,7 @@ export function createRuntimeMcpServices(
 		name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
 		email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
 	});
-	const status = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox });
+	const status = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
 	const shipping = new SqliteShippingEmailService({
 		database,
 		outbox,
@@ -103,7 +105,7 @@ export function createRuntimeMcpServices(
 		fulfillment,
 		stripe,
 		preparation: new FulfillmentPreparationService({ ...shared, approvals }),
-		submission: new FulfillmentSubmissionService({ ...shared, styria }),
+		submission: new FulfillmentSubmissionService({ ...shared, styria, alerts }),
 		reconciliation: new StyriaReconciliationService({ fulfillment, styria }),
 		status,
 		shipping

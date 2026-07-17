@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type Stripe from 'stripe';
 import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
 import type { CheckoutDraft, CheckoutDraftWithLines, NewCheckoutDraft } from '$lib/domain/orders';
@@ -10,6 +10,7 @@ import {
 	type StripeCheckoutClient
 } from '$lib/server/stripe/checkout.server';
 import type { CreateCheckoutInput, StripeCheckoutGateway } from '$lib/server/stripe/gateway';
+import type { AlertService } from '$lib/server/monitoring/alerts.server';
 import { CHECKOUT_CONTRACT_VERSION, CheckoutError, createCheckoutService } from './service.server';
 
 const NOW = new Date('2026-07-16T10:00:00.000Z');
@@ -136,6 +137,7 @@ function serviceFixture(
 		resolveFailure?: Error;
 		drafts?: RecordingDraftRepository;
 		stripe?: RecordingStripeGateway;
+		alerts?: AlertService;
 	} = {}
 ) {
 	const resolveInputs: Array<Array<{ priceId: string; quantity: number }>> = [];
@@ -155,7 +157,8 @@ function serviceFixture(
 		paidShippingRateId: 'shr_paid_10_eur',
 		freeShippingRateId: 'shr_free',
 		productionOrigin: ORIGIN,
-		clock: () => new Date(NOW)
+		clock: () => new Date(NOW),
+		alerts: options.alerts
 	});
 
 	return { service, resolveInputs, drafts, stripe };
@@ -192,6 +195,23 @@ describe('createCheckoutService', () => {
 			'CHECKOUT_VARIANT_UNAVAILABLE'
 		);
 
+		expect(drafts.creates).toEqual([]);
+		expect(stripe.creations).toEqual([]);
+	});
+
+	it('alerts an unexpected checkout-time catalog provider outage with no cart details', async () => {
+		const alerts = { enqueueAlert: vi.fn() };
+		const { service, drafts, stripe } = serviceFixture({
+			resolveFailure: new Error('private catalog provider response and stack'),
+			alerts
+		});
+
+		await expectCheckoutCode(
+			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			'CHECKOUT_CATALOG_UNAVAILABLE'
+		);
+		expect(alerts.enqueueAlert).toHaveBeenCalledWith('CHECKOUT_UNAVAILABLE', 'catalog', NOW);
+		expect(JSON.stringify(alerts.enqueueAlert.mock.calls)).not.toContain(medium.priceId);
 		expect(drafts.creates).toEqual([]);
 		expect(stripe.creations).toEqual([]);
 	});
@@ -301,9 +321,10 @@ describe('createCheckoutService', () => {
 	});
 
 	it('does not attach when Stripe times out or fails', async () => {
+		const alerts = { enqueueAlert: vi.fn() };
 		const stripe = new RecordingStripeGateway();
 		stripe.createFailure = new Error('Connection timed out for sk_test_secret');
-		const { service, drafts } = serviceFixture({ stripe });
+		const { service, drafts } = serviceFixture({ stripe, alerts });
 
 		await expectCheckoutCode(
 			service.start([{ priceId: medium.priceId, quantity: 1 }]),
@@ -313,6 +334,26 @@ describe('createCheckoutService', () => {
 		expect(drafts.creates).toHaveLength(1);
 		expect(drafts.attachments).toEqual([]);
 		expect(stripe.expirations).toEqual([]);
+		expect(alerts.enqueueAlert).toHaveBeenCalledWith(
+			'CHECKOUT_UNAVAILABLE',
+			'stripe-checkout',
+			NOW
+		);
+	});
+
+	it('does not alert on expected request or retired-variant errors', async () => {
+		const alerts = { enqueueAlert: vi.fn() };
+		const { service } = serviceFixture({
+			resolveFailure: new Error('CATALOG_VARIANT_UNAVAILABLE'),
+			alerts
+		});
+
+		await expectCheckoutCode(service.start({ private: 'payload' }), 'CHECKOUT_REQUEST_INVALID');
+		await expectCheckoutCode(
+			service.start([{ priceId: 'retired_price', quantity: 1 }]),
+			'CHECKOUT_VARIANT_UNAVAILABLE'
+		);
+		expect(alerts.enqueueAlert).not.toHaveBeenCalled();
 	});
 
 	it('keeps the draft unattached when Stripe returns a malformed Checkout Session', async () => {

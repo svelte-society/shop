@@ -1,9 +1,16 @@
 import type { NewOutboxJob, OutboxJob } from '$lib/domain/orders';
 import { isStableErrorCode, RepositoryError } from '$lib/domain/orders';
 import type { ShopDatabase } from './types';
+import {
+	isOperationalAlertKey,
+	parseAlertIdempotencyKey,
+	type AlertCode,
+	type AlertRecord
+} from '$lib/server/monitoring/alerts.server';
 
 export interface OutboxRepository {
 	enqueue(input: NewOutboxJob): void;
+	enqueueOperationalAlert(input: OperationalAlertOutboxInput): void;
 	ensureShipping(orderId: string, trackingNumber: string, now: Date): boolean;
 	claimDue(now: Date, limit: number): OutboxJob[];
 	complete(id: number, now: Date): void;
@@ -16,6 +23,12 @@ export interface OutboxRepository {
 		outboxJobId?: number
 	): void;
 }
+
+export type OperationalAlertOutboxInput = NewOutboxJob & {
+	code: AlertCode;
+	subjectId: string;
+	observedAt: Date;
+};
 
 export type EmailDeliveryReference = {
 	orderId: string;
@@ -33,6 +46,9 @@ type OutboxRow = {
 	next_attempt_at: unknown;
 	completed_at: unknown;
 	last_error_code: unknown;
+	alert_code: unknown;
+	alert_subject_id: unknown;
+	alert_observed_at: unknown;
 };
 
 type EmailDeliveryRow = {
@@ -69,6 +85,12 @@ function dateFromIso(value: unknown, invalidCode: string): Date {
 }
 
 function mapJob(row: OutboxRow): OutboxJob {
+	const alertMetadataValid =
+		row.kind === 'operational-alert'
+			? isNonEmptyString(row.alert_code) &&
+				isNonEmptyString(row.alert_subject_id) &&
+				isNonEmptyString(row.alert_observed_at)
+			: row.alert_code === null && row.alert_subject_id === null && row.alert_observed_at === null;
 	if (
 		!Number.isSafeInteger(row.id) ||
 		(row.id as number) < 1 ||
@@ -77,7 +99,8 @@ function mapJob(row: OutboxRow): OutboxJob {
 		(row.order_id !== null && !isNonEmptyString(row.order_id)) ||
 		!Number.isSafeInteger(row.attempt_count) ||
 		(row.attempt_count as number) < 0 ||
-		(row.last_error_code !== null && !isStableErrorCode(row.last_error_code))
+		(row.last_error_code !== null && !isStableErrorCode(row.last_error_code)) ||
+		!alertMetadataValid
 	) {
 		fail('OUTBOX_ROW_INVALID');
 	}
@@ -95,12 +118,22 @@ function mapJob(row: OutboxRow): OutboxJob {
 	};
 }
 
-function validateNewJob(input: NewOutboxJob): string {
+function validateNewJob(input: NewOutboxJob, allowOperationalAlert = false): string {
 	if (
 		!input ||
 		!isNonEmptyString(input.kind) ||
 		!isNonEmptyString(input.idempotencyKey) ||
 		(input.orderId !== null && !isNonEmptyString(input.orderId))
+	) {
+		fail('OUTBOX_JOB_INVALID');
+	}
+	const usesAlertKey = input.idempotencyKey.startsWith('alert:');
+	if (
+		(input.kind === 'operational-alert' &&
+			(!allowOperationalAlert ||
+				input.orderId !== null ||
+				!isOperationalAlertKey(input.idempotencyKey))) ||
+		(input.kind !== 'operational-alert' && usesAlertKey)
 	) {
 		fail('OUTBOX_JOB_INVALID');
 	}
@@ -176,6 +209,60 @@ export class SqliteOutboxRepository implements OutboxRepository {
 				return;
 			}
 			insert.run(input.kind, input.idempotencyKey, input.orderId, nextAttemptAt);
+		});
+
+		try {
+			enqueueJob.immediate();
+		} catch (error) {
+			if (error instanceof RepositoryError) throw error;
+			fail('OUTBOX_ENQUEUE_FAILED');
+		}
+	}
+
+	enqueueOperationalAlert(input: OperationalAlertOutboxInput): void {
+		const nextAttemptAt = validateNewJob(input, true);
+		const observedAt = isoTimestamp(input.observedAt, 'OUTBOX_JOB_INVALID');
+		let parsed: AlertRecord;
+		try {
+			parsed = parseAlertIdempotencyKey(input.idempotencyKey);
+		} catch {
+			fail('OUTBOX_JOB_INVALID');
+		}
+		if (parsed.code !== input.code || parsed.subjectId !== input.subjectId) {
+			fail('OUTBOX_JOB_INVALID');
+		}
+		const observedBucket = input.observedAt
+			.toISOString()
+			.slice(0, input.code === 'ORDER_PENDING_REVIEW' || input.code === 'BACKUP_MISSED' ? 10 : 13);
+		const keyBucket = parsed.observedAt.toISOString().slice(0, observedBucket.length);
+		if (observedBucket !== keyBucket) fail('OUTBOX_JOB_INVALID');
+
+		const find = this.database.prepare('SELECT * FROM outbox_jobs WHERE idempotency_key = ?');
+		const insert = this.database.prepare(`
+			INSERT INTO outbox_jobs (
+				kind, idempotency_key, order_id, attempt_count,
+				next_attempt_at, completed_at, last_error_code,
+				alert_code, alert_subject_id, alert_observed_at
+			) VALUES ('operational-alert', ?, NULL, 0, ?, NULL, NULL, ?, ?, ?)
+		`);
+		const enqueueJob = this.database.transaction(() => {
+			const existing = find.get(input.idempotencyKey) as OutboxRow | undefined;
+			if (existing) {
+				const job = mapJob(existing);
+				if (
+					job.kind !== 'operational-alert' ||
+					job.orderId !== null ||
+					existing.alert_code !== input.code ||
+					existing.alert_subject_id !== input.subjectId
+				) {
+					fail('OUTBOX_IDEMPOTENCY_CONFLICT');
+				}
+				const existingObservedAt = dateFromIso(existing.alert_observed_at, 'OUTBOX_ROW_INVALID');
+				const existingBucket = existingObservedAt.toISOString().slice(0, observedBucket.length);
+				if (existingBucket !== observedBucket) fail('OUTBOX_IDEMPOTENCY_CONFLICT');
+				return;
+			}
+			insert.run(input.idempotencyKey, nextAttemptAt, input.code, input.subjectId, observedAt);
 		});
 
 		try {

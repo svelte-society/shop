@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { OrderEvent, OrderWithLines } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
 import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
@@ -10,6 +10,7 @@ import type { FulfillmentDetails, StripeFulfillmentGateway } from '$lib/server/s
 import { StyriaError, type StyriaGateway } from '$lib/server/styria/gateway';
 import { buildStyriaPayload, hashStyriaPayload } from '$lib/server/styria/payload';
 import type { StyriaOrder, StyriaOrderPayload } from '$lib/server/styria/types';
+import type { AlertService } from '$lib/server/monitoring/alerts.server';
 import {
 	FulfillmentSubmissionService,
 	RECONCILIATION_INSTRUCTION,
@@ -244,6 +245,7 @@ function setup(
 		fulfillment?: MemoryFulfillment;
 		stripe?: StripeFulfillmentGateway;
 		styria?: FakeStyria;
+		alerts?: AlertService;
 	} = {}
 ): {
 	service: FulfillmentSubmissionService;
@@ -262,7 +264,8 @@ function setup(
 		stripe,
 		styria,
 		brandName,
-		comment
+		comment,
+		alerts: overrides.alerts
 	};
 	return {
 		service: new FulfillmentSubmissionService(dependencies),
@@ -431,7 +434,8 @@ describe('fulfillment submission provider sequence', () => {
 	});
 
 	it('commits deterministic 4xx rejection to review_required', async () => {
-		const state = setup();
+		const alerts = { enqueueAlert: vi.fn() };
+		const state = setup({ alerts });
 		state.styria.createError = new StyriaError('STYRIA_REQUEST_REJECTED');
 
 		await expect(submit(state.service)).rejects.toMatchObject({
@@ -443,6 +447,7 @@ describe('fulfillment submission provider sequence', () => {
 		expect(state.styria.calls.filter((call) => call === 'create')).toHaveLength(1);
 		expect(state.fulfillment.order.fulfillmentStatus).toBe('review_required');
 		expect(state.fulfillment.lastErrorCode).toBe('STYRIA_REQUEST_REJECTED');
+		expect(alerts.enqueueAlert).toHaveBeenCalledWith('STYRIA_REVIEW_REQUIRED', 'order_submit', now);
 	});
 
 	it.each([

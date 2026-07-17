@@ -2,6 +2,12 @@ import type { OutboxJob } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
 import type { OutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import {
+	AlertError,
+	alertMessage,
+	loadOperationalAlert,
+	type AlertService
+} from '$lib/server/monitoring/alerts.server';
 import type { PlunkGateway } from '$lib/server/plunk/gateway';
 import { PlunkError } from '$lib/server/plunk/gateway';
 import { loadShippingOrder, type ShippingEmailSender } from '$lib/server/plunk/shipping-email';
@@ -36,6 +42,7 @@ export type PaidOrderAlertOutboxWorkerDependencies = {
 		sender: ShippingEmailSender;
 		supportEmail: string;
 	};
+	alerts?: AlertService;
 };
 
 type PaidOrderAlertRow = {
@@ -110,8 +117,11 @@ function stableErrorCode(error: unknown, job: OutboxJob): string {
 		error instanceof StripeFulfillmentError
 	)
 		return error.code;
+	if (error instanceof AlertError) return error.code;
 	if (error instanceof OutboxWorkerError) return error.code;
-	return job.kind === 'shipping-email' ? 'SHIPPING_EMAIL_FAILED' : 'PAID_ORDER_ALERT_FAILED';
+	if (job.kind === 'shipping-email') return 'SHIPPING_EMAIL_FAILED';
+	if (job.kind === 'operational-alert') return 'ALERT_EMAIL_FAILED';
+	return 'PAID_ORDER_ALERT_FAILED';
 }
 
 function shippingReference(job: OutboxJob, trackingNumber: string) {
@@ -161,6 +171,8 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 					throwIfAborted(signal);
 					if (job.kind === 'shipping-email') {
 						await this.sendShipping(job, now, signal);
+					} else if (job.kind === 'operational-alert') {
+						await this.sendOperationalAlert(job, now, signal);
 					} else {
 						await this.sendPaidOrderAlert(job, now, signal);
 					}
@@ -173,6 +185,13 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 						nextOutboxAttempt(now, attempt),
 						stableErrorCode(error, job)
 					);
+					if (job.kind === 'shipping-email' && attempt === 6 && job.orderId !== null) {
+						try {
+							this.dependencies.alerts?.enqueueAlert('SHIPPING_EMAIL_UNSENT', job.orderId, now);
+						} catch {
+							// The shipping job remains durable and hourly even if escalation persistence fails.
+						}
+					}
 					return 'rescheduled';
 				}
 			})
@@ -204,6 +223,25 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 			replyTo: this.dependencies.alertEmail.replyTo,
 			subject: PAID_ORDER_ALERT_SUBJECT,
 			html: paidOrderAlertHtml(order)
+		};
+		if (signal) await this.dependencies.plunk.send(message, signal);
+		else await this.dependencies.plunk.send(message);
+		throwIfAborted(signal);
+		this.dependencies.outbox.complete(job.id, now);
+	}
+
+	private async sendOperationalAlert(
+		job: OutboxJob,
+		now: Date,
+		signal?: AbortSignal
+	): Promise<void> {
+		const content = alertMessage(loadOperationalAlert(this.dependencies.database, job));
+		const message = {
+			to: this.dependencies.alertEmail.to,
+			from: this.dependencies.alertEmail.from,
+			replyTo: this.dependencies.alertEmail.replyTo,
+			subject: content.subject,
+			html: content.html
 		};
 		if (signal) await this.dependencies.plunk.send(message, signal);
 		else await this.dependencies.plunk.send(message);

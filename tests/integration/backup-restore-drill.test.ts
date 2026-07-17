@@ -551,7 +551,7 @@ describe('production-shaped backup and restore drill', () => {
 			count: 3
 		});
 		expect(database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 3
+			count: 4
 		});
 
 		const readiness = await checkRuntimeReadiness({

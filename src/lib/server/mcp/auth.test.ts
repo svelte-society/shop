@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { authorizeBearer } from './auth.server';
+import { authorizeBearer, createMcpAuthFailureMonitor } from './auth.server';
 
 const EXPECTED_TOKEN = 'expected.secret_123-~';
 
@@ -58,5 +58,47 @@ describe('authorizeBearer', () => {
 		expect(log).not.toHaveBeenCalled();
 		expect(warn).not.toHaveBeenCalled();
 		expect(error).not.toHaveBeenCalled();
+	});
+});
+
+describe('MCP authentication failure monitoring', () => {
+	it('alerts only after six non-sensitive failures in a bounded rolling hour', () => {
+		const onRepeatedFailure = vi.fn();
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+
+		for (let index = 0; index < 5; index += 1) {
+			monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+		}
+		expect(onRepeatedFailure).not.toHaveBeenCalled();
+		monitor.record(new Date('2026-07-17T08:05:00.000Z'));
+		expect(onRepeatedFailure).toHaveBeenCalledOnce();
+		expect(onRepeatedFailure).toHaveBeenCalledWith(new Date('2026-07-17T08:05:00.000Z'));
+
+		monitor.record(new Date('2026-07-17T08:06:00.000Z'));
+		expect(onRepeatedFailure).toHaveBeenCalledOnce();
+	});
+
+	it('clears recovered failures and permits a new alert in a later UTC hour', () => {
+		const onRepeatedFailure = vi.fn();
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+		for (let index = 0; index < 6; index += 1) {
+			monitor.record(new Date(`2026-07-17T08:0${index}:00.000Z`));
+		}
+		monitor.record(new Date('2026-07-17T10:00:00.000Z'));
+		expect(onRepeatedFailure).toHaveBeenCalledTimes(1);
+		for (let index = 1; index < 6; index += 1) {
+			monitor.record(new Date(`2026-07-17T10:0${index}:00.000Z`));
+		}
+		expect(onRepeatedFailure).toHaveBeenCalledTimes(2);
+	});
+
+	it('accepts only time and never retains request, token, address, agent, or tool data', () => {
+		const onRepeatedFailure = vi.fn();
+		const monitor = createMcpAuthFailureMonitor({ onRepeatedFailure });
+		expect(Object.keys(monitor)).toEqual(['record']);
+		expect(() => monitor.record(new Date(Number.NaN))).toThrowError(
+			'MCP_AUTH_FAILURE_TIME_INVALID'
+		);
+		expect(JSON.stringify(monitor)).not.toContain('Authorization');
 	});
 });

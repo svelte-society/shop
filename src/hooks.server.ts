@@ -8,7 +8,8 @@ import {
 	type ApplicationStartOptions
 } from '$lib/server/app.server';
 import { log, type LogEvent } from '$lib/server/logging/logger.server';
-import { authorizeBearer } from '$lib/server/mcp/auth.server';
+import { authorizeBearer, createMcpAuthFailureMonitor } from '$lib/server/mcp/auth.server';
+import { enqueueAlert, type AlertCode } from '$lib/server/monitoring/alerts.server';
 import {
 	SecurityBoundaryError,
 	createSecurityConfig,
@@ -208,6 +209,7 @@ type SecurityHandleOptions = {
 	now?: () => number;
 	requestId?: () => string;
 	emit?: (event: LogEvent) => void;
+	enqueueOperationalAlert?: (code: AlertCode, subjectId: string, now: Date) => void;
 };
 
 export function createSecurityHandle(
@@ -220,6 +222,12 @@ export function createSecurityHandle(
 	const now = options.now ?? Date.now;
 	const requestId = options.requestId ?? (() => crypto.randomUUID());
 	const emit = options.emit ?? log;
+	const enqueueOperationalAlert = options.enqueueOperationalAlert ?? enqueueAlert;
+	const mcpAuthFailures = createMcpAuthFailureMonitor({
+		onRepeatedFailure(observedAt) {
+			enqueueOperationalAlert('MCP_AUTH_REPEATED_FAILURE', 'mcp-auth', observedAt);
+		}
+	});
 
 	return async ({ event, resolve }) => {
 		const startedAt = now();
@@ -248,6 +256,7 @@ export function createSecurityHandle(
 				policy = authorized ? rateLimitPolicies.mcp : rateLimitPolicies.invalidMcpAuth;
 				keyPrefix = authorized ? 'mcp' : 'mcp-invalid-auth';
 				rejectMcpAuth = !authorized;
+				if (rejectMcpAuth) mcpAuthFailures.record(new Date(startedAt));
 			}
 
 			if (policy !== null) {

@@ -5,6 +5,7 @@ import type { NewCheckoutDraftLine } from '$lib/domain/orders';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import type { CheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import { CHECKOUT_CONTRACT_VERSION, type StripeCheckoutGateway } from '$lib/server/stripe/gateway';
+import { enqueueAlert, type AlertService } from '$lib/server/monitoring/alerts.server';
 
 export { CHECKOUT_CONTRACT_VERSION } from '$lib/server/stripe/gateway';
 
@@ -46,6 +47,7 @@ export type CheckoutServiceOptions = {
 	freeShippingRateId: string;
 	productionOrigin: URL;
 	clock?: () => Date;
+	alerts?: AlertService;
 };
 
 function parseCheckoutCart(input: unknown): CartLine[] {
@@ -98,10 +100,20 @@ function snapshotLine(item: ResolvedCartLine): NewCheckoutDraftLine {
 
 export function createCheckoutService(options: CheckoutServiceOptions): CheckoutService {
 	const clock = options.clock ?? (() => new Date());
+	const alerts = options.alerts ?? { enqueueAlert };
+
+	function notifyUnavailable(subjectId: 'catalog' | 'stripe-checkout', now: Date): void {
+		try {
+			alerts.enqueueAlert('CHECKOUT_UNAVAILABLE', subjectId, now);
+		} catch {
+			// Checkout remains fail-closed even when alert persistence is unavailable.
+		}
+	}
 
 	return {
 		async start(input: unknown): Promise<{ redirectUrl: string }> {
 			const lines = parseCheckoutCart(input);
+			const observedAt = clock();
 			let resolved: ResolvedCartLine[];
 
 			try {
@@ -111,11 +123,12 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 				if (error instanceof Error && error.message === 'CATALOG_VARIANT_UNAVAILABLE') {
 					throw new CheckoutError('CHECKOUT_VARIANT_UNAVAILABLE');
 				}
+				notifyUnavailable('catalog', observedAt);
 				throw new CheckoutError('CHECKOUT_CATALOG_UNAVAILABLE');
 			}
 
 			const shippingMode = selectShippingMode(lines);
-			const createdAt = clock();
+			const createdAt = observedAt;
 			let draft;
 
 			try {
@@ -148,6 +161,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 					cancelUrl: `${options.productionOrigin.origin}/checkout/cancel`
 				});
 			} catch {
+				notifyUnavailable('stripe-checkout', observedAt);
 				throw new CheckoutError('CHECKOUT_PROVIDER_UNAVAILABLE');
 			}
 

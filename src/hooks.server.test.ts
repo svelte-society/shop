@@ -292,6 +292,45 @@ describe('HTTP security hook', () => {
 		expect(await blocked.text()).not.toContain('private-token');
 	});
 
+	it('alerts after repeated invalid MCP auth without forwarding request secrets or client data', async () => {
+		const enqueueOperationalAlert = vi.fn();
+		let current = Date.parse('2026-07-17T08:00:00.000Z');
+		const handle = createSecurityHandle(SECURITY_ENV, {
+			production: true,
+			now: () => current,
+			requestId: () => 'req_repeated_invalid_auth',
+			emit: () => undefined,
+			enqueueOperationalAlert
+		});
+		const resolve = vi.fn(async () => new Response('must not resolve'));
+
+		for (let index = 0; index < 6; index += 1) {
+			current += 60_000;
+			const response = await handle({
+				event: securityEvent('/mcp', {
+					method: 'POST',
+					authorization: `Bearer private-token-${index}`,
+					sessionId: `private-session-${index}`,
+					clientAddress: `192.0.2.${index + 1}`
+				}),
+				resolve
+			} as unknown as Parameters<typeof handle>[0]);
+			expect(response.status).toBe(401);
+		}
+
+		expect(enqueueOperationalAlert).toHaveBeenCalledOnce();
+		expect(enqueueOperationalAlert).toHaveBeenCalledWith(
+			'MCP_AUTH_REPEATED_FAILURE',
+			'mcp-auth',
+			new Date(current)
+		);
+		const observable = JSON.stringify(enqueueOperationalAlert.mock.calls);
+		expect(observable).not.toContain('private-token');
+		expect(observable).not.toContain('private-session');
+		expect(observable).not.toContain('192.0.2.');
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
 	it.each([undefined, '', 'false', 'TRUE', 'True', '1', 'yes'])(
 		'bypasses MCP auth, address, session, and rate work unless MCP_ENABLED is exactly true (%j)',
 		async (enabled) => {

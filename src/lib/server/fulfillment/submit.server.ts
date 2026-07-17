@@ -7,6 +7,7 @@ import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { StyriaError, type StyriaGateway } from '$lib/server/styria/gateway';
 import { buildStyriaPayload, hashStyriaPayload } from '$lib/server/styria/payload';
 import type { StyriaOrder, StyriaOrderPayload } from '$lib/server/styria/types';
+import type { AlertService } from '$lib/server/monitoring/alerts.server';
 import { buildStyriaSubmissionEvidence, isConsistentStyriaOrder } from './reconcile.server';
 
 const AMBIGUOUS_ERROR_CODE = 'STYRIA_CREATE_AMBIGUOUS';
@@ -37,6 +38,7 @@ export type SubmissionDependencies = {
 	styria: StyriaGateway;
 	brandName: string;
 	comment: string;
+	alerts?: AlertService;
 };
 
 export class SubmissionError extends Error {
@@ -90,6 +92,11 @@ export class FulfillmentSubmissionService implements SubmissionService {
 			this.dependencies.fulfillment.requireReview(orderId, reviewCode, now);
 		} catch {
 			fail('FULFILLMENT_REVIEW_FAILED', instruction);
+		}
+		try {
+			this.dependencies.alerts?.enqueueAlert('STYRIA_REVIEW_REQUIRED', orderId, now);
+		} catch {
+			// The durable review state remains authoritative; the scheduled scan retries alerting.
 		}
 		fail(errorCode, instruction);
 	}

@@ -4,6 +4,7 @@ import { RepositoryError } from '$lib/domain/orders';
 import type { OutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
+import type { AlertService } from '$lib/server/monitoring/alerts.server';
 import { StyriaError, type StyriaGateway } from '$lib/server/styria/gateway';
 
 // Runtime configuration caps Styria calls at 10 seconds, so 100 sequential checks remain
@@ -37,6 +38,7 @@ export type SqliteStyriaSyncDependencies = {
 	styria: StyriaGateway;
 	fulfillment: Pick<FulfillmentRepository, 'inspect' | 'applyStyriaStatus'>;
 	outbox: OutboxRepository;
+	alerts?: AlertService;
 	clock?: () => Date;
 };
 
@@ -158,8 +160,14 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		throwIfAborted(signal);
 		const apply = this.dependencies.database.transaction(() => {
 			if (changed) this.dependencies.fulfillment.applyStyriaStatus(orderId, update, now);
+			if (next === 'review_required') {
+				this.enqueueAlert('STYRIA_REVIEW_REQUIRED', orderId, now);
+			}
 			if (trackingNumber !== null) {
 				shippingQueued = this.dependencies.outbox.ensureShipping(orderId, trackingNumber, now);
+				if (!this.shippingDelivered(orderId, trackingNumber)) {
+					this.enqueueAlert('SHIPPING_EMAIL_UNSENT', orderId, now);
+				}
 			}
 			this.markChecked(orderId, now);
 		});
@@ -182,11 +190,37 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		const record = this.dependencies.database.transaction(() => {
 			if (trackingNumber !== null) {
 				shippingQueued = this.dependencies.outbox.ensureShipping(orderId, trackingNumber, now);
+				if (!this.shippingDelivered(orderId, trackingNumber)) {
+					this.enqueueAlert('SHIPPING_EMAIL_UNSENT', orderId, now);
+				}
 			}
 			this.markChecked(orderId, now);
 		});
 		record.immediate();
 		return shippingQueued;
+	}
+
+	private shippingDelivered(orderId: string, trackingNumber: string): boolean {
+		return Boolean(
+			this.dependencies.database
+				.prepare(
+					`SELECT 1 FROM email_deliveries
+					 WHERE idempotency_key = ? AND completed_at IS NOT NULL LIMIT 1`
+				)
+				.get(`shipping:${orderId}:${trackingNumber}`)
+		);
+	}
+
+	private enqueueAlert(
+		code: 'STYRIA_REVIEW_REQUIRED' | 'SHIPPING_EMAIL_UNSENT',
+		orderId: string,
+		now: Date
+	): void {
+		try {
+			this.dependencies.alerts?.enqueueAlert(code, orderId, now);
+		} catch {
+			// Provider state and shipping recovery remain durable if alert persistence is unavailable.
+		}
 	}
 
 	private markChecked(orderId: string, now: Date): void {
