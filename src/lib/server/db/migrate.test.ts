@@ -200,4 +200,51 @@ describe('migrate', () => {
 			{ name: '0002_support_note_text.sql' }
 		]);
 	});
+
+	it('adds the nullable Styria sync cursor to existing orders without changing order state', () => {
+		const directory = temporaryDirectory();
+		writeFileSync(
+			join(directory, '0001_initial.sql'),
+			`CREATE TABLE orders (
+				id TEXT PRIMARY KEY,
+				fulfillment_status TEXT NOT NULL,
+				styria_status TEXT,
+				updated_at TEXT NOT NULL
+			);`
+		);
+		const database = openDatabase(':memory:');
+		migrate(database, directory);
+		database
+			.prepare(
+				`INSERT INTO orders (id, fulfillment_status, styria_status, updated_at)
+				VALUES ('order_existing', 'awaiting_vendor_payment', 'received',
+					'2026-07-17T09:00:00.000Z')`
+			)
+			.run();
+		writeFileSync(
+			join(directory, '0003_styria_sync_cursor.sql'),
+			readFileSync(join(initialMigrationsDirectory, '0003_styria_sync_cursor.sql'), 'utf8')
+		);
+
+		migrate(database, directory);
+
+		expect(
+			database
+				.prepare(
+					`SELECT id, fulfillment_status, styria_status, updated_at, styria_last_checked_at
+					FROM orders`
+				)
+				.get()
+		).toEqual({
+			id: 'order_existing',
+			fulfillment_status: 'awaiting_vendor_payment',
+			styria_status: 'received',
+			updated_at: '2026-07-17T09:00:00.000Z',
+			styria_last_checked_at: null
+		});
+		expect(database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
+			{ name: '0001_initial.sql' },
+			{ name: '0003_styria_sync_cursor.sql' }
+		]);
+	});
 });

@@ -77,7 +77,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 						)
 					)
 				)
-				ORDER BY o.updated_at, o.id
+				ORDER BY o.styria_last_checked_at, o.updated_at, o.id
 				LIMIT ?`
 			)
 			.all(SYNC_LIMIT) as CandidateRow[];
@@ -92,20 +92,24 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 			) {
 				fail('STYRIA_SYNC_ROW_INVALID');
 			}
-			if (
-				candidate.tracking_number !== null &&
-				this.dependencies.outbox.ensureShipping(candidate.id, candidate.tracking_number, now)
-			) {
-				shippingQueued += 1;
+			if (isTerminal(candidate.fulfillment_status)) {
+				if (this.recordHandled(candidate.id, candidate.tracking_number, now)) {
+					shippingQueued += 1;
+				}
+				continue;
 			}
-			if (isTerminal(candidate.fulfillment_status)) continue;
 			try {
 				const result = await this.check(candidate.id, now);
 				if (result.updated) updated += 1;
 				if (result.shippingQueued) shippingQueued += 1;
 			} catch (error) {
-				// Provider failures must not mutate local state. The next hourly run tries again.
-				if (error instanceof StyriaError) continue;
+				// Provider failures retain fulfillment state; a later fair rotation tries again.
+				if (error instanceof StyriaError) {
+					if (this.recordHandled(candidate.id, candidate.tracking_number, now)) {
+						shippingQueued += 1;
+					}
+					continue;
+				}
 				throw error;
 			}
 		}
@@ -138,6 +142,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 			if (trackingNumber !== null) {
 				shippingQueued = this.dependencies.outbox.ensureShipping(orderId, trackingNumber, now);
 			}
+			this.markChecked(orderId, now);
 		});
 		apply.immediate();
 
@@ -151,5 +156,31 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 			updated: changed,
 			shippingQueued
 		};
+	}
+
+	private recordHandled(orderId: string, trackingNumber: string | null, now: Date): boolean {
+		let shippingQueued = false;
+		const record = this.dependencies.database.transaction(() => {
+			if (trackingNumber !== null) {
+				shippingQueued = this.dependencies.outbox.ensureShipping(orderId, trackingNumber, now);
+			}
+			this.markChecked(orderId, now);
+		});
+		record.immediate();
+		return shippingQueued;
+	}
+
+	private markChecked(orderId: string, now: Date): void {
+		const result = this.dependencies.database
+			.prepare(
+				`UPDATE orders SET styria_last_checked_at =
+					CASE
+						WHEN styria_last_checked_at IS NULL OR styria_last_checked_at < ? THEN ?
+						ELSE styria_last_checked_at
+					END
+				WHERE id = ?`
+			)
+			.run(now.toISOString(), now.toISOString(), orderId);
+		if (result.changes !== 1) fail('STYRIA_SYNC_CURSOR_FAILED');
 	}
 }

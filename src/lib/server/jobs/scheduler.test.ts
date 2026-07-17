@@ -168,7 +168,8 @@ describe('application runtime', () => {
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
 			{ name: '0001_initial.sql' },
-			{ name: '0002_support_note_text.sql' }
+			{ name: '0002_support_note_text.sql' },
+			{ name: '0003_styria_sync_cursor.sql' }
 		]);
 		await application.stop();
 		expect(application.current()).toBeNull();
@@ -188,7 +189,7 @@ describe('application runtime', () => {
 		expect(runtime?.scheduler).toBeNull();
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 2
+			count: 3
 		});
 		await application.stop();
 	});
@@ -483,7 +484,7 @@ describe('OutboxScheduler', () => {
 		await scheduler.runOutboxOnce();
 
 		expect(worker.drain).toHaveBeenCalledOnce();
-		expect(worker.drain).toHaveBeenCalledWith(initialNow, 1);
+		expect(worker.drain).toHaveBeenCalledWith(initialNow, 3);
 		expect(timers.handles(60_000)).toHaveLength(1);
 		expect(timers.handles(60_000)[0].unref).toHaveBeenCalledOnce();
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
@@ -619,13 +620,13 @@ describe('OutboxScheduler', () => {
 		await scheduler.stop();
 	});
 
-	it('keeps one shipping job with Stripe retries plus Plunk inside the 55-second lease', async () => {
+	it('keeps three concurrent shipping jobs with Stripe retries plus Plunk inside the 55-second lease', async () => {
 		const timers = timerHarness();
 		let current = initialNow;
 		const boundedDrain = deferred<{ completed: number; rescheduled: number }>();
 		const worker: OutboxWorker = {
 			drain: vi.fn((_runAt, limit) => {
-				expect(limit).toBe(1);
+				expect(limit).toBe(3);
 				return boundedDrain.promise;
 			})
 		};

@@ -448,6 +448,73 @@ describe('shipping email outbox', () => {
 		expect(persisted).not.toContain('Analytical Engines');
 	});
 
+	it('settles three shipping jobs concurrently, isolates failure, and uses the shipping fallback code', async () => {
+		for (const id of ['concurrent_a', 'concurrent_fail', 'concurrent_c']) {
+			insertOrder(database, {
+				id,
+				quantities: [1],
+				fulfillmentStatus: 'shipped',
+				trackingNumber: `TRACK-${id}`
+			});
+			outbox.enqueue({
+				kind: 'shipping-email',
+				idempotencyKey: `shipping:${id}:TRACK-${id}`,
+				orderId: id,
+				nextAttemptAt: now
+			});
+		}
+		let release!: () => void;
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let active = 0;
+		let maximumActive = 0;
+		const sender: ShippingEmailSender = {
+			send: vi.fn(async (input) => {
+				active += 1;
+				maximumActive = Math.max(maximumActive, active);
+				await barrier;
+				active -= 1;
+				if (input.trackingNumber === 'TRACK-concurrent_fail') {
+					throw new Error('unexpected private shipping failure');
+				}
+				return { deliveryId: `plunk_${input.trackingNumber}` };
+			})
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender })
+		});
+
+		const draining = worker.drain(now, 3);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const startedBeforeRelease = vi.mocked(sender.send).mock.calls.length;
+		release();
+
+		await expect(draining).resolves.toEqual({ completed: 2, rescheduled: 1 });
+		expect(startedBeforeRelease).toBe(3);
+		expect(maximumActive).toBe(3);
+		expect(
+			database
+				.prepare(
+					`SELECT order_id, completed_at, last_error_code
+					FROM outbox_jobs ORDER BY order_id`
+				)
+				.all()
+		).toEqual([
+			{ order_id: 'concurrent_a', completed_at: now.toISOString(), last_error_code: null },
+			{ order_id: 'concurrent_c', completed_at: now.toISOString(), last_error_code: null },
+			{
+				order_id: 'concurrent_fail',
+				completed_at: null,
+				last_error_code: 'SHIPPING_EMAIL_FAILED'
+			}
+		]);
+	});
+
 	it('does not mark success before Plunk accepts and retries an interrupted local completion', async () => {
 		insertOrder(database, {
 			id: 'order_at_least_once',

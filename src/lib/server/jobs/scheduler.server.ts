@@ -8,9 +8,9 @@ export const STYRIA_SYNC_JOB_NAME = 'styria-sync';
 const OUTBOX_INTERVAL_MS = 60_000;
 const OUTBOX_LEASE_TTL_MS = 55_000;
 const OUTBOX_LEASE_HEARTBEAT_MS = 20_000;
-// A shipping job can spend up to three 10-second Stripe attempts plus one 10-second Plunk call.
-// One job keeps that worst case inside the 55-second outbox lease.
-const OUTBOX_DRAIN_LIMIT = 1;
+// Each shipping job can spend up to three 10-second Stripe attempts plus one 10-second Plunk call.
+// The worker settles these three jobs concurrently, keeping wall time inside the 55-second lease.
+const OUTBOX_DRAIN_LIMIT = 3;
 const OUTBOX_DRAIN_ERROR_CODE = 'OUTBOX_DRAIN_FAILED';
 const STYRIA_SYNC_INTERVAL_MS = 60 * 60_000;
 const STYRIA_SYNC_LEASE_TTL_MS = 55 * 60_000;

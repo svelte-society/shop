@@ -98,7 +98,7 @@ function loadPaidOrderAlert(database: ShopDatabase, job: OutboxJob): PaidOrderAl
 	};
 }
 
-function stableErrorCode(error: unknown): string {
+function stableErrorCode(error: unknown, job: OutboxJob): string {
 	if (
 		error instanceof PlunkError ||
 		error instanceof RepositoryError ||
@@ -106,7 +106,7 @@ function stableErrorCode(error: unknown): string {
 	)
 		return error.code;
 	if (error instanceof OutboxWorkerError) return error.code;
-	return 'PAID_ORDER_ALERT_FAILED';
+	return job.kind === 'shipping-email' ? 'SHIPPING_EMAIL_FAILED' : 'PAID_ORDER_ALERT_FAILED';
 }
 
 function shippingReference(job: OutboxJob, trackingNumber: string) {
@@ -143,30 +143,32 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 		limit = DEFAULT_BATCH_LIMIT
 	): Promise<{ completed: number; rescheduled: number }> {
 		const jobs = this.dependencies.outbox.claimDue(now, limit);
-		let completed = 0;
-		let rescheduled = 0;
-
-		for (const job of jobs) {
-			try {
-				if (job.kind === 'shipping-email') {
-					await this.sendShipping(job, now);
-				} else {
-					await this.sendPaidOrderAlert(job, now);
+		const outcomes = await Promise.all(
+			jobs.map(async (job): Promise<'completed' | 'rescheduled'> => {
+				try {
+					if (job.kind === 'shipping-email') {
+						await this.sendShipping(job, now);
+					} else {
+						await this.sendPaidOrderAlert(job, now);
+					}
+					return 'completed';
+				} catch (error) {
+					const attempt = job.attemptCount + 1;
+					this.dependencies.outbox.reschedule(
+						job.id,
+						attempt,
+						nextOutboxAttempt(now, attempt),
+						stableErrorCode(error, job)
+					);
+					return 'rescheduled';
 				}
-				completed += 1;
-			} catch (error) {
-				const attempt = job.attemptCount + 1;
-				this.dependencies.outbox.reschedule(
-					job.id,
-					attempt,
-					nextOutboxAttempt(now, attempt),
-					stableErrorCode(error)
-				);
-				rescheduled += 1;
-			}
-		}
+			})
+		);
 
-		return { completed, rescheduled };
+		return {
+			completed: outcomes.filter((outcome) => outcome === 'completed').length,
+			rescheduled: outcomes.filter((outcome) => outcome === 'rescheduled').length
+		};
 	}
 
 	private async sendPaidOrderAlert(job: OutboxJob, now: Date): Promise<void> {

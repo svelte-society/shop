@@ -199,6 +199,103 @@ describe('SqliteStyriaSyncJob', () => {
 				last_error_code: 'STYRIA_STATUS_REVIEW_REQUIRED'
 			}
 		]);
+		expect(
+			database
+				.prepare(
+					`SELECT id, styria_last_checked_at FROM orders
+					WHERE id IN ('production', 'unavailable', 'unknown') ORDER BY id`
+				)
+				.all()
+		).toEqual([
+			{ id: 'production', styria_last_checked_at: now.toISOString() },
+			{ id: 'unavailable', styria_last_checked_at: now.toISOString() },
+			{ id: 'unknown', styria_last_checked_at: now.toISOString() }
+		]);
+	});
+
+	it('durably rotates batches larger than 100 without changing unavailable provider state', async () => {
+		for (let index = 0; index < 101; index += 1) {
+			insertOrder(database, { id: `rotate_${String(index).padStart(3, '0')}` });
+		}
+		const get = vi.fn(async (orderId: string) => {
+			if (orderId.length === 0) throw new Error('TEST_ORDER_ID_MISSING');
+			throw new StyriaError('STYRIA_UNAVAILABLE');
+		});
+		const job = new SqliteStyriaSyncJob({
+			database,
+			styria: gateway(get),
+			fulfillment: new SqliteFulfillmentRepository(database),
+			outbox: new SqliteOutboxRepository(database)
+		});
+
+		await expect(job.run(now)).resolves.toEqual({ checked: 100, updated: 0, shippingQueued: 0 });
+		expect(get).toHaveBeenCalledTimes(100);
+		expect(get.mock.calls[0][0]).toBe('styria_rotate_000');
+		expect(get.mock.calls[99][0]).toBe('styria_rotate_099');
+		expect(
+			database
+				.prepare(
+					`SELECT fulfillment_status, styria_status, styria_last_checked_at
+					FROM orders WHERE id = 'rotate_100'`
+				)
+				.get()
+		).toEqual({
+			fulfillment_status: 'awaiting_vendor_payment',
+			styria_status: 'received',
+			styria_last_checked_at: null
+		});
+
+		const nextHour = new Date(now.getTime() + 60 * 60_000);
+		get.mockClear();
+		await expect(job.run(nextHour)).resolves.toEqual({
+			checked: 100,
+			updated: 0,
+			shippingQueued: 0
+		});
+		expect(get).toHaveBeenCalledTimes(100);
+		expect(get.mock.calls[0][0]).toBe('styria_rotate_100');
+		expect(
+			database
+				.prepare(
+					`SELECT fulfillment_status, styria_status, styria_last_checked_at
+					FROM orders WHERE id = 'rotate_100'`
+				)
+				.get()
+		).toEqual({
+			fulfillment_status: 'awaiting_vendor_payment',
+			styria_status: 'received',
+			styria_last_checked_at: nextHour.toISOString()
+		});
+	});
+
+	it('does not advance the durable cursor when a candidate crashes before handling completes', async () => {
+		insertOrder(database, { id: 'crash_retry' });
+		const get = vi
+			.fn<StyriaGateway['get']>()
+			.mockRejectedValueOnce(new Error('unexpected local crash'))
+			.mockRejectedValueOnce(new StyriaError('STYRIA_UNAVAILABLE'));
+		const job = new SqliteStyriaSyncJob({
+			database,
+			styria: gateway(get),
+			fulfillment: new SqliteFulfillmentRepository(database),
+			outbox: new SqliteOutboxRepository(database)
+		});
+
+		await expect(job.run(now)).rejects.toThrow('unexpected local crash');
+		expect(
+			database.prepare("SELECT styria_last_checked_at FROM orders WHERE id = 'crash_retry'").get()
+		).toEqual({ styria_last_checked_at: null });
+
+		const nextHour = new Date(now.getTime() + 60 * 60_000);
+		await expect(job.run(nextHour)).resolves.toEqual({
+			checked: 1,
+			updated: 0,
+			shippingQueued: 0
+		});
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(
+			database.prepare("SELECT styria_last_checked_at FROM orders WHERE id = 'crash_retry'").get()
+		).toEqual({ styria_last_checked_at: nextHour.toISOString() });
 	});
 
 	it('updates tracking and enqueues the exact shipping key atomically and idempotently', async () => {
@@ -285,6 +382,9 @@ describe('SqliteStyriaSyncJob', () => {
 			updated_at: '2026-07-17T10:00:00.000Z'
 		});
 		expect(database.prepare('SELECT * FROM order_events').all()).toEqual([]);
+		expect(
+			database.prepare("SELECT styria_last_checked_at FROM orders WHERE id = 'atomic'").get()
+		).toEqual({ styria_last_checked_at: null });
 	});
 
 	it('recovers existing tracking without polling and skips a matching completed delivery', async () => {
@@ -331,5 +431,8 @@ describe('SqliteStyriaSyncJob', () => {
 				order_id: 'recover'
 			}
 		]);
+		expect(
+			database.prepare("SELECT styria_last_checked_at FROM orders WHERE id = 'recover'").get()
+		).toEqual({ styria_last_checked_at: now.toISOString() });
 	});
 });

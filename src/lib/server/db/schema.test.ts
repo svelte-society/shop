@@ -74,7 +74,8 @@ const expectedColumns = {
 		column('submitted_at', 'TEXT', 0),
 		column('shipped_at', 'TEXT', 0),
 		column('updated_at', 'TEXT', 1),
-		column('last_error_code', 'TEXT', 0)
+		column('last_error_code', 'TEXT', 0),
+		column('styria_last_checked_at', 'TEXT', 0)
 	],
 	stripe_events: [
 		column('stripe_event_id', 'TEXT', 0, null, 1),
@@ -391,7 +392,7 @@ describe('initial schema metadata', () => {
 		}
 	});
 
-	it('contains exactly the three custom indexes and accounts for automatic indexes separately', () => {
+	it('contains exactly the four custom indexes and accounts for automatic indexes separately', () => {
 		type IndexRow = { name: string; tbl_name: string; sql: string | null };
 		const indexes = database
 			.prepare(
@@ -413,6 +414,11 @@ describe('initial schema metadata', () => {
 				name: 'idx_orders_fulfillment_status',
 				tbl_name: 'orders',
 				sql: 'CREATE INDEX idx_orders_fulfillment_status ON orders(fulfillment_status, updated_at)'
+			},
+			{
+				name: 'idx_orders_styria_sync',
+				tbl_name: 'orders',
+				sql: 'CREATE INDEX idx_orders_styria_sync\nON orders(styria_last_checked_at, updated_at, id)'
 			},
 			{
 				name: 'idx_outbox_due',
@@ -446,6 +452,7 @@ describe('initial schema metadata', () => {
 		const expectedIndexColumns = {
 			idx_order_events_order: ['order_id', 'created_at'],
 			idx_orders_fulfillment_status: ['fulfillment_status', 'updated_at'],
+			idx_orders_styria_sync: ['styria_last_checked_at', 'updated_at', 'id'],
 			idx_outbox_due: ['completed_at', 'next_attempt_at']
 		};
 		for (const [name, columns] of Object.entries(expectedIndexColumns)) {
