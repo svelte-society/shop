@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import type { Buffer } from 'node:buffer';
+import { parseWithdrawalConfig } from '$lib/config/private.server';
 import { SqliteBackupService } from '$lib/server/backups/service.server';
 import {
 	createS3BackupStore,
@@ -15,17 +17,22 @@ import { SqliteFulfillmentRepository } from '$lib/server/fulfillment/repository.
 import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
+import { WithdrawalMessageWorker } from '$lib/server/jobs/withdrawal-worker.server';
 import { SqliteOperationalChecksJob } from '$lib/server/jobs/stale-orders.server';
 import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
 import { log } from '$lib/server/logging/logger.server';
 import { configureAlertService, SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { createPlunkClient, PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
+import type { PlunkGateway } from '$lib/server/plunk/gateway';
 import { createShippingEmailSender } from '$lib/server/plunk/shipping-email';
 import {
 	createStripeClient,
 	createStripeFulfillmentGateway
 } from '$lib/server/stripe/client.server';
 import { createStyriaClient } from '$lib/server/styria/client.server';
+import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
+import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
+import { WithdrawalSubmissionService } from '$lib/server/withdrawals/submission.server';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
@@ -38,9 +45,17 @@ export type ApplicationStartOptions = {
 export type ApplicationRuntime = {
 	database: ShopDatabase;
 	scheduler: Scheduler | null;
+	withdrawal: WithdrawalRuntime;
 	databasePath: string;
 	migrationsDirectory: string;
 	environment: RuntimeEnvironment;
+};
+
+export type WithdrawalRuntime = {
+	submission: WithdrawalSubmissionService;
+	repository: SqliteWithdrawalRepository;
+	worker: WithdrawalMessageWorker;
+	dataKey: Buffer;
 };
 
 export type ApplicationRuntimeDependencies = {
@@ -48,7 +63,11 @@ export type ApplicationRuntimeDependencies = {
 	openDatabase?: typeof openDatabase;
 	closeDatabase?: typeof closeDatabase;
 	migrate?: typeof migrate;
-	createScheduler?: (database: ShopDatabase, environment: RuntimeEnvironment) => Scheduler;
+	createScheduler?: (
+		database: ShopDatabase,
+		environment: RuntimeEnvironment,
+		withdrawal: WithdrawalRuntime
+	) => Scheduler;
 	createBackupStore?: (options: S3BackupStoreOptions) => BackupStore;
 	checkReadiness?: (runtime: ApplicationRuntime) => Promise<{ ready: boolean }>;
 	scheduleSchedulerActivation?: (callback: () => void, delayMs: number) => ApplicationTimerHandle;
@@ -167,15 +186,12 @@ function createRuntimeScheduler(
 	database: ShopDatabase,
 	environment: RuntimeEnvironment,
 	createBackupStore: (options: S3BackupStoreOptions) => BackupStore,
-	migrationsDirectory: string
+	migrationsDirectory: string,
+	plunk: PlunkGateway,
+	alerts: SqliteAlertService,
+	withdrawal: WithdrawalRuntime
 ): Scheduler {
 	const outbox = new SqliteOutboxRepository(database);
-	const alerts = new SqliteAlertService(outbox);
-	const plunk = createPlunkClient({
-		secretKey: requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY'),
-		baseUrl: environment.PLUNK_BASE_URL,
-		timeoutMs: PLUNK_DEFAULT_TIMEOUT_MS
-	});
 	const stripe = createStripeFulfillmentGateway(
 		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'))
 	);
@@ -244,6 +260,7 @@ function createRuntimeScheduler(
 		database,
 		leases: new SqliteLeaseRepository(database),
 		worker,
+		withdrawalWorker: withdrawal.worker,
 		styriaSync,
 		backup,
 		operationalChecks,
@@ -261,10 +278,6 @@ export function createApplicationLifecycle(
 	const close = dependencies.closeDatabase ?? closeDatabase;
 	const applyMigrations = dependencies.migrate ?? migrate;
 	const createBackupStore = dependencies.createBackupStore ?? createS3BackupStore;
-	const createScheduler =
-		dependencies.createScheduler ??
-		((database, environment) =>
-			createRuntimeScheduler(database, environment, createBackupStore, migrationsDirectory));
 	const checkReadiness = dependencies.checkReadiness ?? checkRuntimeReadiness;
 	const scheduleActivation = dependencies.scheduleSchedulerActivation ?? scheduleAfter;
 	const cancelActivation = dependencies.cancelSchedulerActivation ?? cancelScheduled;
@@ -277,6 +290,8 @@ export function createApplicationLifecycle(
 	let activationTimer: ApplicationTimerHandle | undefined;
 	let acceptingActivation = false;
 	let clearAlertService: (() => void) | null = null;
+	let runtimePlunk: PlunkGateway | null = null;
+	let runtimeAlerts: SqliteAlertService | null = null;
 
 	const cancelActivationTimer = (): void => {
 		if (!activationTimer) return;
@@ -330,7 +345,17 @@ export function createApplicationLifecycle(
 
 			let candidate: Scheduler | undefined;
 			try {
-				candidate = createScheduler(current.database, environment);
+				candidate = dependencies.createScheduler
+					? dependencies.createScheduler(current.database, environment, current.withdrawal)
+					: createRuntimeScheduler(
+							current.database,
+							environment,
+							createBackupStore,
+							migrationsDirectory,
+							runtimePlunk!,
+							runtimeAlerts!,
+							current.withdrawal
+						);
 				candidate.start();
 				if (!acceptingActivation || runtime !== current) {
 					await candidate.stop();
@@ -365,13 +390,51 @@ export function createApplicationLifecycle(
 		const database = open(databasePath, { fileMustExist: !bootstrap });
 		try {
 			applyMigrations(database, migrationsDirectory);
+			const withdrawalConfig = parseWithdrawalConfig(options.environment);
+			const plunk = createPlunkClient({
+				secretKey: requiredEnvironmentValue(options.environment, 'PLUNK_SECRET_KEY'),
+				baseUrl: options.environment.PLUNK_BASE_URL,
+				timeoutMs: PLUNK_DEFAULT_TIMEOUT_MS
+			});
+			const outbox = new SqliteOutboxRepository(database);
+			const alerts = new SqliteAlertService(outbox);
+			const repository = new SqliteWithdrawalRepository(database);
+			const reader = new WithdrawalCaseReader({
+				repository,
+				dataKey: withdrawalConfig.dataKey,
+				alerts
+			});
+			const worker = new WithdrawalMessageWorker({
+				repository,
+				reader,
+				plunk,
+				alerts,
+				from: {
+					name: requiredEnvironmentValue(options.environment, 'PLUNK_FROM_NAME'),
+					email: requiredEnvironmentValue(options.environment, 'PLUNK_FROM_EMAIL')
+				},
+				supportEmail: withdrawalConfig.supportEmail,
+				productionOrigin: withdrawalConfig.productionOrigin,
+				seller: withdrawalConfig.seller
+			});
+			const withdrawal: WithdrawalRuntime = {
+				repository,
+				worker,
+				submission: new WithdrawalSubmissionService({
+					repository,
+					dispatcher: worker,
+					dataKey: withdrawalConfig.dataKey
+				}),
+				dataKey: withdrawalConfig.dataKey
+			};
+			runtimePlunk = plunk;
+			runtimeAlerts = alerts;
 			clearAlertService?.();
-			clearAlertService = configureAlertService(
-				new SqliteAlertService(new SqliteOutboxRepository(database))
-			);
+			clearAlertService = configureAlertService(alerts);
 			runtime = {
 				database,
 				scheduler: null,
+				withdrawal,
 				databasePath,
 				migrationsDirectory,
 				environment: { ...options.environment }
@@ -385,6 +448,8 @@ export function createApplicationLifecycle(
 			runtime = null;
 			clearAlertService?.();
 			clearAlertService = null;
+			runtimePlunk = null;
+			runtimeAlerts = null;
 			close();
 			throw error;
 		}
@@ -435,6 +500,8 @@ export function createApplicationLifecycle(
 				runtime = null;
 				clearAlertService?.();
 				clearAlertService = null;
+				runtimePlunk = null;
+				runtimeAlerts = null;
 				try {
 					reportShutdown('database_closed', { schedulerActive });
 				} catch {

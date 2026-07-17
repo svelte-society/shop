@@ -140,6 +140,25 @@ const SECURITY_ENV = {
 		'https://images.stripe.com,https://cdn.sveltesociety.dev,http://unsafe.example,https://*.wild.example,not-a-url'
 };
 
+const WITHDRAWAL_RUNTIME_ENV = {
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	PLUNK_SECRET_KEY: 'sk_test_hooks',
+	PLUNK_FROM_NAME: 'Svelte Society Shop',
+	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 13).toString('base64'),
+	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
+	SELLER_REGISTRATION_NUMBER: '559999-0000',
+	SELLER_VAT_NUMBER: 'SE559999000001',
+	SELLER_ADDRESS_LINE1: 'Registered Street 1',
+	SELLER_POSTAL_CODE: '111 11',
+	SELLER_CITY: 'Stockholm',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merch@sveltesociety.dev',
+	DELIVERY_ESTIMATE_EU: '3–7 business days',
+	DELIVERY_ESTIMATE_US: '5–10 business days',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
+};
+
 function cspSources(policy: string, directive: string): string[] {
 	const section = policy
 		.split(';')
@@ -345,6 +364,7 @@ describe('HTTP security hook', () => {
 		const application = createApplicationLifecycle();
 		const environment = {
 			...SECURITY_ENV,
+			...WITHDRAWAL_RUNTIME_ENV,
 			DATABASE_PATH: ':memory:',
 			DATABASE_BOOTSTRAP: 'true',
 			SCHEDULER_ENABLED: 'false'

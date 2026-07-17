@@ -21,6 +21,8 @@ import { backupChecksum, encryptBackup } from '$lib/server/backups/format';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { checkRuntimeReadiness } from '$lib/server/health/readiness.server';
+import { encryptWithdrawalPayload } from '$lib/server/withdrawals/crypto.server';
+import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import {
 	parseRestoreArguments,
 	createRestoreStoreFromEnvironment,
@@ -84,6 +86,7 @@ const migrationsDirectory = resolve('migrations');
 const backupNow = new Date('2026-07-17T02:30:45.000Z');
 const restoreNow = new Date('2026-07-17T04:05:06.000Z');
 const encryptionKey = randomBytes(32).toString('base64');
+const withdrawalDataKey = Buffer.alloc(32, 17);
 const canonicalBackupKey = 'drill-bucket/2026/07/17/shop-20260717T023045Z.sqlite.ssbk';
 const deletionBackupKey =
 	'drill-bucket/2026/07/17/shop-20260717T023045Z-33333333-3333-4333-8333-333333333333.sqlite.ssbk';
@@ -119,6 +122,25 @@ async function createEncryptedBackup(
 	insert.run('first recovered row');
 	insert.run('second recovered row');
 	insert.run('third recovered row');
+	const withdrawals = new SqliteWithdrawalRepository(source);
+	withdrawals.createSubmission({
+		id: 'restore_withdrawal_case',
+		reference: 'WDR-RESTOREBACKUPDRILL1234',
+		scope: 'specific_items',
+		encryptedPayload: encryptWithdrawalPayload(
+			{
+				fullName: 'Private Restore Customer',
+				receiptEmail: 'private.restore@example.com',
+				enteredOrderReference: 'PRIVATE-RESTORE-ORDER',
+				items: [{ description: 'Private restore hoodie', quantity: 1 }],
+				reconciliation: null
+			},
+			'restore_withdrawal_case',
+			withdrawalDataKey
+		),
+		dedupeFingerprint: 'b'.repeat(64),
+		createdAt: backupNow
+	});
 	const service = new SqliteBackupService({
 		database: source,
 		store,
@@ -171,6 +193,19 @@ function expectRestoredDatabase(path: string): void {
 		expect(restored.prepare('SELECT COUNT(*) AS count FROM restore_proof').get()).toEqual({
 			count: 3
 		});
+		expect(restored.prepare('SELECT COUNT(*) AS count FROM withdrawal_cases').get()).toEqual({
+			count: 1
+		});
+		const serializedWithdrawal = JSON.stringify(
+			restored
+				.prepare(
+					`SELECT public_reference, schema_version, encryption_key_version,
+					 hex(encrypted_payload) AS encrypted_payload FROM withdrawal_cases`
+				)
+				.get()
+		);
+		expect(serializedWithdrawal).not.toContain('Private Restore Customer');
+		expect(serializedWithdrawal).not.toContain(withdrawalDataKey.toString('base64'));
 		expect(
 			restored
 				.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'current_only'")

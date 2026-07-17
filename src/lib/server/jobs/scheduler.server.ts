@@ -5,6 +5,7 @@ import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { OperationalChecksJob } from './stale-orders.server';
 import type { StyriaSyncJob } from './styria-sync.server';
+import type { WithdrawalMessageWorker } from './withdrawal-worker.server';
 
 export const OUTBOX_JOB_NAME = 'outbox';
 export const STYRIA_SYNC_JOB_NAME = 'styria-sync';
@@ -45,6 +46,7 @@ export type OutboxSchedulerOptions = {
 	database: ShopDatabase;
 	leases: LeaseRepository;
 	worker: OutboxWorker;
+	withdrawalWorker?: Pick<WithdrawalMessageWorker, 'drain'>;
 	styriaSync?: StyriaSyncJob;
 	backup?: BackupService;
 	operationalChecks?: OperationalChecksJob;
@@ -448,6 +450,7 @@ export class OutboxScheduler implements Scheduler {
 			heartbeat.unref?.();
 
 			await this.options.worker.drain(now, OUTBOX_DRAIN_LIMIT, signal);
+			await this.options.withdrawalWorker?.drain(now, OUTBOX_DRAIN_LIMIT, signal);
 			if (!leaseMaintained) throw new Error('OUTBOX_LEASE_LOST');
 			this.finishRun(runId, this.clock(), 'completed', null);
 		} catch (error) {

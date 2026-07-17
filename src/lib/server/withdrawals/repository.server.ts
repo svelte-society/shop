@@ -480,6 +480,18 @@ export class SqliteWithdrawalRepository {
 		return mapEncryptedCase(row);
 	}
 
+	loadEncryptedById(id: string): EncryptedWithdrawalCaseRecord | null {
+		if (!isCaseId(id)) fail('WITHDRAWAL_CASE_ID_INVALID');
+		const row = this.database.prepare('SELECT * FROM withdrawal_cases WHERE id = ?').get(id) as
+			CaseRow | undefined;
+		if (!row) return null;
+		if (row.purged_at !== null) {
+			mapCase(row);
+			return null;
+		}
+		return mapEncryptedCase(row);
+	}
+
 	list(input: WithdrawalListInput): WithdrawalCaseSummary[] {
 		if (
 			!input ||

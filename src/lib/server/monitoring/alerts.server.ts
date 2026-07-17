@@ -14,7 +14,9 @@ export type AlertCode =
 	| 'MCP_AUTH_REPEATED_FAILURE'
 	| 'DISK_LOW'
 	| 'SQLITE_NOT_READY'
-	| 'WITHDRAWAL_NOTICE_RECEIVED';
+	| 'WITHDRAWAL_NOTICE_RECEIVED'
+	| 'WITHDRAWAL_MESSAGE_UNSENT'
+	| 'WITHDRAWAL_DATA_UNREADABLE';
 
 export type AlertRecord = {
 	code: AlertCode;
@@ -38,7 +40,9 @@ const alertCodes = new Set<AlertCode>([
 	'MCP_AUTH_REPEATED_FAILURE',
 	'DISK_LOW',
 	'SQLITE_NOT_READY',
-	'WITHDRAWAL_NOTICE_RECEIVED'
+	'WITHDRAWAL_NOTICE_RECEIVED',
+	'WITHDRAWAL_MESSAGE_UNSENT',
+	'WITHDRAWAL_DATA_UNREADABLE'
 ]);
 const dailyCodes = new Set<AlertCode>(['ORDER_PENDING_REVIEW', 'BACKUP_MISSED']);
 const SAFE_SUBJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
@@ -58,7 +62,10 @@ const nextActions: Record<AlertCode, string> = {
 		'Verify the Codex host configuration and rotate the bearer secret if needed.',
 	DISK_LOW: 'Free space or expand the persistent data volume.',
 	SQLITE_NOT_READY: 'Stop checkout and inspect the SQLite file, volume, and migrations.',
-	WITHDRAWAL_NOTICE_RECEIVED: 'Open Codex and inspect the withdrawal notice before reconciliation.'
+	WITHDRAWAL_NOTICE_RECEIVED: 'Open Codex and inspect the withdrawal notice before reconciliation.',
+	WITHDRAWAL_MESSAGE_UNSENT: 'Open Codex and inspect the withdrawal message delivery state.',
+	WITHDRAWAL_DATA_UNREADABLE:
+		'Open Codex and inspect the withdrawal data-key and encrypted case integrity.'
 };
 
 export class AlertError extends Error {

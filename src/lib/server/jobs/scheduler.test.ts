@@ -31,15 +31,31 @@ import {
 
 const migrationsDirectory = resolve('migrations');
 const initialNow = new Date('2026-07-16T08:30:00.000Z');
+const withdrawalRuntimeEnvironment = {
+	PRODUCTION_ORIGIN: 'https://merch.sveltesociety.dev',
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	PLUNK_SECRET_KEY: 'sk_test_scheduler',
+	PLUNK_FROM_NAME: 'Svelte Society Shop',
+	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 9).toString('base64'),
+	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
+	SELLER_REGISTRATION_NUMBER: '559999-0000',
+	SELLER_VAT_NUMBER: 'SE559999000001',
+	SELLER_ADDRESS_LINE1: 'Registered Street 1',
+	SELLER_POSTAL_CODE: '111 11',
+	SELLER_CITY: 'Stockholm',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merch@sveltesociety.dev',
+	DELIVERY_ESTIMATE_EU: '3–7 business days',
+	DELIVERY_ESTIMATE_US: '5–10 business days',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
+};
 const schedulerRuntimeEnvironment = {
+	...withdrawalRuntimeEnvironment,
 	DATABASE_PATH: ':memory:',
 	DATABASE_BOOTSTRAP: 'false',
 	SCHEDULER_ENABLED: 'true',
-	PLUNK_SECRET_KEY: 'sk_test_scheduler',
 	ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 	STRIPE_SECRET_KEY: 'sk_test_scheduler_stripe',
 	STYRIA_APP_ID: 'scheduler-app',
 	STYRIA_SECRET_KEY: 'scheduler-secret',
@@ -164,7 +180,11 @@ describe('application runtime', () => {
 		};
 		const application = createApplicationLifecycle(dependencies);
 		const options = {
-			environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
+			environment: {
+				...withdrawalRuntimeEnvironment,
+				DATABASE_PATH: ':memory:',
+				SCHEDULER_ENABLED: 'true'
+			},
 			building: false,
 			test: false
 		};
@@ -424,6 +444,7 @@ describe('application runtime', () => {
 		const bootstrap = createApplicationLifecycle({ migrationsDirectory });
 		const bootstrapRuntime = await bootstrap.start({
 			environment: {
+				...withdrawalRuntimeEnvironment,
 				DATABASE_PATH: databasePath,
 				DATABASE_BOOTSTRAP: 'true',
 				SCHEDULER_ENABLED: 'false'
@@ -442,6 +463,7 @@ describe('application runtime', () => {
 		const production = createApplicationLifecycle({ migrationsDirectory });
 		const productionRuntime = await production.start({
 			environment: {
+				...withdrawalRuntimeEnvironment,
 				DATABASE_PATH: databasePath,
 				DATABASE_BOOTSTRAP: 'false',
 				SCHEDULER_ENABLED: 'false'
@@ -464,7 +486,11 @@ describe('application runtime', () => {
 		expect(application.current()).toBeNull();
 
 		const runtime = await application.start({
-			environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'false' },
+			environment: {
+				...withdrawalRuntimeEnvironment,
+				DATABASE_PATH: ':memory:',
+				SCHEDULER_ENABLED: 'false'
+			},
 			building: false,
 			test: false
 		});
@@ -489,7 +515,7 @@ describe('application runtime', () => {
 		const application = createApplicationLifecycle({ migrationsDirectory, createScheduler });
 
 		const runtime = await application.start({
-			environment: { DATABASE_PATH: ':memory:' },
+			environment: { ...withdrawalRuntimeEnvironment, DATABASE_PATH: ':memory:' },
 			building: false,
 			test: false
 		});
@@ -526,35 +552,53 @@ describe('application runtime', () => {
 		expect(openedDatabase).toBeUndefined();
 	});
 
-	it.each([
-		'PLUNK_SECRET_KEY',
-		'ADMIN_EMAIL',
-		'PLUNK_FROM_NAME',
-		'PLUNK_FROM_EMAIL',
-		'SUPPORT_EMAIL',
-		'STRIPE_SECRET_KEY',
-		'STYRIA_APP_ID',
-		'STYRIA_SECRET_KEY'
-	])('keeps scheduler off when readiness rejects missing %s', async (missingName) => {
-		closeDatabase();
-		let openedDatabase: ShopDatabase | undefined;
-		const application = createApplicationLifecycle({
-			migrationsDirectory,
-			openDatabase(path) {
-				openedDatabase = openDatabase(path);
-				return openedDatabase;
-			}
-		});
+	it.each(['ADMIN_EMAIL', 'STRIPE_SECRET_KEY', 'STYRIA_APP_ID', 'STYRIA_SECRET_KEY'])(
+		'keeps scheduler off when readiness rejects missing %s',
+		async (missingName) => {
+			closeDatabase();
+			let openedDatabase: ShopDatabase | undefined;
+			const application = createApplicationLifecycle({
+				migrationsDirectory,
+				openDatabase(path) {
+					openedDatabase = openDatabase(path);
+					return openedDatabase;
+				}
+			});
 
-		const runtime = await application.start({
-			environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
-			building: false,
-			test: false
-		});
-		expect(runtime?.scheduler).toBeNull();
-		expect(openedDatabase?.open).toBe(true);
-		await application.stop();
-	});
+			const runtime = await application.start({
+				environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
+				building: false,
+				test: false
+			});
+			expect(runtime?.scheduler).toBeNull();
+			expect(openedDatabase?.open).toBe(true);
+			await application.stop();
+		}
+	);
+
+	it.each(['PLUNK_SECRET_KEY', 'PLUNK_FROM_NAME', 'PLUNK_FROM_EMAIL', 'SUPPORT_EMAIL'])(
+		'fails withdrawal runtime startup when required sender config %s is missing',
+		async (missingName) => {
+			closeDatabase();
+			let openedDatabase: ShopDatabase | undefined;
+			const application = createApplicationLifecycle({
+				migrationsDirectory,
+				openDatabase(path) {
+					openedDatabase = openDatabase(path);
+					return openedDatabase;
+				}
+			});
+
+			await expect(
+				application.start({
+					environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
+					building: false,
+					test: false
+				})
+			).rejects.toThrow();
+			expect(openedDatabase?.open).toBe(false);
+		}
+	);
 
 	it('rejects a Styria timeout that would violate the bounded 55-minute sync lease', async () => {
 		closeDatabase();
@@ -839,6 +883,79 @@ describe('OutboxScheduler', () => {
 
 		await scheduler.stop();
 		expect(timers.cancel).toHaveBeenCalledWith(timers.handles(60_000)[0]);
+	});
+
+	it('drains commerce then withdrawal messages under one outbox lease and abort signal', async () => {
+		const sequence: string[] = [];
+		let commerceSignal: AbortSignal | undefined;
+		const worker: OutboxWorker = {
+			drain: vi.fn(async (_now, limit, signal) => {
+				sequence.push('commerce');
+				expect(limit).toBe(3);
+				commerceSignal = signal;
+				expect(database.prepare('SELECT COUNT(*) AS count FROM job_leases').get()).toEqual({
+					count: 1
+				});
+				return { completed: 0, rescheduled: 0 };
+			})
+		};
+		const withdrawalWorker = {
+			drain: vi.fn(async (_now: Date, limit: number, signal?: AbortSignal) => {
+				sequence.push('withdrawal');
+				expect(limit).toBe(3);
+				expect(signal).toBe(commerceSignal);
+				expect(database.prepare('SELECT COUNT(*) AS count FROM job_leases').get()).toEqual({
+					count: 1
+				});
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'scheduler-two-workers',
+			clock: () => initialNow
+		});
+
+		await scheduler.runOutboxOnce();
+
+		expect(sequence).toEqual(['commerce', 'withdrawal']);
+		expect(database.prepare('SELECT result, error_code FROM job_runs').all()).toEqual([
+			{ result: 'completed', error_code: null }
+		]);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await scheduler.stop();
+	});
+
+	it('records one failed outbox run when the withdrawal drain fails', async () => {
+		const worker: OutboxWorker = {
+			drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 }))
+		};
+		const withdrawalWorker = {
+			drain: vi.fn(async () => {
+				throw new Error('private withdrawal provider detail');
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'scheduler-withdrawal-fails',
+			clock: () => initialNow
+		});
+
+		await expect(scheduler.runOutboxOnce()).rejects.toThrow('private withdrawal provider detail');
+		expect(worker.drain).toHaveBeenCalledOnce();
+		expect(withdrawalWorker.drain).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT result, error_code FROM job_runs').all()).toEqual([
+			{ result: 'failed', error_code: 'OUTBOX_DRAIN_FAILED' }
+		]);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await scheduler.stop();
 	});
 
 	it('renews its owner lease so a long drain cannot be taken over after 55 seconds', async () => {
@@ -1144,6 +1261,51 @@ describe('OutboxScheduler', () => {
 		expect(database.prepare('SELECT result FROM job_runs').all()).toEqual([
 			{ result: 'completed' }
 		]);
+	});
+
+	it('aborts and waits for the withdrawal drain before shutdown releases the shared run', async () => {
+		let withdrawalSignal: AbortSignal | undefined;
+		let withdrawalSettled = false;
+		const worker: OutboxWorker = {
+			drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 }))
+		};
+		const withdrawalWorker = {
+			drain: vi.fn(
+				(_now: Date, _limit: number, signal?: AbortSignal) =>
+					new Promise<void>((resolve) => {
+						withdrawalSignal = signal;
+						signal?.addEventListener(
+							'abort',
+							() => {
+								withdrawalSettled = true;
+								resolve();
+							},
+							{ once: true }
+						);
+					})
+			)
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'scheduler-withdrawal-shutdown',
+			clock: () => initialNow
+		});
+
+		const active = scheduler.runOutboxOnce();
+		await vi.waitFor(() => expect(withdrawalSignal).toBeInstanceOf(AbortSignal));
+		const stopping = scheduler.stop();
+
+		expect(withdrawalSignal?.aborted).toBe(true);
+		await stopping;
+		await active;
+		expect(withdrawalSettled).toBe(true);
+		expect(worker.drain).toHaveBeenCalledOnce();
+		expect(withdrawalWorker.drain).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 	});
 
 	it('runs Styria sync immediately and hourly under a separate 55-minute lease', async () => {

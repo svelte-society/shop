@@ -6,6 +6,26 @@ import {
 	type ApplicationLifecycle
 } from './app.server';
 
+const withdrawalEnvironment = {
+	PRODUCTION_ORIGIN: 'https://merch.sveltesociety.dev',
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	PLUNK_SECRET_KEY: 'sk_test_shutdown',
+	PLUNK_FROM_NAME: 'Svelte Society Shop',
+	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 11).toString('base64'),
+	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
+	SELLER_REGISTRATION_NUMBER: '559999-0000',
+	SELLER_VAT_NUMBER: 'SE559999000001',
+	SELLER_ADDRESS_LINE1: 'Registered Street 1',
+	SELLER_POSTAL_CODE: '111 11',
+	SELLER_CITY: 'Stockholm',
+	SELLER_COUNTRY: 'Sweden',
+	SELLER_EMAIL: 'merch@sveltesociety.dev',
+	DELIVERY_ESTIMATE_EU: '3–7 business days',
+	DELIVERY_ESTIMATE_US: '5–10 business days',
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
+};
+
 function lifecycle(stop: () => Promise<void>): ApplicationLifecycle {
 	return {
 		start: vi.fn(async () => null),
@@ -60,7 +80,11 @@ describe('application shutdown', () => {
 			reportShutdown: vi.fn((event) => sequence.push(event))
 		});
 		await application.start({
-			environment: { DATABASE_PATH: '/data/shop.sqlite', SCHEDULER_ENABLED: 'true' },
+			environment: {
+				...withdrawalEnvironment,
+				DATABASE_PATH: '/data/shop.sqlite',
+				SCHEDULER_ENABLED: 'true'
+			},
 			building: false,
 			test: false
 		});
@@ -100,7 +124,11 @@ describe('application shutdown', () => {
 			createScheduler: vi.fn(() => scheduler)
 		});
 		await application.start({
-			environment: { DATABASE_PATH: '/data/shop.sqlite', SCHEDULER_ENABLED: 'true' },
+			environment: {
+				...withdrawalEnvironment,
+				DATABASE_PATH: '/data/shop.sqlite',
+				SCHEDULER_ENABLED: 'true'
+			},
 			building: false,
 			test: false
 		});

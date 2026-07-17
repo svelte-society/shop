@@ -39,6 +39,10 @@ type ReadinessContext = {
 	scheduler: ApplicationRuntime['scheduler'];
 };
 
+export type RuntimeReadinessContext = Omit<ReadinessContext, 'database'> & {
+	database: ShopDatabase;
+};
+
 export type ReadinessOptions = {
 	ignoreSchedulerLatch?: boolean;
 };
@@ -407,7 +411,7 @@ export function createReadinessChecker(
 const defaultChecker = createReadinessChecker({ getRuntime: defaultRuntime });
 
 export function checkRuntimeReadiness(
-	runtime: ApplicationRuntime,
+	runtime: RuntimeReadinessContext,
 	options: ReadinessOptions = {}
 ): Promise<ReadinessResult> {
 	return createReadinessChecker(

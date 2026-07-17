@@ -288,6 +288,23 @@ describe('SqliteWithdrawalRepository submissions', () => {
 		expect(repository.getByReference('WDR-ZZZZZZZZZZZZZZZZZZZZZZ')).toBeNull();
 		expect(repository.loadEncryptedByReference('WDR-ZZZZZZZZZZZZZZZZZZZZZZ')).toBeNull();
 	});
+
+	it('loads an active encrypted case by claimed internal ID through strict row mapping', () => {
+		repository.createSubmission(submission());
+
+		const loaded = repository.loadEncryptedById('case_123');
+
+		expect(loaded).toMatchObject({
+			id: 'case_123',
+			reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+			encryptedPayload: {
+				schemaVersion: 1,
+				keyVersion: 1
+			}
+		});
+		expect(Buffer.isBuffer(loaded?.encryptedPayload.ciphertext)).toBe(true);
+		expect(repository.loadEncryptedById('case_missing')).toBeNull();
+	});
 });
 
 describe('SqliteWithdrawalRepository message claims and settlement', () => {

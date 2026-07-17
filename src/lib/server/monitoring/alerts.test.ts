@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { generateWithdrawalReference } from '$lib/domain/withdrawals';
 import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
@@ -160,4 +161,25 @@ describe('operational alerts', () => {
 		);
 		expect(JSON.stringify(message)).not.toContain('customer@example.com');
 	});
+
+	it.each(['WITHDRAWAL_MESSAGE_UNSENT', 'WITHDRAWAL_DATA_UNREADABLE'] as const)(
+		'accepts a generated WDR reference for %s without private alert fields',
+		(code) => {
+			const reference = generateWithdrawalReference(() => Buffer.alloc(16, 7));
+			alerts.enqueueAlert(code, reference, new Date('2026-07-17T09:12:34.000Z'));
+
+			const row = database
+				.prepare(
+					`SELECT alert_code, alert_subject_id, alert_observed_at
+					 FROM outbox_jobs WHERE alert_code = ?`
+				)
+				.get(code);
+			expect(row).toEqual({
+				alert_code: code,
+				alert_subject_id: reference,
+				alert_observed_at: '2026-07-17T09:12:34.000Z'
+			});
+			expect(JSON.stringify(row)).not.toContain('customer@example.com');
+		}
+	);
 });
