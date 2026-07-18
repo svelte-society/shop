@@ -12,7 +12,13 @@ MCP_BEARER_TOKEN="$(
 	node --input-type=module --eval \
 		"import { randomBytes } from 'node:crypto'; process.stdout.write(randomBytes(32).toString('hex'))"
 )"
+NODE_BINARY="$(node --input-type=module --eval 'process.stdout.write(process.execPath)')"
+if [[ ! -x "$NODE_BINARY" ]]; then
+	printf 'Node runtime binary is unavailable\n' >&2
+	exit 1
+fi
 TLS_PROXY_PID=""
+TLS_PROXY_BASE_URL=""
 PRIMARY_VOLUME="svelte-society-shop-data-${SUFFIX}"
 SAFETY_VOLUME="svelte-society-shop-safety-${SUFFIX}"
 SAFETY_CONTAINER="svelte-society-shop-safety-${SUFFIX}"
@@ -28,12 +34,31 @@ CONTAINERS=(
 	"$PERSISTENCE_CONTAINER"
 )
 VOLUMES=("$PRIMARY_VOLUME" "$SAFETY_VOLUME")
+WITHDRAWAL_COOKIE_JAR="$TEMPORARY_DIRECTORY/withdrawal-cookies.txt"
+WITHDRAWAL_REFERENCE=""
+WITHDRAWAL_CSRF_TOKEN=""
+WITHDRAWAL_CSRF_COOKIE=""
+WITHDRAWAL_RECEIPT_TOKEN=""
+MCP_SESSION_TOKEN=""
+MCP_AUTHORIZATION="Bearer $MCP_BEARER_TOKEN"
+INVALID_MCP_AUTHORIZATION="Bearer invalid-docker-health-token"
+SYNTHETIC_WITHDRAWAL_NAME="Docker Withdrawal Canary"
+SYNTHETIC_WITHDRAWAL_EMAIL="docker-withdrawal@example.test"
+SYNTHETIC_WITHDRAWAL_ORDER="DOCKER-WITHDRAWAL-ORDER"
+SYNTHETIC_WITHDRAWAL_ITEM="Docker Withdrawal Item Canary"
+SYNTHETIC_REQUEST_CANARY="DOCKER-WITHDRAWAL-REQUEST-CANARY"
 
-cleanup() {
+stop_tls_proxy() {
 	if [[ -n "$TLS_PROXY_PID" ]]; then
 		kill "$TLS_PROXY_PID" >/dev/null 2>&1 || true
 		wait "$TLS_PROXY_PID" >/dev/null 2>&1 || true
 	fi
+	TLS_PROXY_PID=""
+	TLS_PROXY_BASE_URL=""
+}
+
+cleanup() {
+	stop_tls_proxy
 	for container in "${CONTAINERS[@]}"; do
 		docker rm --force "$container" >/dev/null 2>&1 || true
 	done
@@ -126,6 +151,120 @@ container_port() {
 	printf '%s\n' "${mapping##*:}"
 }
 
+start_tls_proxy() {
+	local name="$1"
+	local port proxy_port proxy_owner_pid port_mode status started elapsed owner_pid
+	local process_state port_state certificate_state diagnostic_state
+	local tls_key="$TEMPORARY_DIRECTORY/loopback-tls.key"
+	local tls_certificate="$TEMPORARY_DIRECTORY/loopback-tls.crt"
+	local proxy_log="$TEMPORARY_DIRECTORY/loopback-tls-proxy.log"
+	local proxy_port_file="$TEMPORARY_DIRECTORY/loopback-tls-proxy.port"
+	stop_tls_proxy
+	port="$(container_port "$name")"
+	rm -f "$proxy_port_file"
+	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+		-subj '/CN=localhost' \
+		-addext 'subjectAltName=DNS:localhost' \
+		-keyout "$tls_key" \
+		-out "$tls_certificate" >/dev/null 2>&1
+	started="$(date +%s)"
+	"$NODE_BINARY" --input-type=module --eval '
+		import { readFileSync, writeFileSync } from "node:fs";
+		import { connect } from "node:net";
+		import { createServer } from "node:tls";
+		const [keyPath, certificatePath, backendPort, portPath] = process.argv.slice(1);
+		const server = createServer(
+			{ key: readFileSync(keyPath), cert: readFileSync(certificatePath) },
+			(client) => {
+				const upstream = connect(Number(backendPort), "127.0.0.1");
+				client.on("error", () => upstream.destroy());
+				upstream.on("error", () => client.destroy());
+				client.pipe(upstream).pipe(client);
+			}
+		);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (!address || typeof address === "string") process.exit(1);
+			writeFileSync(portPath, `${address.port}\n${process.pid}\n`, { mode: 0o600 });
+		});
+	' "$tls_key" "$tls_certificate" "$port" "$proxy_port_file" >"$proxy_log" 2>&1 &
+	TLS_PROXY_PID=$!
+	for _ in $(seq 1 30); do
+		if [[ -z "${proxy_port:-}" && -s "$proxy_port_file" ]]; then
+			proxy_port="$(sed -n '1p' "$proxy_port_file")"
+			proxy_owner_pid="$(sed -n '2p' "$proxy_port_file")"
+			if [[ ! "$proxy_port" =~ ^[0-9]+$ ]] || ((proxy_port < 1 || proxy_port > 65535)); then
+				printf 'Loopback TLS proxy returned an invalid port\n' >&2
+				return 1
+			fi
+			if [[ ! "$proxy_owner_pid" =~ ^[0-9]+$ ]] || [[ "$proxy_owner_pid" != "$TLS_PROXY_PID" ]]; then
+				printf 'Loopback TLS proxy port owner is invalid\n' >&2
+				return 1
+			fi
+			port_mode="$(stat -f '%Lp' "$proxy_port_file" 2>/dev/null || stat -c '%a' "$proxy_port_file")"
+			if [[ "$port_mode" != 600 ]]; then
+				printf 'Loopback TLS proxy port metadata permissions are invalid\n' >&2
+				return 1
+			fi
+			TLS_PROXY_BASE_URL="https://localhost:${proxy_port}"
+		fi
+		if [[ -z "${proxy_port:-}" ]]; then
+			if ! kill -0 "$TLS_PROXY_PID" >/dev/null 2>&1; then
+				break
+			fi
+			sleep 1
+			continue
+		fi
+		status="$(
+			curl --insecure --silent --output /dev/null --write-out '%{http_code}' \
+				--header 'Host: shop.sveltesociety.dev' \
+				--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
+				"${TLS_PROXY_BASE_URL}/health/live" || true
+		)"
+		if [[ "$status" == 200 ]]; then
+			return 0
+		fi
+		sleep 1
+	done
+	elapsed=$(($(date +%s) - started))
+	if kill -0 "$TLS_PROXY_PID" >/dev/null 2>&1; then
+		process_state=alive
+	else
+		process_state=exited
+	fi
+	if [[ -z "${proxy_port:-}" ]]; then
+		port_state=unassigned
+	else
+		owner_pid="$(lsof -nP -t -iTCP:"$proxy_port" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+		if [[ "$owner_pid" == "$TLS_PROXY_PID" ]]; then
+			port_state=expected-owner
+		elif [[ -n "$owner_pid" ]]; then
+			port_state=other-owner
+		else
+			port_state=unbound
+		fi
+	fi
+	if [[ -r "$tls_key" && -r "$tls_certificate" ]]; then
+		certificate_state=readable
+	else
+		certificate_state=unreadable
+	fi
+	if [[ ! -s "$proxy_log" ]]; then
+		diagnostic_state=empty
+	elif grep --fixed-strings --quiet -- 'EADDRINUSE' "$proxy_log"; then
+		diagnostic_state=address-in-use
+	elif grep --fixed-strings --quiet -- 'EACCES' "$proxy_log"; then
+		diagnostic_state=permission-denied
+	elif grep --fixed-strings --quiet -- 'ENOENT' "$proxy_log"; then
+		diagnostic_state=missing-input
+	else
+		diagnostic_state=nonempty
+	fi
+	printf 'Loopback TLS proxy readiness failed: process=%s port=%s certificate=%s diagnostic=%s elapsed=%ss\n' \
+		"$process_state" "$port_state" "$certificate_state" "$diagnostic_state" "$elapsed" >&2
+	return 1
+}
+
 wait_http_status() {
 	local name="$1"
 	local path="$2"
@@ -144,7 +283,6 @@ wait_http_status() {
 		sleep 1
 	done
 	printf 'Expected %s from %s%s, received %s\n' "$expected" "$name" "$path" "$status" >&2
-	docker logs "$name" >&2 || true
 	return 1
 }
 
@@ -157,7 +295,7 @@ wait_container_healthy() {
 			return 0
 		fi
 		if [[ "$status" == unhealthy ]]; then
-			docker inspect --format '{{json .State.Health.Log}}' "$name" >&2
+			printf 'Container health check failed\n' >&2
 			return 1
 		fi
 		sleep 1
@@ -229,62 +367,83 @@ assert_shutdown_logs() {
 	fi
 }
 
+assert_container_logs_redacted() {
+	local name="$1"
+	local label="$2"
+	local log_path="$TEMPORARY_DIRECTORY/container-${label}.log"
+	local index pattern
+	local exact_patterns=(
+		"$WITHDRAWAL_DATA_KEY"
+		"$MCP_BEARER_TOKEN"
+		"$MCP_AUTHORIZATION"
+		"$INVALID_MCP_AUTHORIZATION"
+		"$WITHDRAWAL_CSRF_TOKEN"
+		"$WITHDRAWAL_CSRF_COOKIE"
+		"$WITHDRAWAL_RECEIPT_TOKEN"
+		"$MCP_SESSION_TOKEN"
+		"mcp-session-id: $MCP_SESSION_TOKEN"
+		"withdrawal_csrf=$WITHDRAWAL_CSRF_COOKIE"
+		"withdrawal_receipt_session=$WITHDRAWAL_RECEIPT_TOKEN"
+		"Cookie: withdrawal_csrf=$WITHDRAWAL_CSRF_COOKIE"
+		"Cookie: withdrawal_receipt_session=$WITHDRAWAL_RECEIPT_TOKEN"
+		"$SYNTHETIC_WITHDRAWAL_NAME"
+		"$SYNTHETIC_WITHDRAWAL_EMAIL"
+		"$SYNTHETIC_WITHDRAWAL_ORDER"
+		"$SYNTHETIC_WITHDRAWAL_ITEM"
+		"$SYNTHETIC_REQUEST_CANARY"
+	)
+	local marker_patterns=(
+		'(^|[^[:alnum:]_])authorization([^[:alnum:]_]|$)'
+		'(^|[^[:alnum:]_])cookies?([^[:alnum:]_]|$)'
+		'withdrawal_(csrf|receipt_session)|csrfToken'
+	)
+	if ! docker logs "$name" >"$log_path" 2>&1; then
+		printf 'Container log scan unavailable: %s\n' "$label" >&2
+		return 1
+	fi
+	chmod 0600 "$log_path"
+	for index in "${!exact_patterns[@]}"; do
+		pattern="${exact_patterns[index]}"
+		if [[ -n "$pattern" ]] && LC_ALL=C grep --fixed-strings --quiet -- "$pattern" "$log_path"; then
+			printf 'Container log redaction failure: %s/%d\n' "$label" "$((index + 1))" >&2
+			return 1
+		fi
+	done
+	for index in "${!marker_patterns[@]}"; do
+		if LC_ALL=C grep --extended-regexp --ignore-case --quiet -- \
+			"${marker_patterns[index]}" "$log_path"; then
+			printf 'Container log redaction failure: %s/%d\n' \
+				"$label" "$((index + ${#exact_patterns[@]} + 1))" >&2
+			return 1
+		fi
+	done
+}
+
 submit_synthetic_withdrawal() {
 	local name="$1"
-	local port proxy_port base_url csrf receipt_token status
-	local cookie_jar="$TEMPORARY_DIRECTORY/withdrawal-cookies.txt"
+	local status
 	local landing="$TEMPORARY_DIRECTORY/withdrawal-landing.html"
 	local confirmation="$TEMPORARY_DIRECTORY/withdrawal-confirmation.html"
 	local confirmation_headers="$TEMPORARY_DIRECTORY/withdrawal-confirmation-headers.txt"
-	local receipt="$TEMPORARY_DIRECTORY/withdrawal-receipt.txt"
-	local tls_key="$TEMPORARY_DIRECTORY/loopback-tls.key"
-	local tls_certificate="$TEMPORARY_DIRECTORY/loopback-tls.crt"
-	port="$(container_port "$name")"
-	proxy_port=$((40000 + SUFFIX % 20000))
-	base_url="https://localhost:${proxy_port}"
-	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-		-subj '/CN=localhost' \
-		-addext 'subjectAltName=DNS:localhost' \
-		-keyout "$tls_key" \
-		-out "$tls_certificate" >/dev/null 2>&1
-	node --input-type=module --eval '
-		import { readFileSync } from "node:fs";
-		import { connect } from "node:net";
-		import { createServer } from "node:tls";
-		const [keyPath, certificatePath, backendPort, proxyPort] = process.argv.slice(1);
-		const server = createServer(
-			{ key: readFileSync(keyPath), cert: readFileSync(certificatePath) },
-			(client) => {
-				const upstream = connect(Number(backendPort), "127.0.0.1");
-				client.pipe(upstream).pipe(client);
-			}
-		);
-		server.listen(Number(proxyPort), "127.0.0.1");
-	' "$tls_key" "$tls_certificate" "$port" "$proxy_port" &
-	TLS_PROXY_PID=$!
-	for _ in $(seq 1 30); do
-		status="$(
-			curl --insecure --silent --output /dev/null --write-out '%{http_code}' \
-				--header 'Host: shop.sveltesociety.dev' \
-				"${base_url}/health/live" || true
-		)"
-		[[ "$status" == 200 ]] && break
-		sleep 1
-	done
-	[[ "$status" == 200 ]]
+	start_tls_proxy "$name"
 	curl --fail --silent --show-error \
 		--insecure \
 		--header 'Host: shop.sveltesociety.dev' \
-		--cookie-jar "$cookie_jar" \
+		--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
+		--cookie-jar "$WITHDRAWAL_COOKIE_JAR" \
 		--output "$landing" \
-		"${base_url}/withdraw"
-	csrf="$(
+		"${TLS_PROXY_BASE_URL}/withdraw"
+	WITHDRAWAL_CSRF_TOKEN="$(
 		grep -Eo 'name="csrfToken" value="[A-Za-z0-9_-]{43}"' "$landing" |
 			head -n 1 |
 			cut -d '"' -f 4
 	)"
-	if [[ ! "$csrf" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
-		printf 'Withdrawal CSRF token was not rendered\n' >&2
+	WITHDRAWAL_CSRF_COOKIE="$(
+		awk '$6 == "withdrawal_csrf" { print $7; exit }' "$WITHDRAWAL_COOKIE_JAR"
+	)"
+	if [[ ! "$WITHDRAWAL_CSRF_TOKEN" =~ ^[A-Za-z0-9_-]{43}$ ]] ||
+		[[ "$WITHDRAWAL_CSRF_COOKIE" != "$WITHDRAWAL_CSRF_TOKEN" ]]; then
+		printf 'Withdrawal CSRF token was not retained securely\n' >&2
 		return 1
 	fi
 	status="$(
@@ -293,17 +452,20 @@ submit_synthetic_withdrawal() {
 			--request POST \
 			--header 'Host: shop.sveltesociety.dev' \
 			--header 'Origin: https://shop.sveltesociety.dev' \
-			--cookie "$cookie_jar" \
-			--cookie-jar "$cookie_jar" \
-			--data-urlencode "csrfToken=$csrf" \
-			--data-urlencode 'fullName=Docker Withdrawal Canary' \
-			--data-urlencode 'receiptEmail=docker-withdrawal@example.test' \
-			--data-urlencode 'enteredOrderReference=DOCKER-WITHDRAWAL-ORDER' \
-			--data-urlencode 'scope=entire_order' \
+			--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
+			--cookie "$WITHDRAWAL_COOKIE_JAR" \
+			--cookie-jar "$WITHDRAWAL_COOKIE_JAR" \
+			--data-urlencode "csrfToken=$WITHDRAWAL_CSRF_TOKEN" \
+			--data-urlencode "fullName=$SYNTHETIC_WITHDRAWAL_NAME" \
+			--data-urlencode "receiptEmail=$SYNTHETIC_WITHDRAWAL_EMAIL" \
+			--data-urlencode "enteredOrderReference=$SYNTHETIC_WITHDRAWAL_ORDER" \
+			--data-urlencode 'scope=specific_items' \
+			--data-urlencode "itemDescription=$SYNTHETIC_WITHDRAWAL_ITEM" \
+			--data-urlencode 'itemQuantity=1' \
 			--dump-header "$confirmation_headers" \
 			--output "$confirmation" \
 			--write-out '%{http_code}' \
-			"${base_url}/withdraw?/confirm"
+			"${TLS_PROXY_BASE_URL}/withdraw?/confirm"
 	)"
 	if [[ "$status" != 200 ]]; then
 		printf 'Synthetic withdrawal confirmation returned %s\n' "$status" >&2
@@ -325,101 +487,121 @@ submit_synthetic_withdrawal() {
 			"$confirmation" >&2 || true
 		return 1
 	fi
-	receipt_token="$(
-		awk '$6 == "withdrawal_receipt_session" { print $7; exit }' "$cookie_jar"
+	WITHDRAWAL_RECEIPT_TOKEN="$(
+		awk '$6 == "withdrawal_receipt_session" { print $7; exit }' "$WITHDRAWAL_COOKIE_JAR"
 	)"
-	if [[ ! "$receipt_token" =~ ^v1\.[0-9]+\.[A-Za-z0-9_-]{43}$ ]]; then
+	if [[ ! "$WITHDRAWAL_RECEIPT_TOKEN" =~ ^v1\.[0-9]+\.[A-Za-z0-9_-]{43}$ ]]; then
 		printf 'Submitting cookie jar did not receive a valid receipt session\n' >&2
-		grep -Eio '^set-cookie: [^=]+' "$confirmation_headers" >&2 || true
-		awk '$6 != "" { print "Cookie jar metadata:", $6, "path=" $3, "secure=" $4 }' \
-			"$cookie_jar" >&2
+		return 1
+	fi
+	assert_withdrawal_receipt_access "$TLS_PROXY_BASE_URL" initial
+}
+
+assert_withdrawal_receipt_access() {
+	local base_url="$1"
+	local label="$2"
+	local status
+	local receipt="$TEMPORARY_DIRECTORY/withdrawal-receipt-${label}.txt"
+	if [[ ! "$WITHDRAWAL_REFERENCE" =~ ^WDR-[A-Za-z0-9_-]{22}$ ]] ||
+		[[ ! -s "$WITHDRAWAL_COOKIE_JAR" ]]; then
+		printf 'Withdrawal restart fixture state is unavailable\n' >&2
 		return 1
 	fi
 	status="$(
 		curl --silent --show-error \
 			--insecure \
 			--header 'Host: shop.sveltesociety.dev' \
-			--cookie "$cookie_jar" \
+			--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
+			--cookie "$WITHDRAWAL_COOKIE_JAR" \
 			--output "$receipt" \
 			--write-out '%{http_code}' \
 			"${base_url}/withdraw/receipt/${WITHDRAWAL_REFERENCE}"
 	)"
 	[[ "$status" == 200 ]]
-	grep -F 'Docker Withdrawal Canary' "$receipt" >/dev/null
-	grep -F 'DOCKER-WITHDRAWAL-ORDER' "$receipt" >/dev/null
+	grep -F "$SYNTHETIC_WITHDRAWAL_NAME" "$receipt" >/dev/null
+	grep -F "$SYNTHETIC_WITHDRAWAL_ORDER" "$receipt" >/dev/null
+	grep -F "$SYNTHETIC_WITHDRAWAL_ITEM" "$receipt" >/dev/null
 	status="$(
 		curl --silent --show-error \
 			--insecure \
 			--header 'Host: shop.sveltesociety.dev' \
+			--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
 			--output /dev/null \
 			--write-out '%{http_code}' \
 			"${base_url}/withdraw/receipt/${WITHDRAWAL_REFERENCE}"
 	)"
 	[[ "$status" == 404 ]]
-	kill "$TLS_PROXY_PID"
-	wait "$TLS_PROXY_PID" >/dev/null 2>&1 || true
-	TLS_PROXY_PID=""
 }
 
 assert_bearer_mcp_withdrawal_list() {
-	local name="$1"
-	local port status session_id
-	local headers="$TEMPORARY_DIRECTORY/mcp-initialize-headers.txt"
-	local initialize="$TEMPORARY_DIRECTORY/mcp-initialize.txt"
-	local tools="$TEMPORARY_DIRECTORY/mcp-tools.txt"
-	local cases="$TEMPORARY_DIRECTORY/mcp-withdrawal-cases.txt"
-	port="$(container_port "$name")"
+	local base_url="$1"
+	local label="$2"
+	local status
+	local headers="$TEMPORARY_DIRECTORY/mcp-initialize-headers-${label}.txt"
+	local initialize="$TEMPORARY_DIRECTORY/mcp-initialize-${label}.txt"
+	local tools="$TEMPORARY_DIRECTORY/mcp-tools-${label}.txt"
+	local cases="$TEMPORARY_DIRECTORY/mcp-withdrawal-cases-${label}.txt"
 	status="$(
 		curl --silent --show-error \
+			--insecure \
 			--request POST \
 			--header 'Host: shop.sveltesociety.dev' \
 			--header 'Origin: https://shop.sveltesociety.dev' \
+			--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
 			--header 'Content-Type: application/json' \
 			--header 'Accept: application/json, text/event-stream' \
-			--header 'Authorization: Bearer invalid-docker-health-token' \
+			--header "Authorization: $INVALID_MCP_AUTHORIZATION" \
 			--data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"docker-health","version":"1.0.0"}}}' \
 			--output /dev/null \
 			--write-out '%{http_code}' \
-			"http://127.0.0.1:${port}/mcp"
+			"${base_url}/mcp"
 	)"
 	[[ "$status" == 401 ]]
 	curl --fail --silent --show-error \
+		--insecure \
 		--request POST \
 		--header 'Host: shop.sveltesociety.dev' \
 		--header 'Origin: https://shop.sveltesociety.dev' \
+		--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
 		--header 'Content-Type: application/json' \
 		--header 'Accept: application/json, text/event-stream' \
-		--header "Authorization: Bearer $MCP_BEARER_TOKEN" \
+		--header "Authorization: $MCP_AUTHORIZATION" \
 		--data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"docker-health","version":"1.0.0"}}}' \
 		--dump-header "$headers" \
 		--output "$initialize" \
-		"http://127.0.0.1:${port}/mcp"
-	session_id="$(awk 'tolower($1) == "mcp-session-id:" { gsub("\\r", "", $2); print $2; exit }' "$headers")"
-	[[ -n "$session_id" ]]
+		"${base_url}/mcp"
+	MCP_SESSION_TOKEN="$(
+		awk 'tolower($1) == "mcp-session-id:" { gsub("\\r", "", $2); print $2; exit }' "$headers"
+	)"
+	[[ -n "$MCP_SESSION_TOKEN" ]]
 	grep -F '"protocolVersion":"2025-06-18"' "$initialize" >/dev/null
 	curl --fail --silent --show-error \
+		--insecure \
 		--request POST \
 		--header 'Host: shop.sveltesociety.dev' \
 		--header 'Origin: https://shop.sveltesociety.dev' \
+		--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
 		--header 'Content-Type: application/json' \
 		--header 'Accept: application/json, text/event-stream' \
-		--header "Authorization: Bearer $MCP_BEARER_TOKEN" \
-		--header "mcp-session-id: $session_id" \
+		--header "Authorization: $MCP_AUTHORIZATION" \
+		--header "mcp-session-id: $MCP_SESSION_TOKEN" \
 		--data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 		--output "$tools" \
-		"http://127.0.0.1:${port}/mcp"
+		"${base_url}/mcp"
 	grep -F '"name":"list_withdrawal_cases"' "$tools" >/dev/null
 	curl --fail --silent --show-error \
+		--insecure \
 		--request POST \
 		--header 'Host: shop.sveltesociety.dev' \
 		--header 'Origin: https://shop.sveltesociety.dev' \
+		--header "X-Request-Canary: $SYNTHETIC_REQUEST_CANARY" \
 		--header 'Content-Type: application/json' \
 		--header 'Accept: application/json, text/event-stream' \
-		--header "Authorization: Bearer $MCP_BEARER_TOKEN" \
-		--header "mcp-session-id: $session_id" \
+		--header "Authorization: $MCP_AUTHORIZATION" \
+		--header "mcp-session-id: $MCP_SESSION_TOKEN" \
 		--data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_withdrawal_cases","arguments":{"limit":10}}}' \
 		--output "$cases" \
-		"http://127.0.0.1:${port}/mcp"
+		"${base_url}/mcp"
 	grep -F "$WITHDRAWAL_REFERENCE" "$cases" >/dev/null
 }
 
@@ -430,6 +612,7 @@ wait_http_status "$SAFETY_CONTAINER" /health/ready 503
 docker exec "$SAFETY_CONTAINER" node --input-type=module --eval \
 	'import { existsSync } from "node:fs"; if (existsSync("/data/shop.sqlite")) process.exit(1);'
 stop_within_timeout "$SAFETY_CONTAINER"
+assert_container_logs_redacted "$SAFETY_CONTAINER" safety
 
 # A fresh volume is created and migrated only in the explicit one-time mode.
 # Scheduler configuration is intentionally true here to prove bootstrap still suppresses it.
@@ -474,6 +657,7 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 '
 stop_within_timeout "$BOOTSTRAP_CONTAINER"
 assert_shutdown_logs "$BOOTSTRAP_CONTAINER" false
+assert_container_logs_redacted "$BOOTSTRAP_CONTAINER" bootstrap
 
 # Docker verifies a normal scheduler-enabled shutdown with no due work. The stalled
 # provider cancellation proof runs entirely on host loopback in process-shutdown.mjs.
@@ -492,6 +676,7 @@ wait_http_status "$SHUTDOWN_CONTAINER" /health/ready 200
 stop_within_timeout "$SHUTDOWN_CONTAINER"
 assert_shutdown_logs "$SHUTDOWN_CONTAINER" true
 [[ "$(docker inspect --format '{{.State.ExitCode}}' "$SHUTDOWN_CONTAINER")" == 0 ]]
+assert_container_logs_redacted "$SHUTDOWN_CONTAINER" shutdown
 assert_quick_check
 
 # The same volume becomes ready only after bootstrap is turned off. The stalled-provider
@@ -532,17 +717,20 @@ if printf '%s\n' "$headers" | grep -Eiq '^content-security-policy:.*unsafe-inlin
 fi
 
 submit_synthetic_withdrawal "$NORMAL_CONTAINER"
-assert_bearer_mcp_withdrawal_list "$NORMAL_CONTAINER"
+assert_bearer_mcp_withdrawal_list "$TLS_PROXY_BASE_URL" initial
+stop_tls_proxy
 
 stop_within_timeout "$NORMAL_CONTAINER"
 assert_shutdown_logs "$NORMAL_CONTAINER" false
+assert_container_logs_redacted "$NORMAL_CONTAINER" normal
 
 # Reopening the stopped process database verifies the shutdown marker reflects a
 # cleanly closed, intact SQLite file rather than process teardown alone.
 assert_quick_check
 
-# A new production container on the same named volume sees the valid order row.
-start_container "$PERSISTENCE_CONTAINER" "$PRIMARY_VOLUME" false false
+# A new production container on the same named volume sees the valid order row and serves the
+# original case only to the original receipt cookie and authenticated operator session.
+start_container "$PERSISTENCE_CONTAINER" "$PRIMARY_VOLUME" false false true
 wait_http_status "$PERSISTENCE_CONTAINER" /health/ready 200
 docker exec "$PERSISTENCE_CONTAINER" node --input-type=module --eval '
 	import Database from "better-sqlite3";
@@ -554,7 +742,12 @@ docker exec "$PERSISTENCE_CONTAINER" node --input-type=module --eval '
 	database.close();
 	if (!row || row.count !== 1 || !withdrawal || withdrawal.count !== 1) process.exit(1);
 ' "$WITHDRAWAL_REFERENCE"
+start_tls_proxy "$PERSISTENCE_CONTAINER"
+assert_withdrawal_receipt_access "$TLS_PROXY_BASE_URL" restart
+assert_bearer_mcp_withdrawal_list "$TLS_PROXY_BASE_URL" restart
+stop_tls_proxy
 stop_within_timeout "$PERSISTENCE_CONTAINER"
 assert_shutdown_logs "$PERSISTENCE_CONTAINER" false
+assert_container_logs_redacted "$PERSISTENCE_CONTAINER" persistence
 
-printf 'Docker bootstrap, withdrawal route, receipt authorization, bearer MCP, persistence, headers, UID, and SIGTERM checks passed.\n'
+printf 'Docker bootstrap, withdrawal route, restart authorization, bearer MCP, persistence, log redaction, headers, UID, and SIGTERM checks passed.\n'
