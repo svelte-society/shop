@@ -18,6 +18,7 @@ import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
 import { WithdrawalMessageWorker } from '$lib/server/jobs/withdrawal-worker.server';
+import { SqliteWithdrawalRetentionJob } from '$lib/server/jobs/withdrawal-retention.server';
 import { SqliteOperationalChecksJob } from '$lib/server/jobs/stale-orders.server';
 import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
 import { log } from '$lib/server/logging/logger.server';
@@ -56,6 +57,7 @@ export type WithdrawalRuntime = {
 	repository: SqliteWithdrawalRepository;
 	reader: WithdrawalCaseReader;
 	worker: WithdrawalMessageWorker;
+	retention: SqliteWithdrawalRetentionJob;
 	dataKey: Buffer;
 	seller: WithdrawalSellerIdentity;
 };
@@ -267,6 +269,7 @@ function createRuntimeScheduler(
 		leases: new SqliteLeaseRepository(database),
 		worker,
 		withdrawalWorker: withdrawal.worker,
+		withdrawalRetention: withdrawal.retention,
 		styriaSync,
 		backup,
 		operationalChecks,
@@ -427,6 +430,7 @@ export function createApplicationLifecycle(
 				repository,
 				reader,
 				worker,
+				retention: new SqliteWithdrawalRetentionJob({ repository, alerts }),
 				submission: new WithdrawalSubmissionService({
 					repository,
 					dispatcher: worker,

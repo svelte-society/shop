@@ -51,6 +51,7 @@ describe('application withdrawal runtime', () => {
 		expect(runtime?.withdrawal.worker).toBeDefined();
 		expect(runtime?.withdrawal.submission).toBeDefined();
 		expect(runtime?.withdrawal.reader).toBeDefined();
+		expect(runtime?.withdrawal.retention).toBeDefined();
 		expect(runtime?.withdrawal.seller).toEqual({
 			legalName: 'Svelte Society Merch AB',
 			registrationNumber: '559999-0000',
@@ -78,7 +79,8 @@ describe('application withdrawal runtime', () => {
 			stop: vi.fn(async () => undefined),
 			runOutboxOnce: vi.fn(async () => undefined),
 			runStyriaSyncOnce: vi.fn(async () => undefined),
-			runBackupOnce: vi.fn(async () => undefined)
+			runBackupOnce: vi.fn(async () => undefined),
+			runWithdrawalRetentionOnce: vi.fn(async () => undefined)
 		};
 		const createScheduler = vi.fn((_database, _environment, withdrawal) => {
 			receivedWithdrawal = withdrawal;
@@ -100,6 +102,7 @@ describe('application withdrawal runtime', () => {
 		expect(receivedWithdrawal).toBe(runtime?.withdrawal);
 		expect(receivedWithdrawal?.worker).toBe(runtime?.withdrawal.worker);
 		expect(receivedWithdrawal?.repository).toBe(runtime?.withdrawal.repository);
+		expect(receivedWithdrawal?.retention).toBe(runtime?.withdrawal.retention);
 		expect(scheduler.start).toHaveBeenCalledOnce();
 		await application.stop();
 		expect(scheduler.stop).toHaveBeenCalledOnce();

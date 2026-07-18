@@ -54,6 +54,16 @@ function count(database: ShopDatabase | Database.Database, table: string): numbe
 		.count;
 }
 
+function closeCase(caseId: string, purgeDueAt = now): void {
+	database
+		.prepare(
+			`UPDATE withdrawal_cases SET status = 'closed', eligibility = 'eligible_eu',
+			 outcome_code = 'WITHDRAWAL_COMPLETED', closed_at = ?, pii_purge_due_at = ?
+			 WHERE id = ?`
+		)
+		.run(new Date(purgeDueAt.getTime() - 1_000).toISOString(), purgeDueAt.toISOString(), caseId);
+}
+
 function openIndependentDatabase(path: string): Database.Database {
 	const database = new Database(path);
 	database.pragma('journal_mode = WAL');
@@ -435,6 +445,289 @@ describe('SqliteWithdrawalRepository submissions', () => {
 		expect(() => repository.getInspectionHistory('case_123')).toThrowError(
 			'WITHDRAWAL_MESSAGE_ROW_INVALID'
 		);
+	});
+});
+
+describe('SqliteWithdrawalRepository PII retention', () => {
+	it('atomically purges one due closed case, settles its message, and records the revision event', () => {
+		repository.createSubmission(submission());
+		database
+			.prepare(
+				`UPDATE withdrawal_cases SET status = 'closed', eligibility = 'eligible_eu',
+				 outcome_code = 'WITHDRAWAL_COMPLETED', closed_at = ?, pii_purge_due_at = ?
+				 WHERE id = 'case_123'`
+			)
+			.run(new Date(now.getTime() - 1_000).toISOString(), now.toISOString());
+
+		expect(repository.purgeDue(now, 100)).toBe(1);
+		expect(
+			database
+				.prepare(
+					`SELECT status, revision, scope, eligibility, outcome_code, schema_version,
+					 encryption_key_version, encrypted_payload, payload_nonce, payload_tag,
+					 dedupe_fingerprint, created_at, updated_at, closed_at, pii_purge_due_at, purged_at
+					 FROM withdrawal_cases WHERE id = 'case_123'`
+				)
+				.get()
+		).toEqual({
+			status: 'closed',
+			revision: 2,
+			scope: 'specific_items',
+			eligibility: 'eligible_eu',
+			outcome_code: 'WITHDRAWAL_COMPLETED',
+			schema_version: null,
+			encryption_key_version: null,
+			encrypted_payload: null,
+			payload_nonce: null,
+			payload_tag: null,
+			dedupe_fingerprint: null,
+			created_at: now.toISOString(),
+			updated_at: now.toISOString(),
+			closed_at: new Date(now.getTime() - 1_000).toISOString(),
+			pii_purge_due_at: now.toISOString(),
+			purged_at: now.toISOString()
+		});
+		expect(
+			database
+				.prepare(
+					`SELECT kind, attempt_count, next_attempt_at, provider_delivery_id,
+					 completed_at, last_error_code FROM withdrawal_messages WHERE case_id = 'case_123'`
+				)
+				.get()
+		).toEqual({
+			kind: 'receipt',
+			attempt_count: 0,
+			next_attempt_at: now.toISOString(),
+			provider_delivery_id: null,
+			completed_at: now.toISOString(),
+			last_error_code: 'WITHDRAWAL_CASE_PURGED'
+		});
+		expect(
+			database
+				.prepare(
+					`SELECT actor, action, prior_status, next_status, result_code, created_at
+					 FROM withdrawal_case_events WHERE case_id = 'case_123' ORDER BY id`
+				)
+				.all()
+		).toEqual([
+			{
+				actor: 'customer',
+				action: 'submitted',
+				prior_status: null,
+				next_status: 'submitted',
+				result_code: 'NOTICE_RECEIVED',
+				created_at: now.toISOString()
+			},
+			{
+				actor: 'system',
+				action: 'pii_purged',
+				prior_status: 'closed',
+				next_status: 'closed',
+				result_code: 'PII_PURGED',
+				created_at: now.toISOString()
+			}
+		]);
+	});
+
+	it('ignores active, not-yet-due, and already-purged cases idempotently', () => {
+		repository.createSubmission(submission());
+		repository.createSubmission(
+			submission({
+				id: 'case_not_due',
+				reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+				encryptedPayload: encryptWithdrawalPayload(payload(), 'case_not_due', key),
+				dedupeFingerprint: 'b'.repeat(64)
+			})
+		);
+		repository.createSubmission(
+			submission({
+				id: 'case_purged',
+				reference: 'WDR-CCCCCCCCCCCCCCCCCCCCCC',
+				encryptedPayload: encryptWithdrawalPayload(payload(), 'case_purged', key),
+				dedupeFingerprint: 'c'.repeat(64)
+			})
+		);
+		closeCase('case_not_due', new Date(now.getTime() + 1));
+		closeCase('case_purged');
+
+		expect(repository.purgeDue(now, 100)).toBe(1);
+		expect(repository.purgeDue(now, 100)).toBe(0);
+		expect(
+			database.prepare('SELECT id, purged_at, revision FROM withdrawal_cases ORDER BY id').all()
+		).toEqual([
+			{ id: 'case_123', purged_at: null, revision: 1 },
+			{ id: 'case_not_due', purged_at: null, revision: 1 },
+			{ id: 'case_purged', purged_at: now.toISOString(), revision: 2 }
+		]);
+		expect(
+			count(
+				database,
+				"withdrawal_case_events WHERE actor = 'system' AND result_code = 'PII_PURGED'"
+			)
+		).toBe(1);
+	});
+
+	it('purges at most 100 due cases in deterministic batches', () => {
+		for (let index = 0; index < 101; index += 1) {
+			const suffix = String(index).padStart(22, '0');
+			const id = `case_batch_${index}`;
+			repository.createSubmission(
+				submission({
+					id,
+					reference: `WDR-${suffix}`,
+					encryptedPayload: encryptWithdrawalPayload(payload(), id, key),
+					dedupeFingerprint: index.toString(16).padStart(64, '0')
+				})
+			);
+			closeCase(id);
+		}
+
+		expect(repository.purgeDue(now, 100)).toBe(100);
+		expect(count(database, 'withdrawal_cases WHERE purged_at IS NOT NULL')).toBe(100);
+		expect(repository.purgeDue(now, 100)).toBe(1);
+		expect(repository.purgeDue(now, 100)).toBe(0);
+		expect(count(database, 'withdrawal_cases WHERE purged_at IS NOT NULL')).toBe(101);
+		expect(
+			count(
+				database,
+				"withdrawal_case_events WHERE actor = 'system' AND result_code = 'PII_PURGED'"
+			)
+		).toBe(101);
+	});
+
+	it('terminally settles every incomplete message kind while retaining completed delivery metadata', () => {
+		repository.createSubmission(submission());
+		closeCase('case_123');
+		database
+			.prepare(
+				`UPDATE withdrawal_messages SET attempt_count = 2, provider_delivery_id = 'delivery_receipt',
+				 completed_at = ?, last_error_code = NULL WHERE id = 1`
+			)
+			.run(new Date(now.getTime() - 2_000).toISOString());
+		const insert = database.prepare(
+			`INSERT INTO withdrawal_messages (
+				case_id, kind, resend_of_message_id, idempotency_key, attempt_count,
+				next_attempt_at, provider_delivery_id, completed_at, last_error_code
+			) VALUES ('case_123', ?, ?, ?, ?, ?, ?, ?, ?)`
+		);
+		const instruction = insert.run(
+			'eligible_instructions',
+			null,
+			'withdrawal:eligible:case_123',
+			3,
+			new Date(now.getTime() + 300_000).toISOString(),
+			'claimed_delivery_must_clear',
+			null,
+			'PLUNK_UNAVAILABLE'
+		);
+		insert.run(
+			'ineligible_decision',
+			null,
+			'withdrawal:ineligible:case_123',
+			0,
+			now.toISOString(),
+			null,
+			null,
+			null
+		);
+		insert.run(
+			'support_handoff',
+			null,
+			'withdrawal:support:case_123',
+			1,
+			now.toISOString(),
+			null,
+			null,
+			'PLUNK_UNAVAILABLE'
+		);
+		insert.run(
+			'resend',
+			Number(instruction.lastInsertRowid),
+			'withdrawal:resend:case_123',
+			1,
+			now.toISOString(),
+			null,
+			null,
+			null
+		);
+
+		expect(repository.purgeDue(now, 100)).toBe(1);
+		const messages = database
+			.prepare(
+				`SELECT kind, attempt_count, next_attempt_at, provider_delivery_id,
+				 completed_at, last_error_code FROM withdrawal_messages ORDER BY id`
+			)
+			.all();
+		expect(messages[0]).toEqual({
+			kind: 'receipt',
+			attempt_count: 2,
+			next_attempt_at: now.toISOString(),
+			provider_delivery_id: 'delivery_receipt',
+			completed_at: new Date(now.getTime() - 2_000).toISOString(),
+			last_error_code: null
+		});
+		for (const message of messages.slice(1)) {
+			expect(message).toMatchObject({
+				provider_delivery_id: null,
+				completed_at: now.toISOString(),
+				last_error_code: 'WITHDRAWAL_CASE_PURGED'
+			});
+		}
+		expect(repository.claimDueMessages(new Date(now.getTime() + 86_400_000), 100)).toEqual([]);
+	});
+
+	it('rejects a stale provider completion after purge settlement wins the expected attempt', () => {
+		repository.createSubmission(submission());
+		closeCase('case_123');
+		const claimed = repository.claimMessage(1, now);
+		expect(claimed?.attemptCount).toBe(1);
+
+		expect(repository.purgeDue(now, 100)).toBe(1);
+		expect(() =>
+			repository.completeMessage(
+				1,
+				claimed!.attemptCount,
+				'late_provider_delivery',
+				new Date(now.getTime() + 1)
+			)
+		).toThrowError('WITHDRAWAL_MESSAGE_SETTLEMENT_CONFLICT');
+		expect(
+			database
+				.prepare(
+					`SELECT provider_delivery_id, completed_at, last_error_code
+					 FROM withdrawal_messages WHERE id = 1`
+				)
+				.get()
+		).toEqual({
+			provider_delivery_id: null,
+			completed_at: now.toISOString(),
+			last_error_code: 'WITHDRAWAL_CASE_PURGED'
+		});
+	});
+
+	it('rolls back every payload, message, revision, timestamp, and event on injected failure', () => {
+		repository.createSubmission(submission());
+		closeCase('case_123');
+		const before = {
+			cases: database.prepare('SELECT * FROM withdrawal_cases').all(),
+			events: database.prepare('SELECT * FROM withdrawal_case_events').all(),
+			messages: database.prepare('SELECT * FROM withdrawal_messages').all()
+		};
+		database.exec(`
+			CREATE TRIGGER reject_purge_event BEFORE INSERT ON withdrawal_case_events
+			WHEN NEW.result_code = 'PII_PURGED'
+			BEGIN
+				SELECT RAISE(ABORT, 'injected purge failure');
+			END
+		`);
+
+		expect(() => repository.purgeDue(now, 100)).toThrowError('WITHDRAWAL_PURGE_FAILED');
+		expect({
+			cases: database.prepare('SELECT * FROM withdrawal_cases').all(),
+			events: database.prepare('SELECT * FROM withdrawal_case_events').all(),
+			messages: database.prepare('SELECT * FROM withdrawal_messages').all()
+		}).toEqual(before);
+		expect(repository.loadEncryptedById('case_123')).not.toBeNull();
 	});
 });
 

@@ -22,6 +22,7 @@ import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { checkRuntimeReadiness } from '$lib/server/health/readiness.server';
 import { encryptWithdrawalPayload } from '$lib/server/withdrawals/crypto.server';
+import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
 import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import {
 	parseRestoreArguments,
@@ -141,6 +142,32 @@ async function createEncryptedBackup(
 		dedupeFingerprint: 'b'.repeat(64),
 		createdAt: backupNow
 	});
+	withdrawals.createSubmission({
+		id: 'restore_purged_case',
+		reference: 'WDR-PURGEDBACKUPDRILL12345',
+		scope: 'entire_order',
+		encryptedPayload: encryptWithdrawalPayload(
+			{
+				fullName: 'Private Purged Customer',
+				receiptEmail: 'private.purged@example.com',
+				enteredOrderReference: 'PRIVATE-PURGED-ORDER',
+				items: [],
+				reconciliation: null
+			},
+			'restore_purged_case',
+			withdrawalDataKey
+		),
+		dedupeFingerprint: 'c'.repeat(64),
+		createdAt: backupNow
+	});
+	source
+		.prepare(
+			`UPDATE withdrawal_cases SET status = 'closed', eligibility = 'eligible_eu',
+			 outcome_code = 'WITHDRAWAL_COMPLETED', closed_at = ?, pii_purge_due_at = ?
+			 WHERE id = 'restore_purged_case'`
+		)
+		.run(backupNow.toISOString(), backupNow.toISOString());
+	expect(withdrawals.purgeDue(backupNow, 100)).toBe(1);
 	const service = new SqliteBackupService({
 		database: source,
 		store,
@@ -194,7 +221,7 @@ function expectRestoredDatabase(path: string): void {
 			count: 3
 		});
 		expect(restored.prepare('SELECT COUNT(*) AS count FROM withdrawal_cases').get()).toEqual({
-			count: 1
+			count: 2
 		});
 		const serializedWithdrawal = JSON.stringify(
 			restored
@@ -566,6 +593,17 @@ describe('offline restore command safety', () => {
 describe('production-shaped backup and restore drill', () => {
 	it('restores real rows, preserves the prior DB, migrates, passes quick_check, and becomes ready', async () => {
 		const key = await createEncryptedBackup();
+		const backupObject = Buffer.from(await transport.get(key));
+		const sourceBytes = readFileSync(sourcePath);
+		for (const keyMaterial of [
+			withdrawalDataKey,
+			Buffer.from(withdrawalDataKey.toString('base64'), 'utf8'),
+			Buffer.from(encryptionKey, 'base64'),
+			Buffer.from(encryptionKey, 'utf8')
+		]) {
+			expect(backupObject.includes(keyMaterial)).toBe(false);
+			expect(sourceBytes.includes(keyMaterial)).toBe(false);
+		}
 		createCurrentDatabase();
 
 		const restored = await restoreBackup({
@@ -598,6 +636,28 @@ describe('production-shaped backup and restore drill', () => {
 		expect(database.prepare('SELECT COUNT(*) AS count FROM restore_proof').get()).toEqual({
 			count: 3
 		});
+		expect(database.prepare('SELECT COUNT(*) AS count FROM withdrawal_cases').get()).toEqual({
+			count: 2
+		});
+		const repository = new SqliteWithdrawalRepository(database);
+		const alerts = { enqueueAlert: vi.fn() };
+		const reader = new WithdrawalCaseReader({ repository, dataKey: withdrawalDataKey, alerts });
+		expect(reader.inspectActive('WDR-RESTOREBACKUPDRILL1234', restoreNow).payload).toMatchObject({
+			fullName: 'Private Restore Customer',
+			receiptEmail: 'private.restore@example.com'
+		});
+		const wrongKeyReader = new WithdrawalCaseReader({
+			repository,
+			dataKey: Buffer.alloc(32, 18),
+			alerts
+		});
+		expect(() =>
+			wrongKeyReader.inspectActive('WDR-RESTOREBACKUPDRILL1234', restoreNow)
+		).toThrowError('WITHDRAWAL_DECRYPT_FAILED');
+		expect(() => reader.inspectActive('WDR-PURGEDBACKUPDRILL12345', restoreNow)).toThrowError(
+			'WITHDRAWAL_CASE_NOT_FOUND'
+		);
+		expect(repository.loadEncryptedByReference('WDR-PURGEDBACKUPDRILL12345')).toBeNull();
 		expect(database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
 			count: 5
 		});

@@ -15,6 +15,7 @@ import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
+import type { WithdrawalRetentionJob } from './withdrawal-retention.server';
 import { SqliteOperationalChecksJob, type OperationalChecksJob } from './stale-orders.server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
@@ -25,6 +26,8 @@ import {
 	OUTBOX_JOB_NAME,
 	OutboxScheduler,
 	STYRIA_SYNC_JOB_NAME,
+	WITHDRAWAL_DELIVERY_GUARD_NAME,
+	WITHDRAWAL_RETENTION_JOB_NAME,
 	type SchedulerTimer,
 	type SchedulerTimerHandle
 } from './scheduler.server';
@@ -885,7 +888,7 @@ describe('OutboxScheduler', () => {
 		expect(timers.cancel).toHaveBeenCalledWith(timers.handles(60_000)[0]);
 	});
 
-	it('drains commerce then withdrawal messages under one outbox lease and abort signal', async () => {
+	it('drains commerce then withdrawal messages under the outbox and delivery-guard leases', async () => {
 		const sequence: string[] = [];
 		let commerceSignal: AbortSignal | undefined;
 		const worker: OutboxWorker = {
@@ -894,7 +897,7 @@ describe('OutboxScheduler', () => {
 				expect(limit).toBe(3);
 				commerceSignal = signal;
 				expect(database.prepare('SELECT COUNT(*) AS count FROM job_leases').get()).toEqual({
-					count: 1
+					count: 2
 				});
 				return { completed: 0, rescheduled: 0 };
 			})
@@ -905,7 +908,7 @@ describe('OutboxScheduler', () => {
 				expect(limit).toBe(3);
 				expect(signal).toBe(commerceSignal);
 				expect(database.prepare('SELECT COUNT(*) AS count FROM job_leases').get()).toEqual({
-					count: 1
+					count: 2
 				});
 			})
 		};
@@ -2231,5 +2234,343 @@ describe('OutboxScheduler', () => {
 		});
 		await expect(stormSafe.runOutboxOnce()).rejects.toThrow('worker failure');
 		expect(failingAlerts.enqueueAlert).toHaveBeenCalledOnce();
+	});
+});
+
+describe('withdrawal retention scheduling', () => {
+	it('catches up one missed 03:15 UTC run, records completion, and schedules the next day', async () => {
+		const current = new Date('2026-07-17T05:00:00.000Z');
+		const firstTimers = timerHarness();
+		const firstRetention: WithdrawalRetentionJob = {
+			run: vi.fn(async () => ({ purged: 0 }))
+		};
+		const first = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: firstRetention,
+			enabled: true,
+			ownerId: 'retention-catchup-first',
+			clock: () => current,
+			schedule: firstTimers.schedule,
+			scheduleWithdrawalRetention: firstTimers.schedule,
+			cancel: firstTimers.cancel
+		});
+
+		first.start();
+		await vi.waitFor(() => expect(firstRetention.run).toHaveBeenCalledOnce());
+		await settleAsyncWork();
+		expect(firstTimers.handles(22 * 60 * 60_000 + 15 * 60_000)).toHaveLength(1);
+		expect(
+			database
+				.prepare('SELECT name, result, error_code FROM job_runs WHERE name = ?')
+				.all(WITHDRAWAL_RETENTION_JOB_NAME)
+		).toEqual([{ name: WITHDRAWAL_RETENTION_JOB_NAME, result: 'completed', error_code: null }]);
+		await first.stop();
+
+		const secondTimers = timerHarness();
+		const secondRetention: WithdrawalRetentionJob = {
+			run: vi.fn(async () => ({ purged: 0 }))
+		};
+		const second = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: secondRetention,
+			enabled: true,
+			ownerId: 'retention-catchup-second',
+			clock: () => current,
+			schedule: secondTimers.schedule,
+			scheduleWithdrawalRetention: secondTimers.schedule,
+			cancel: secondTimers.cancel
+		});
+
+		second.start();
+		await settleAsyncWork();
+		expect(secondRetention.run).not.toHaveBeenCalled();
+		expect(secondTimers.handles(22 * 60 * 60_000 + 15 * 60_000)).toHaveLength(1);
+		await second.stop();
+	});
+
+	it('records a stable failed run, emits a PII-free alert, and permits a safe retry', async () => {
+		const alerts = { enqueueAlert: vi.fn() };
+		const retention: WithdrawalRetentionJob = {
+			run: vi
+				.fn<WithdrawalRetentionJob['run']>()
+				.mockRejectedValueOnce(new Error('WITHDRAWAL_RETENTION_FAILED'))
+				.mockResolvedValueOnce({ purged: 2 })
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: retention,
+			alerts,
+			enabled: true,
+			ownerId: 'retention-retry',
+			clock: () => initialNow
+		});
+
+		await expect(scheduler.runWithdrawalRetentionOnce()).rejects.toThrowError(
+			'WITHDRAWAL_RETENTION_FAILED'
+		);
+		expect(alerts.enqueueAlert).toHaveBeenCalledWith(
+			'SCHEDULER_FAILED',
+			WITHDRAWAL_RETENTION_JOB_NAME,
+			initialNow
+		);
+		expect(database.prepare('SELECT result, error_code FROM job_runs').all()).toEqual([
+			{ result: 'failed', error_code: 'WITHDRAWAL_RETENTION_FAILED' }
+		]);
+
+		await expect(scheduler.runWithdrawalRetentionOnce()).resolves.toBeUndefined();
+		expect(database.prepare('SELECT result, error_code FROM job_runs ORDER BY id').all()).toEqual([
+			{ result: 'failed', error_code: 'WITHDRAWAL_RETENTION_FAILED' },
+			{ result: 'completed', error_code: null }
+		]);
+		await scheduler.stop();
+	});
+
+	it('uses the shared guard so withdrawal delivery and purge never overlap', async () => {
+		const delivery = deferred<void>();
+		const withdrawalWorker = {
+			drain: vi.fn(() => delivery.promise)
+		};
+		const retention: WithdrawalRetentionJob = {
+			run: vi.fn(async () => ({ purged: 1 }))
+		};
+		const sending = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'withdrawal-sender',
+			clock: () => initialNow
+		});
+		const purging = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: retention,
+			enabled: true,
+			ownerId: 'withdrawal-purger',
+			clock: () => initialNow
+		});
+
+		const activeDelivery = sending.runOutboxOnce();
+		await vi.waitFor(() => expect(withdrawalWorker.drain).toHaveBeenCalledOnce());
+		expect(database.prepare('SELECT name, owner_id FROM job_leases ORDER BY name').all()).toEqual([
+			{ name: OUTBOX_JOB_NAME, owner_id: 'withdrawal-sender' },
+			{ name: WITHDRAWAL_DELIVERY_GUARD_NAME, owner_id: 'withdrawal-sender' }
+		]);
+
+		await expect(purging.runWithdrawalRetentionOnce()).resolves.toBeUndefined();
+		expect(retention.run).not.toHaveBeenCalled();
+		expect(
+			database
+				.prepare('SELECT name FROM job_leases WHERE name = ?')
+				.all(WITHDRAWAL_RETENTION_JOB_NAME)
+		).toEqual([]);
+
+		delivery.resolve();
+		await activeDelivery;
+		await purging.runWithdrawalRetentionOnce();
+		expect(retention.run).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await sending.stop();
+		await purging.stop();
+	});
+
+	it('heartbeats both outbox leases and releases the guard before the primary lease', async () => {
+		const timers = timerHarness();
+		let current = initialNow;
+		const delivery = deferred<void>();
+		const sqliteLeases = new SqliteLeaseRepository(database);
+		const calls: string[] = [];
+		const leases: LeaseRepository = {
+			acquire(name, ...rest) {
+				calls.push(`acquire:${name}`);
+				return sqliteLeases.acquire(name, ...rest);
+			},
+			renew(name, ...rest) {
+				calls.push(`renew:${name}`);
+				return sqliteLeases.renew(name, ...rest);
+			},
+			release(name, ...rest) {
+				calls.push(`release:${name}`);
+				sqliteLeases.release(name, ...rest);
+			}
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases,
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalWorker: { drain: vi.fn(() => delivery.promise) },
+			enabled: true,
+			ownerId: 'guard-heartbeat',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		const active = scheduler.runOutboxOnce();
+		await vi.waitFor(() =>
+			expect(calls.slice(0, 2)).toEqual([
+				`acquire:${OUTBOX_JOB_NAME}`,
+				`acquire:${WITHDRAWAL_DELIVERY_GUARD_NAME}`
+			])
+		);
+		current = new Date(initialNow.getTime() + 20_000);
+		timers.fire(20_000);
+		expect(calls).toContain(`renew:${OUTBOX_JOB_NAME}`);
+		expect(calls).toContain(`renew:${WITHDRAWAL_DELIVERY_GUARD_NAME}`);
+
+		delivery.resolve();
+		await active;
+		expect(calls.slice(-2)).toEqual([
+			`release:${WITHDRAWAL_DELIVERY_GUARD_NAME}`,
+			`release:${OUTBOX_JOB_NAME}`
+		]);
+		await scheduler.stop();
+	});
+
+	it('holds and heartbeats both 30-minute retention leases while concurrent retention skips', async () => {
+		const timers = timerHarness();
+		let current = initialNow;
+		const running = deferred<{ purged: number }>();
+		const retention: WithdrawalRetentionJob = { run: vi.fn(() => running.promise) };
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: retention,
+			enabled: true,
+			ownerId: 'retention-heartbeat',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+		const contenderRetention: WithdrawalRetentionJob = {
+			run: vi.fn(async () => ({ purged: 0 }))
+		};
+		const contender = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: contenderRetention,
+			enabled: true,
+			ownerId: 'retention-contender',
+			clock: () => current
+		});
+
+		const active = scheduler.runWithdrawalRetentionOnce();
+		await vi.waitFor(() => expect(retention.run).toHaveBeenCalledOnce());
+		expect(database.prepare('SELECT name, expires_at FROM job_leases ORDER BY name').all()).toEqual(
+			[
+				{
+					name: WITHDRAWAL_DELIVERY_GUARD_NAME,
+					expires_at: new Date(initialNow.getTime() + 30 * 60_000).toISOString()
+				},
+				{
+					name: WITHDRAWAL_RETENTION_JOB_NAME,
+					expires_at: new Date(initialNow.getTime() + 30 * 60_000).toISOString()
+				}
+			]
+		);
+		await contender.runWithdrawalRetentionOnce();
+		expect(contenderRetention.run).not.toHaveBeenCalled();
+
+		current = new Date(initialNow.getTime() + 10 * 60_000);
+		timers.fire(10 * 60_000);
+		expect(database.prepare('SELECT expires_at FROM job_leases ORDER BY name').all()).toEqual([
+			{ expires_at: new Date(current.getTime() + 30 * 60_000).toISOString() },
+			{ expires_at: new Date(current.getTime() + 30 * 60_000).toISOString() }
+		]);
+		running.resolve({ purged: 1 });
+		await active;
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await scheduler.stop();
+		await contender.stop();
+	});
+
+	it('skips both outbox drains while another owner holds the delivery guard and retries safely', async () => {
+		const leases = new SqliteLeaseRepository(database);
+		expect(
+			leases.acquire(WITHDRAWAL_DELIVERY_GUARD_NAME, 'retention-owner', initialNow, 30 * 60_000)
+		).toBe(true);
+		const worker: OutboxWorker = {
+			drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 }))
+		};
+		const withdrawalWorker = { drain: vi.fn(async () => undefined) };
+		const scheduler = new OutboxScheduler({
+			database,
+			leases,
+			worker,
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'guarded-outbox',
+			clock: () => initialNow
+		});
+
+		await scheduler.runOutboxOnce();
+		expect(worker.drain).not.toHaveBeenCalled();
+		expect(withdrawalWorker.drain).not.toHaveBeenCalled();
+		expect(database.prepare('SELECT name, owner_id FROM job_leases').all()).toEqual([
+			{ name: WITHDRAWAL_DELIVERY_GUARD_NAME, owner_id: 'retention-owner' }
+		]);
+
+		leases.release(WITHDRAWAL_DELIVERY_GUARD_NAME, 'retention-owner');
+		await scheduler.runOutboxOnce();
+		expect(worker.drain).toHaveBeenCalledOnce();
+		expect(withdrawalWorker.drain).toHaveBeenCalledOnce();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await scheduler.stop();
+	});
+
+	it('aborts and waits for active retention before reverse-releasing both leases', async () => {
+		let receivedSignal: AbortSignal | undefined;
+		let settled = false;
+		const alerts = { enqueueAlert: vi.fn() };
+		const retention: WithdrawalRetentionJob = {
+			run: vi.fn(
+				(_now: Date, signal?: AbortSignal) =>
+					new Promise<{ purged: number }>((_resolve, reject) => {
+						receivedSignal = signal;
+						signal?.addEventListener(
+							'abort',
+							() => {
+								settled = true;
+								reject(new Error('retention aborted'));
+							},
+							{ once: true }
+						);
+					})
+			)
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: retention,
+			alerts,
+			enabled: true,
+			ownerId: 'retention-shutdown',
+			clock: () => initialNow
+		});
+
+		const active = scheduler.runWithdrawalRetentionOnce();
+		await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+		const stopping = scheduler.stop();
+
+		expect(receivedSignal?.aborted).toBe(true);
+		await expect(active).rejects.toThrow('retention aborted');
+		await stopping;
+		expect(settled).toBe(true);
+		expect(alerts.enqueueAlert).not.toHaveBeenCalled();
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		expect(database.prepare('SELECT result, error_code FROM job_runs').all()).toEqual([
+			{ result: 'failed', error_code: 'WITHDRAWAL_RETENTION_FAILED' }
+		]);
 	});
 });

@@ -620,6 +620,57 @@ export class SqliteWithdrawalRepository {
 		};
 	}
 
+	purgeDue(now: Date, limit: number): number {
+		const purgedAt = isoTimestamp(now, 'WITHDRAWAL_PURGE_INVALID');
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+			fail('WITHDRAWAL_PURGE_INVALID');
+		}
+		const findDue = this.database.prepare(`
+			SELECT * FROM withdrawal_cases
+			WHERE status = 'closed' AND purged_at IS NULL AND pii_purge_due_at <= ?
+			ORDER BY pii_purge_due_at, id
+			LIMIT ?
+		`);
+		const findMessages = this.database.prepare(
+			'SELECT * FROM withdrawal_messages WHERE case_id = ? ORDER BY id'
+		);
+		const settleMessages = this.database.prepare(`
+			UPDATE withdrawal_messages
+			SET provider_delivery_id = NULL, completed_at = ?, last_error_code = 'WITHDRAWAL_CASE_PURGED'
+			WHERE case_id = ? AND completed_at IS NULL
+		`);
+		const purgeCase = this.database.prepare(`
+			UPDATE withdrawal_cases
+			SET schema_version = NULL, encryption_key_version = NULL, encrypted_payload = NULL,
+				payload_nonce = NULL, payload_tag = NULL, dedupe_fingerprint = NULL,
+				revision = revision + 1, purged_at = ?, updated_at = ?
+			WHERE id = ? AND status = 'closed' AND purged_at IS NULL AND pii_purge_due_at <= ?
+		`);
+		const insertEvent = this.database.prepare(`
+			INSERT INTO withdrawal_case_events (
+				case_id, actor, action, prior_status, next_status, result_code, created_at
+			) VALUES (?, 'system', 'pii_purged', 'closed', 'closed', 'PII_PURGED', ?)
+		`);
+		const purge = this.database.transaction(() => {
+			const records = (findDue.all(purgedAt, limit) as CaseRow[]).map(mapCase);
+			for (const record of records) {
+				(findMessages.all(record.id) as MessageRow[]).map(mapMessage);
+				settleMessages.run(purgedAt, record.id);
+				if (purgeCase.run(purgedAt, purgedAt, record.id, purgedAt).changes !== 1) {
+					fail('WITHDRAWAL_PURGE_CONFLICT');
+				}
+				insertEvent.run(record.id, purgedAt);
+			}
+			return records.length;
+		});
+		try {
+			return purge.immediate();
+		} catch (error) {
+			if (error instanceof WithdrawalRepositoryError) throw error;
+			fail('WITHDRAWAL_PURGE_FAILED');
+		}
+	}
+
 	getMessage(id: number): WithdrawalMessage | null {
 		validateMessageId(id);
 		const row = this.database.prepare('SELECT * FROM withdrawal_messages WHERE id = ?').get(id) as
