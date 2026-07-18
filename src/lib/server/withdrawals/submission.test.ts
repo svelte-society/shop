@@ -125,6 +125,7 @@ describe('WithdrawalSubmissionService', () => {
 		const stored = repository.loadEncryptedByReference(result.reference);
 		expect(stored).not.toBeNull();
 		const { scope: _scope, ...canonicalPayload } = normalizeWithdrawalInput(raw);
+		expect(_scope).toBe('specific_items');
 		expect(decryptWithdrawalPayload(stored!.encryptedPayload, stored!.id, key)).toEqual({
 			...canonicalPayload,
 			reconciliation: null

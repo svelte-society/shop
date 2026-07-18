@@ -59,8 +59,8 @@ describe('test catalog command portability', () => {
 			}
 		] as const;
 
-		expect(webServers).toHaveLength(4);
-		for (const [index, server] of webServers.entries()) {
+		expect(webServers).toHaveLength(5);
+		for (const [index, server] of webServers.slice(0, scenarios.length).entries()) {
 			const expected = scenarios[index];
 			expect(server?.command).toBe(
 				`pnpm exec vite dev --host 127.0.0.1 --port ${expected.port} --strictPort`
@@ -75,6 +75,27 @@ describe('test catalog command portability', () => {
 				...('stripeScenario' in expected ? { TEST_STRIPE_SCENARIO: expected.stripeScenario } : {})
 			});
 		}
+		const withdrawalServer = webServers[4];
+		expect(withdrawalServer?.command).toBe(
+			'pnpm exec vite dev --host 127.0.0.1 --port 4277 --strictPort'
+		);
+		expect(withdrawalServer?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
+		expect(withdrawalServer?.env).toEqual({
+			NODE_ENV: 'development',
+			STOREFRONT_ENABLED: 'false',
+			CHECKOUT_ENABLED: 'false',
+			DATABASE_BOOTSTRAP: 'true',
+			SCHEDULER_ENABLED: 'false',
+			DATABASE_PATH: expect.stringMatching(/svelte-society-withdrawal-e2e-\d+\.sqlite$/u),
+			PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+			SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+			PLUNK_SECRET_KEY: 'sk_test_withdrawal_e2e',
+			PLUNK_FROM_NAME: 'Svelte Society Shop',
+			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+			PLUNK_BASE_URL: 'https://127.0.0.1:1',
+			WITHDRAWAL_DATA_KEY: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/u),
+			...POLICY_FIXTURE_ENV
+		});
 	});
 
 	it('applies the guarded fixture environment before starting Vite on the strict preview port', async () => {

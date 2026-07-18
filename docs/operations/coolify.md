@@ -60,6 +60,7 @@ authoritative name inventory.
 | STYRIA_APP_ID | Secret | OFF | ON | Styria API identity |
 | STYRIA_SECRET_KEY | Secret | OFF | ON | Styria request signing |
 | PLUNK_SECRET_KEY | Secret | OFF | ON | Plunk email API |
+| WITHDRAWAL_DATA_KEY | Secret | OFF | ON | Withdrawal PII encryption and receipt sessions |
 | MCP_BEARER_TOKEN | Secret | OFF | ON | Internal MCP bearer authentication |
 | S3_ACCESS_KEY_ID | Secret | OFF | ON | Encrypted backup storage |
 | S3_SECRET_ACCESS_KEY | Secret | OFF | ON | Encrypted backup storage |
@@ -128,6 +129,31 @@ DATABASE_BOOTSTRAP=false
 normal deployments. Normal releases and every rollback use `false`. With
 `false`, a missing database fails readiness and is not recreated.
 
+### Withdrawal encryption
+
+Generate a fresh production key in a protected operator shell, then paste only its output into the
+locked, runtime-only `WITHDRAWAL_DATA_KEY` secret:
+
+```sh
+node --input-type=module --eval "import { randomBytes } from 'node:crypto'; process.stdout.write(randomBytes(32).toString('base64') + '\n')"
+```
+
+```text
+WITHDRAWAL_DATA_KEY=<canonical-base64-for-exactly-32-random-bytes>
+```
+
+This is the version-1 application data key. It encrypts withdrawal customer and reconciliation
+payloads and derives short-lived receipt-session authentication. It is not the backup key:
+`BACKUP_ENCRYPTION_KEY_BASE64` must be generated independently and stored separately. Preserve the
+withdrawal key in the production secret store and protected recovery inventory for as long as any
+active withdrawal payload can exist in live data or retained backups.
+
+Version 1 has no online key rotation or key identifier migration workflow. A future rotation must
+first ship a reviewed offline or dual-key migration and prove active-case and backup recovery; do
+not replace this value in place. Losing it permanently makes every unpurged withdrawal payload in
+the live database and backups undecryptable. Neither the public reference nor the encrypted backup
+key can recover that data.
+
 ### Stripe
 
 ```text
@@ -180,6 +206,9 @@ S3_FORCE_PATH_STYLE=false
 BACKUP_ENCRYPTION_KEY_BASE64=<secret>
 ```
 
+Generate the backup key independently from `WITHDRAWAL_DATA_KEY`; never reuse either value for the
+other purpose.
+
 ### Analytics and browser asset origins
 
 ```text
@@ -205,6 +234,32 @@ DELIVERY_ESTIMATE_EU=<reviewed-value>
 DELIVERY_ESTIMATE_US=<reviewed-value>
 POLICY_EFFECTIVE_DATE=<reviewed-ISO-date>
 ```
+
+## Withdrawal-only rollout gate
+
+Deploy and prove the online withdrawal function before considering a commerce launch. Keep
+`STOREFRONT_ENABLED=false` and `CHECKOUT_ENABLED=false` throughout this gate; the `/withdraw` and
+receipt routes remain available independently of those flags.
+
+1. Confirm exactly one replica, one process, and the persistent `/data` volume. Set
+   `WITHDRAWAL_DATA_KEY`, the seller identity, support address, and Plunk values as reviewed
+   runtime variables. Leave `MCP_ENABLED=false` and `SCHEDULER_ENABLED=false` for the first route
+   check.
+2. Deploy stop-first. Require `GET /health/live` and `GET /health/ready` to return `200` while `/`
+   remains unavailable because the storefront is off.
+3. Open `/withdraw` through public HTTPS. Submit a synthetic notice through review and explicit
+   confirmation, retain the submitting browser cookie, record the `WDR-…` reference, and download
+   its durable receipt. Confirm another browser without that cookie cannot retrieve the receipt.
+4. Restart the same immutable image against the same `/data` volume and verify the case still
+   exists. If enabling internal MCP for operator verification, set one fresh bearer token, restart
+   stop-first, and prove authenticated `list_withdrawal_cases` and `inspect_withdrawal_case`; then
+   disable it again unless the reviewed operational workflow requires it.
+5. Inspect only PII-free aggregate state and structured logs. A Plunk outage may leave the receipt
+   queued, but must not remove the accepted case or browser receipt. Follow
+   [withdrawal operations](withdrawals.md) for reconciliation and resend.
+
+This gate proves route availability and storage safety only. It does not constitute legal or
+accounting approval and does not authorize changing `CHECKOUT_ENABLED`.
 
 ## First-volume bootstrap
 

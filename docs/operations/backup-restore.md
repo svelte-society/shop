@@ -41,6 +41,19 @@ openssl rand -base64 32
 
 Never paste that output into a restore command. The restore program reads it from the environment.
 
+Withdrawal records add a second, independent key contract. `WITHDRAWAL_DATA_KEY` encrypts the PII
+inside SQLite; `BACKUP_ENCRYPTION_KEY_BASE64` encrypts the complete SQLite backup object. Generate,
+store, escrow, and audit them separately. Reusing one value for both layers defeats that separation.
+The backup key alone can restore the database file but cannot decrypt an active withdrawal payload.
+The withdrawal key alone cannot decrypt the backup object.
+
+The version-1 withdrawal payload format has no online rotation mechanism. Retain the exact
+production `WITHDRAWAL_DATA_KEY` in protected recovery storage while any active payload can be
+present in live data or retained backups. Permanent loss makes unpurged withdrawal customer and
+reconciliation data unrecoverable. Public references and message metadata remain, but are not a
+PII recovery path. Purged payloads are intentionally unrecoverable even when a current application
+key is available.
+
 Objects use this UTC key shape:
 
 ```text
@@ -60,9 +73,11 @@ Restore is destructive and offline. Do not run it from the live application cont
 2. Stop the application container cleanly in Coolify. Confirm it has exited, and confirm no other
    container or process has the persistent `/data` volume attached. The restore confirmations do
    not detect a running process; they record that the operator performed these checks.
-3. Create a root-readable environment file outside the repository containing the S3 variables and
-   `BACKUP_ENCRYPTION_KEY_BASE64`. Set its mode to `0600`. Do not put the object-storage secret or
-   encryption key on the command line.
+3. Create a root-readable environment file outside the repository containing the S3 variables,
+   `BACKUP_ENCRYPTION_KEY_BASE64`, and the production `WITHDRAWAL_DATA_KEY`. Set its mode to `0600`.
+   The offline restore command consumes only the backup key, but the restarted application needs
+   the withdrawal key to inspect active cases. Do not put either encryption key or the
+   object-storage secret on the command line.
 4. Run a one-shot container from the same reviewed image, with the application stopped and the same
    persistent volume mounted at `/data`:
 
@@ -139,6 +154,15 @@ Run reviewed, non-PII aggregate queries for the restored incident scope (for exa
 order state) from an operator-only one-shot container. Do not paste customer rows into tickets or
 logs.
 
+For withdrawal recovery, select one known active synthetic case and one known purged synthetic
+case from the drill inventory. Through the authenticated operator interface, prove the active case
+decrypts with its customer and reconciliation fields intact. Prove the purged case retains only
+its PII-free summary/history and cannot load encrypted payload data. Do not print either case's PII
+to terminal output, CI logs, or tickets. A decrypt alert after restore is a stop condition: keep
+commerce disabled, verify that the exact historical `WITHDRAWAL_DATA_KEY` was restored, and follow
+the decrypt-failure procedure in [withdrawal operations](withdrawals.md). Never substitute a newly
+generated key.
+
 ## Roll back the restore
 
 The restore deliberately retains `/data/shop.pre-restore.<timestamp>.sqlite`. It is a standalone,
@@ -206,6 +230,8 @@ environment. The drill proves:
 - real PUT/GET bodies, paginated LIST, encrypted/checksum pair deletion, and HTTPS fixture teardown;
 - restored migration ledger and exact row-count assertions; and
 - application readiness against the restored `/data/shop.sqlite` analogue.
+- active withdrawal payload recovery with the original withdrawal key and purged-case
+  non-recoverability after restore.
 
 Run it with:
 

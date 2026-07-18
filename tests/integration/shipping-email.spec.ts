@@ -84,10 +84,14 @@ describe('shipping email integration', () => {
 			},
 			shipping: {
 				stripe,
-				sender: createShippingEmailSender(plunk, {
-					name: 'Svelte Society Shop',
-					email: 'shop@example.test'
-				}),
+				sender: createShippingEmailSender(
+					plunk,
+					{
+						name: 'Svelte Society Shop',
+						email: 'shop@example.test'
+					},
+					'https://shop.sveltesociety.dev'
+				),
 				supportEmail: 'merch@sveltesociety.dev'
 			}
 		});

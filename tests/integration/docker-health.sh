@@ -3,6 +3,16 @@ set -euo pipefail
 
 IMAGE="${IMAGE:-svelte-society-shop:test}"
 SUFFIX="$$"
+TEMPORARY_DIRECTORY="$(mktemp -d)"
+WITHDRAWAL_DATA_KEY="$(
+	node --input-type=module --eval \
+		"import { randomBytes } from 'node:crypto'; process.stdout.write(randomBytes(32).toString('base64'))"
+)"
+MCP_BEARER_TOKEN="$(
+	node --input-type=module --eval \
+		"import { randomBytes } from 'node:crypto'; process.stdout.write(randomBytes(32).toString('hex'))"
+)"
+TLS_PROXY_PID=""
 PRIMARY_VOLUME="svelte-society-shop-data-${SUFFIX}"
 SAFETY_VOLUME="svelte-society-shop-safety-${SUFFIX}"
 SAFETY_CONTAINER="svelte-society-shop-safety-${SUFFIX}"
@@ -20,17 +30,24 @@ CONTAINERS=(
 VOLUMES=("$PRIMARY_VOLUME" "$SAFETY_VOLUME")
 
 cleanup() {
+	if [[ -n "$TLS_PROXY_PID" ]]; then
+		kill "$TLS_PROXY_PID" >/dev/null 2>&1 || true
+		wait "$TLS_PROXY_PID" >/dev/null 2>&1 || true
+	fi
 	for container in "${CONTAINERS[@]}"; do
 		docker rm --force "$container" >/dev/null 2>&1 || true
 	done
 	for volume in "${VOLUMES[@]}"; do
 		docker volume rm "$volume" >/dev/null 2>&1 || true
 	done
+	rm -rf "$TEMPORARY_DIRECTORY"
 }
 trap cleanup EXIT INT TERM
 
 SHOP_BUILD_SECRET_CANARY="shop-build-secret-canary-${SUFFIX}"
 docker build --build-arg SHOP_BUILD_SECRET_CANARY="$SHOP_BUILD_SECRET_CANARY" -t "$IMAGE" .
+IMAGE_DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
+printf 'Docker image digest: %s\n' "$IMAGE_DIGEST"
 if {
 	docker image inspect "$IMAGE"
 	docker history --no-trunc "$IMAGE"
@@ -46,6 +63,7 @@ start_container() {
 	local volume="$2"
 	local bootstrap="$3"
 	local scheduler="$4"
+	local mcp="${5:-false}"
 	local arguments=(
 		docker run --detach
 		--name "$name"
@@ -64,22 +82,37 @@ start_container() {
 		--env SHUTDOWN_TIMEOUT=30
 		--env STOREFRONT_ENABLED=false
 		--env CHECKOUT_ENABLED=false
-		--env MCP_ENABLED=false
+		--env "MCP_ENABLED=$mcp"
+		--env "MCP_BEARER_TOKEN=$MCP_BEARER_TOKEN"
 		--env PRODUCTION_ORIGIN=https://shop.sveltesociety.dev
 		--env ORIGIN=https://shop.sveltesociety.dev
 		--env HOST_ALLOWLIST=shop.sveltesociety.dev
 		--env SUPPORT_EMAIL=merch@sveltesociety.dev
+		--env "WITHDRAWAL_DATA_KEY=$WITHDRAWAL_DATA_KEY"
+		--env STRIPE_SECRET_KEY=sk_test_docker_health
 		--env STRIPE_WEBHOOK_SECRET=whsec_docker_health
+		--env STYRIA_APP_ID=docker-health
+		--env STYRIA_SECRET_KEY=docker-health
+		--env STYRIA_BASE_URL=https://styriashirts.eu
+		--env STYRIA_BRAND_NAME='Svelte Society'
+		--env PLUNK_SECRET_KEY=docker-health
+		--env PLUNK_BASE_URL=https://127.0.0.1:1
+		--env 'PLUNK_FROM_NAME=Svelte Society Shop'
+		--env PLUNK_FROM_EMAIL=merch@sveltesociety.dev
+		--env 'SELLER_LEGAL_NAME=Svelte School AB'
+		--env SELLER_REGISTRATION_NUMBER=docker-health-registration
+		--env SELLER_VAT_NUMBER=docker-health-vat
+		--env 'SELLER_ADDRESS_LINE1=Docker Health Street 1'
+		--env 'SELLER_POSTAL_CODE=123 45'
+		--env 'SELLER_CITY=Stockholm'
+		--env SELLER_COUNTRY=Sweden
+		--env SELLER_EMAIL=merch@sveltesociety.dev
+		--env 'DELIVERY_ESTIMATE_EU=Docker health EU estimate'
+		--env 'DELIVERY_ESTIMATE_US=Docker health US estimate'
+		--env POLICY_EFFECTIVE_DATE=2026-07-18
 	)
 	if [[ "$scheduler" == true ]]; then
 		arguments+=(
-			--env STRIPE_SECRET_KEY=sk_test_docker_health
-			--env STYRIA_APP_ID=docker-health
-			--env STYRIA_SECRET_KEY=docker-health
-			--env STYRIA_BASE_URL=https://styriashirts.eu
-			--env PLUNK_SECRET_KEY=docker-health
-			--env "PLUNK_FROM_NAME=Svelte Society Shop"
-			--env PLUNK_FROM_EMAIL=merch@sveltesociety.dev
 			--env ADMIN_EMAIL=merch@sveltesociety.dev
 		)
 	fi
@@ -196,6 +229,200 @@ assert_shutdown_logs() {
 	fi
 }
 
+submit_synthetic_withdrawal() {
+	local name="$1"
+	local port proxy_port base_url csrf receipt_token status
+	local cookie_jar="$TEMPORARY_DIRECTORY/withdrawal-cookies.txt"
+	local landing="$TEMPORARY_DIRECTORY/withdrawal-landing.html"
+	local confirmation="$TEMPORARY_DIRECTORY/withdrawal-confirmation.html"
+	local confirmation_headers="$TEMPORARY_DIRECTORY/withdrawal-confirmation-headers.txt"
+	local receipt="$TEMPORARY_DIRECTORY/withdrawal-receipt.txt"
+	local tls_key="$TEMPORARY_DIRECTORY/loopback-tls.key"
+	local tls_certificate="$TEMPORARY_DIRECTORY/loopback-tls.crt"
+	port="$(container_port "$name")"
+	proxy_port=$((40000 + SUFFIX % 20000))
+	base_url="https://localhost:${proxy_port}"
+	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+		-subj '/CN=localhost' \
+		-addext 'subjectAltName=DNS:localhost' \
+		-keyout "$tls_key" \
+		-out "$tls_certificate" >/dev/null 2>&1
+	node --input-type=module --eval '
+		import { readFileSync } from "node:fs";
+		import { connect } from "node:net";
+		import { createServer } from "node:tls";
+		const [keyPath, certificatePath, backendPort, proxyPort] = process.argv.slice(1);
+		const server = createServer(
+			{ key: readFileSync(keyPath), cert: readFileSync(certificatePath) },
+			(client) => {
+				const upstream = connect(Number(backendPort), "127.0.0.1");
+				client.pipe(upstream).pipe(client);
+			}
+		);
+		server.listen(Number(proxyPort), "127.0.0.1");
+	' "$tls_key" "$tls_certificate" "$port" "$proxy_port" &
+	TLS_PROXY_PID=$!
+	for _ in $(seq 1 30); do
+		status="$(
+			curl --insecure --silent --output /dev/null --write-out '%{http_code}' \
+				--header 'Host: shop.sveltesociety.dev' \
+				"${base_url}/health/live" || true
+		)"
+		[[ "$status" == 200 ]] && break
+		sleep 1
+	done
+	[[ "$status" == 200 ]]
+	curl --fail --silent --show-error \
+		--insecure \
+		--header 'Host: shop.sveltesociety.dev' \
+		--cookie-jar "$cookie_jar" \
+		--output "$landing" \
+		"${base_url}/withdraw"
+	csrf="$(
+		grep -Eo 'name="csrfToken" value="[A-Za-z0-9_-]{43}"' "$landing" |
+			head -n 1 |
+			cut -d '"' -f 4
+	)"
+	if [[ ! "$csrf" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
+		printf 'Withdrawal CSRF token was not rendered\n' >&2
+		return 1
+	fi
+	status="$(
+		curl --silent --show-error \
+			--insecure \
+			--request POST \
+			--header 'Host: shop.sveltesociety.dev' \
+			--header 'Origin: https://shop.sveltesociety.dev' \
+			--cookie "$cookie_jar" \
+			--cookie-jar "$cookie_jar" \
+			--data-urlencode "csrfToken=$csrf" \
+			--data-urlencode 'fullName=Docker Withdrawal Canary' \
+			--data-urlencode 'receiptEmail=docker-withdrawal@example.test' \
+			--data-urlencode 'enteredOrderReference=DOCKER-WITHDRAWAL-ORDER' \
+			--data-urlencode 'scope=entire_order' \
+			--dump-header "$confirmation_headers" \
+			--output "$confirmation" \
+			--write-out '%{http_code}' \
+			"${base_url}/withdraw?/confirm"
+	)"
+	if [[ "$status" != 200 ]]; then
+		printf 'Synthetic withdrawal confirmation returned %s\n' "$status" >&2
+		return 1
+	fi
+	WITHDRAWAL_REFERENCE="$(
+		grep -Eo 'WDR-[A-Za-z0-9_-]{22}' "$confirmation" | head -n 1 || true
+	)"
+	if [[ ! "$WITHDRAWAL_REFERENCE" =~ ^WDR-[A-Za-z0-9_-]{22}$ ]]; then
+		printf 'Synthetic withdrawal reference was not rendered\n' >&2
+		docker exec "$name" node --input-type=module --eval '
+			import Database from "better-sqlite3";
+			const database = new Database("/data/shop.sqlite", { readonly: true, fileMustExist: true });
+			const row = database.prepare("SELECT COUNT(*) AS count FROM withdrawal_cases").get();
+			database.close();
+			process.stderr.write(`Persisted withdrawal case count: ${row?.count ?? "invalid"}\n`);
+		'
+		grep -Eo 'Withdrawal notice received|We could not submit the notice|This form expired|temporarily unavailable' \
+			"$confirmation" >&2 || true
+		return 1
+	fi
+	receipt_token="$(
+		awk '$6 == "withdrawal_receipt_session" { print $7; exit }' "$cookie_jar"
+	)"
+	if [[ ! "$receipt_token" =~ ^v1\.[0-9]+\.[A-Za-z0-9_-]{43}$ ]]; then
+		printf 'Submitting cookie jar did not receive a valid receipt session\n' >&2
+		grep -Eio '^set-cookie: [^=]+' "$confirmation_headers" >&2 || true
+		awk '$6 != "" { print "Cookie jar metadata:", $6, "path=" $3, "secure=" $4 }' \
+			"$cookie_jar" >&2
+		return 1
+	fi
+	status="$(
+		curl --silent --show-error \
+			--insecure \
+			--header 'Host: shop.sveltesociety.dev' \
+			--cookie "$cookie_jar" \
+			--output "$receipt" \
+			--write-out '%{http_code}' \
+			"${base_url}/withdraw/receipt/${WITHDRAWAL_REFERENCE}"
+	)"
+	[[ "$status" == 200 ]]
+	grep -F 'Docker Withdrawal Canary' "$receipt" >/dev/null
+	grep -F 'DOCKER-WITHDRAWAL-ORDER' "$receipt" >/dev/null
+	status="$(
+		curl --silent --show-error \
+			--insecure \
+			--header 'Host: shop.sveltesociety.dev' \
+			--output /dev/null \
+			--write-out '%{http_code}' \
+			"${base_url}/withdraw/receipt/${WITHDRAWAL_REFERENCE}"
+	)"
+	[[ "$status" == 404 ]]
+	kill "$TLS_PROXY_PID"
+	wait "$TLS_PROXY_PID" >/dev/null 2>&1 || true
+	TLS_PROXY_PID=""
+}
+
+assert_bearer_mcp_withdrawal_list() {
+	local name="$1"
+	local port status session_id
+	local headers="$TEMPORARY_DIRECTORY/mcp-initialize-headers.txt"
+	local initialize="$TEMPORARY_DIRECTORY/mcp-initialize.txt"
+	local tools="$TEMPORARY_DIRECTORY/mcp-tools.txt"
+	local cases="$TEMPORARY_DIRECTORY/mcp-withdrawal-cases.txt"
+	port="$(container_port "$name")"
+	status="$(
+		curl --silent --show-error \
+			--request POST \
+			--header 'Host: shop.sveltesociety.dev' \
+			--header 'Origin: https://shop.sveltesociety.dev' \
+			--header 'Content-Type: application/json' \
+			--header 'Accept: application/json, text/event-stream' \
+			--header 'Authorization: Bearer invalid-docker-health-token' \
+			--data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"docker-health","version":"1.0.0"}}}' \
+			--output /dev/null \
+			--write-out '%{http_code}' \
+			"http://127.0.0.1:${port}/mcp"
+	)"
+	[[ "$status" == 401 ]]
+	curl --fail --silent --show-error \
+		--request POST \
+		--header 'Host: shop.sveltesociety.dev' \
+		--header 'Origin: https://shop.sveltesociety.dev' \
+		--header 'Content-Type: application/json' \
+		--header 'Accept: application/json, text/event-stream' \
+		--header "Authorization: Bearer $MCP_BEARER_TOKEN" \
+		--data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"docker-health","version":"1.0.0"}}}' \
+		--dump-header "$headers" \
+		--output "$initialize" \
+		"http://127.0.0.1:${port}/mcp"
+	session_id="$(awk 'tolower($1) == "mcp-session-id:" { gsub("\\r", "", $2); print $2; exit }' "$headers")"
+	[[ -n "$session_id" ]]
+	grep -F '"protocolVersion":"2025-06-18"' "$initialize" >/dev/null
+	curl --fail --silent --show-error \
+		--request POST \
+		--header 'Host: shop.sveltesociety.dev' \
+		--header 'Origin: https://shop.sveltesociety.dev' \
+		--header 'Content-Type: application/json' \
+		--header 'Accept: application/json, text/event-stream' \
+		--header "Authorization: Bearer $MCP_BEARER_TOKEN" \
+		--header "mcp-session-id: $session_id" \
+		--data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+		--output "$tools" \
+		"http://127.0.0.1:${port}/mcp"
+	grep -F '"name":"list_withdrawal_cases"' "$tools" >/dev/null
+	curl --fail --silent --show-error \
+		--request POST \
+		--header 'Host: shop.sveltesociety.dev' \
+		--header 'Origin: https://shop.sveltesociety.dev' \
+		--header 'Content-Type: application/json' \
+		--header 'Accept: application/json, text/event-stream' \
+		--header "Authorization: Bearer $MCP_BEARER_TOKEN" \
+		--header "mcp-session-id: $session_id" \
+		--data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_withdrawal_cases","arguments":{"limit":10}}}' \
+		--output "$cases" \
+		"http://127.0.0.1:${port}/mcp"
+	grep -F "$WITHDRAWAL_REFERENCE" "$cases" >/dev/null
+}
+
 # A normal or rollback deployment must fail closed when its database is absent.
 start_container "$SAFETY_CONTAINER" "$SAFETY_VOLUME" false false
 wait_http_status "$SAFETY_CONTAINER" /health/live 200
@@ -269,9 +496,10 @@ assert_quick_check
 
 # The same volume becomes ready only after bootstrap is turned off. The stalled-provider
 # proof is host-only, so routine image checks keep the scheduler off.
-start_container "$NORMAL_CONTAINER" "$PRIMARY_VOLUME" false false
+start_container "$NORMAL_CONTAINER" "$PRIMARY_VOLUME" false false true
 wait_http_status "$NORMAL_CONTAINER" /health/live 200
 wait_http_status "$NORMAL_CONTAINER" /health/ready 200
+wait_http_status "$NORMAL_CONTAINER" /withdraw 200
 wait_container_healthy "$NORMAL_CONTAINER"
 assert_single_volume_owner "$NORMAL_CONTAINER"
 
@@ -303,6 +531,9 @@ if printf '%s\n' "$headers" | grep -Eiq '^content-security-policy:.*unsafe-inlin
 	exit 1
 fi
 
+submit_synthetic_withdrawal "$NORMAL_CONTAINER"
+assert_bearer_mcp_withdrawal_list "$NORMAL_CONTAINER"
+
 stop_within_timeout "$NORMAL_CONTAINER"
 assert_shutdown_logs "$NORMAL_CONTAINER" false
 
@@ -317,10 +548,13 @@ docker exec "$PERSISTENCE_CONTAINER" node --input-type=module --eval '
 	import Database from "better-sqlite3";
 	const database = new Database("/data/shop.sqlite", { readonly: true, fileMustExist: true });
 	const row = database.prepare("SELECT COUNT(*) AS count FROM orders WHERE id = ?").get("ord_docker_persist");
+	const withdrawal = database.prepare(
+		"SELECT COUNT(*) AS count FROM withdrawal_cases WHERE public_reference = ?"
+	).get(process.argv[1]);
 	database.close();
-	if (!row || row.count !== 1) process.exit(1);
-'
+	if (!row || row.count !== 1 || !withdrawal || withdrawal.count !== 1) process.exit(1);
+' "$WITHDRAWAL_REFERENCE"
 stop_within_timeout "$PERSISTENCE_CONTAINER"
 assert_shutdown_logs "$PERSISTENCE_CONTAINER" false
 
-printf 'Docker bootstrap, health, persistence, headers, and SIGTERM checks passed.\n'
+printf 'Docker bootstrap, withdrawal route, receipt authorization, bearer MCP, persistence, headers, UID, and SIGTERM checks passed.\n'

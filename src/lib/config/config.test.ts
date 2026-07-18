@@ -95,6 +95,10 @@ describe('parseWithdrawalConfig', () => {
 			STRIPE_FREE_SHIPPING_RATE_ID: _free,
 			...withdrawalOnly
 		} = withoutSecret;
+		void _secret;
+		void _webhook;
+		void _paid;
+		void _free;
 
 		expect(
 			parseWithdrawalConfig({
@@ -111,6 +115,8 @@ describe('parseWithdrawalConfig', () => {
 			CHECKOUT_ENABLED: _checkout,
 			...withoutCommerceFlags
 		} = validPrivateEnv;
+		void _storefront;
+		void _checkout;
 
 		expect(parseWithdrawalConfig(withoutCommerceFlags)).toEqual(
 			parseWithdrawalConfig(validPrivateEnv)

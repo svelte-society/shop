@@ -25,7 +25,7 @@ The legal reviewer must review the rendered Shipping, Returns, Privacy, Terms, a
 the checkout disclosures, the return workflow, and the local-order deletion procedure against the
 deployed seller and provider configuration.
 
-### Current-law implementation gap requiring a decision
+### Online withdrawal implementation requiring approval
 
 Sweden's Distance Contracts Act, chapter 2 section 10 a, as amended by SFS 2026:246, requires an
 accessible online withdrawal function for eligible contracts concluded through an online
@@ -33,11 +33,26 @@ interface. The function must support the required identifying and contract infor
 explicit withdrawal confirmation, and a prompt durable receipt. The provision took effect before
 this draft was prepared.
 
-Task 7 does not add that function or the related personal-data and receipt workflow. The
-approval-first email instructions and model notice on the Returns page are not presented as a
-substitute for the statutory online function. A qualified legal reviewer must decide the exact
-product and operational implementation, and that reviewed implementation must ship before
-checkout is enabled.
+The application now implements an online withdrawal route, explicit review/confirm action, durable
+browser receipt, queued email receipt, encrypted case workflow, operator reconciliation, and
+90-day post-close PII purge. Implementation is not approval. A qualified Swedish/EU consumer-law
+reviewer must review the deployed, rendered behavior and record a decision for each of these
+surfaces before checkout is enabled:
+
+- the labels and explanatory copy on `/withdraw`, including the distinction between withdrawal,
+  damaged/incorrect-item support, eligibility, returns, and refunds;
+- the explicit review and confirmation action and the information shown immediately before it;
+- the browser receipt, emailed receipt, eligibility/ineligibility/support messages, and resend
+  behavior;
+- the Shipping, Returns, Privacy, Terms, About, and withdrawal-route copy as one consistent set;
+- the 90-day post-close retention period, purge behavior, backup implications, and data-subject
+  handling; and
+- route availability when the storefront and checkout are disabled, including accessibility and
+  durable-receipt expectations.
+
+Record the reviewed commit SHA, rendered production origin, jurisdictions/languages, required copy
+changes, and operational conditions in this file. Until those fields are supplied, the function is
+deployed only as an unapproved launch prerequisite and `CHECKOUT_ENABLED` remains `false`.
 
 No merchandise-specific withdrawal exclusion is claimed in the current policy draft. Any future
 exclusion must be supported by the reviewed law and explicitly approved before publication.
@@ -59,6 +74,13 @@ The application does not assert a tax position in this record. The accountant mu
 seller legal fields, registrations, VAT presentation, checkout behavior, destinations, shipping
 charge treatment, Stripe receipt and invoice configuration, and Styria ship-from treatment before
 checkout is enabled.
+
+The withdrawal workflow intentionally does not issue refunds, cancel fulfillment, create Styria
+return labels, or post accounting records. The qualified accountant must approve the manual refund
+and record-handling procedure: which reviewed payment/order evidence is required, who issues a
+refund outside this application, how fees/shipping/VAT are recorded, how double refunds are
+prevented, and which PII-free reconciliation evidence is retained. That approval must not be
+inferred from a successful withdrawal case closure.
 
 ## Required production values
 
@@ -98,7 +120,10 @@ they are not a replacement for the approvals above.
       operating conditions without copying private correspondence.
 - [ ] Record the accountant role and qualification, review date, approved commit SHA, and operating
       conditions without copying private correspondence.
-- [ ] Implement and verify the legally reviewed online withdrawal workflow.
+- [ ] Record qualified counsel approval for the rendered route labels, review/confirm action,
+      receipts/messages, policy copy, retention, and off-storefront route availability.
+- [ ] Record qualified accountant approval for manual refund and accounting-record handling.
+- [ ] Verify the implemented online withdrawal workflow against those recorded approvals.
 - [ ] Verify the deployed seller and policy values exactly match the approved record.
 - [ ] Re-run the production configuration, policy-route, checkout, accessibility, and deletion tests
       against the approved commit.

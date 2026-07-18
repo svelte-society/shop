@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -63,7 +64,7 @@ function withdrawalServer() {
 			PLUNK_FROM_NAME: 'Svelte Society Shop',
 			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 			PLUNK_BASE_URL: 'https://127.0.0.1:1',
-			WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 23).toString('base64'),
+			WITHDRAWAL_DATA_KEY: randomBytes(32).toString('base64'),
 			SELLER_LEGAL_NAME: 'Svelte School AB',
 			SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
 			SELLER_VAT_NUMBER: 'reviewed-vat-number',

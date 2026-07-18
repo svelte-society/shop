@@ -19,7 +19,9 @@ const environment = {
 	PLUNK_SECRET_KEY: 'plunk-test-ambiguity',
 	PLUNK_FROM_NAME: 'Svelte Society Shop',
 	PLUNK_FROM_EMAIL: 'shop@example.test',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+	WITHDRAWAL_DATA_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 };
 
 describe('ambiguous Styria create reconciliation', () => {

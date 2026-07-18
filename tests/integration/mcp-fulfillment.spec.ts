@@ -30,7 +30,9 @@ const runtimeEnvironment = {
 	PLUNK_SECRET_KEY: 'plunk-test-lifecycle',
 	PLUNK_FROM_NAME: 'Svelte Society Shop',
 	PLUNK_FROM_EMAIL: 'shop@example.test',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
+	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
+	WITHDRAWAL_DATA_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 };
 
 describe('Codex MCP fulfillment lifecycle', () => {
@@ -171,10 +173,14 @@ describe('Codex MCP fulfillment lifecycle', () => {
 			},
 			shipping: {
 				stripe,
-				sender: createShippingEmailSender(plunk, {
-					name: 'Svelte Society Shop',
-					email: 'shop@example.test'
-				}),
+				sender: createShippingEmailSender(
+					plunk,
+					{
+						name: 'Svelte Society Shop',
+						email: 'shop@example.test'
+					},
+					runtimeEnvironment.PRODUCTION_ORIGIN
+				),
 				supportEmail: 'merch@sveltesociety.dev'
 			}
 		});
