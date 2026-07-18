@@ -17,6 +17,10 @@ import {
 	registerListWithdrawalsTool,
 	type ListWithdrawalCasesService
 } from './tools/list-withdrawals';
+import {
+	registerManageWithdrawalTools,
+	type WithdrawalCaseManagementService
+} from './tools/manage-withdrawal';
 import { registerPrepareStyriaTool } from './tools/prepare-styria';
 import { registerReconcileStyriaTool } from './tools/reconcile-styria';
 import { registerRecordSupportTool } from './tools/record-support';
@@ -32,6 +36,7 @@ export type McpServices = Readonly<{
 	status?: FulfillmentStatusService;
 	shipping?: ShippingEmailService;
 	withdrawals?: ListWithdrawalCasesService & InspectWithdrawalCaseService;
+	withdrawalWorkflow?: WithdrawalCaseManagementService;
 	now?: () => Date;
 }>;
 
@@ -65,6 +70,9 @@ export function createMcpServer(services: McpServices): McpServer<GenericSchema>
 	if (services.withdrawals) {
 		registerListWithdrawalsTool(server, services.withdrawals);
 		registerInspectWithdrawalTool(server, services.withdrawals);
+	}
+	if (services.withdrawalWorkflow) {
+		registerManageWithdrawalTools(server, services.withdrawalWorkflow);
 	}
 
 	return server;

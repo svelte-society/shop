@@ -22,8 +22,10 @@ import type { StyriaGateway } from '$lib/server/styria/gateway';
 import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
 import { parseWithdrawalDataKey } from '$lib/server/withdrawals/crypto.server';
 import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
+import { WithdrawalWorkflowService } from '$lib/server/withdrawals/workflow.server';
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
+import { parseWithdrawalConfig } from '$lib/config/private.server';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
@@ -105,11 +107,28 @@ export function createRuntimeMcpServices(
 	const outbox = new SqliteOutboxRepository(database);
 	const alerts = new SqliteAlertService(outbox);
 	const withdrawalRepository = new SqliteWithdrawalRepository(database);
+	const withdrawalDataKey = parseWithdrawalDataKey(environment.WITHDRAWAL_DATA_KEY);
 	const withdrawalReader = new WithdrawalCaseReader({
 		repository: withdrawalRepository,
-		dataKey: parseWithdrawalDataKey(environment.WITHDRAWAL_DATA_KEY),
+		dataKey: withdrawalDataKey,
 		alerts
 	});
+	const workflowDependencies = {
+		database,
+		repository: withdrawalRepository,
+		reader: withdrawalReader,
+		dataKey: withdrawalDataKey
+	};
+	const withdrawalWorkflow = new WithdrawalWorkflowService(workflowDependencies);
+	const messageWorkflow = () => {
+		const configuration = parseWithdrawalConfig(environment);
+		return new WithdrawalWorkflowService({
+			...workflowDependencies,
+			productionOrigin: configuration.productionOrigin,
+			supportEmail: configuration.supportEmail,
+			seller: configuration.seller
+		});
+	};
 	const withdrawals: NonNullable<McpServices['withdrawals']> = {
 		listCases(input) {
 			return withdrawalRepository.list(input);
@@ -135,6 +154,39 @@ export function createRuntimeMcpServices(
 				inspection,
 				history: withdrawalRepository.getInspectionHistory(inspection.id)
 			};
+		}
+	};
+	const withdrawalActions: NonNullable<McpServices['withdrawalWorkflow']> = {
+		beginReview(input) {
+			return withdrawalWorkflow.beginReview({ ...input, now: new Date() });
+		},
+		recordEligibility(input) {
+			return withdrawalWorkflow.recordEligibility({ ...input, now: new Date() });
+		},
+		recordReturn(input) {
+			return withdrawalWorkflow.recordReturn({ ...input, now: new Date() });
+		},
+		closeCase(input) {
+			return withdrawalWorkflow.closeCase({ ...input, now: new Date() });
+		},
+		resendMessage(input) {
+			const now = new Date();
+			if (input.mode === 'preview') {
+				const preview = messageWorkflow().previewResend({
+					reference: input.reference,
+					sourceMessageId: input.sourceMessageId,
+					now
+				});
+				return { mode: 'preview', ...preview, queued: false };
+			}
+			const confirmation = messageWorkflow().confirmResend({
+				reference: input.reference,
+				sourceMessageId: input.sourceMessageId,
+				previewToken: input.previewToken as string,
+				idempotencyKey: input.idempotencyKey as string,
+				now
+			});
+			return { mode: 'confirm', ...confirmation };
 		}
 	};
 	const brandName = requiredEnvironmentValue(environment, 'STYRIA_BRAND_NAME');
@@ -174,6 +226,7 @@ export function createRuntimeMcpServices(
 		reconciliation: new StyriaReconciliationService({ fulfillment, styria }),
 		status,
 		shipping,
-		withdrawals
+		withdrawals,
+		withdrawalWorkflow: withdrawalActions
 	};
 }

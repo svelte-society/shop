@@ -7,6 +7,7 @@ import type {
 	SupportNote
 } from '$lib/server/fulfillment/repository.server';
 import type { FulfillmentDetails } from '$lib/server/stripe/gateway';
+import { WITHDRAWAL_LEGAL_STATUS_COPY } from '$lib/server/withdrawals/messages.server';
 import { createMcpServer, type McpServices } from '../server';
 
 type RpcResult = {
@@ -265,6 +266,46 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 			}
 		}))
 	};
+	const withdrawalWorkflow = {
+		beginReview: vi.fn((input) => ({
+			reference: input.reference,
+			status: 'reviewing' as const,
+			revision: input.expectedRevision + 1
+		})),
+		recordEligibility: vi.fn((input) => ({
+			reference: input.reference,
+			status:
+				input.decision === 'eligible_eu'
+					? ('awaiting_return' as const)
+					: input.decision === 'ineligible_non_eu'
+						? ('ineligible' as const)
+						: ('support_handling' as const),
+			revision: input.expectedRevision + 1
+		})),
+		recordReturn: vi.fn((input) => ({
+			reference: input.reference,
+			status: 'awaiting_return' as const,
+			revision: input.expectedRevision + 1
+		})),
+		closeCase: vi.fn((input) => ({
+			reference: input.reference,
+			status: 'closed' as const,
+			revision: input.expectedRevision + 1
+		})),
+		resendMessage: vi.fn<NonNullable<McpServices['withdrawalWorkflow']>['resendMessage']>(
+			(input) => ({
+				mode: 'preview',
+				reference: input.reference,
+				sourceMessageId: input.sourceMessageId,
+				destination: 'withdrawal.private@example.test',
+				subject: 'Withdrawal return instructions — WDR-BBBBBBBBBBBBBBBBBBBBBB',
+				textBody: 'Private exact preview body',
+				previewToken: 'v1.preview-token',
+				expiresAt: new Date('2026-07-17T10:10:00.000Z'),
+				queued: false
+			})
+		)
+	} satisfies NonNullable<McpServices['withdrawalWorkflow']>;
 	const services = {
 		fulfillment,
 		stripe,
@@ -274,6 +315,7 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 		status,
 		shipping,
 		withdrawals,
+		withdrawalWorkflow,
 		now: () => now
 	} satisfies McpServices;
 	return {
@@ -286,7 +328,8 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 			reconciliation,
 			status,
 			shipping,
-			withdrawals
+			withdrawals,
+			withdrawalWorkflow
 		}
 	};
 }
@@ -350,7 +393,12 @@ describe('fulfillment MCP protocol', () => {
 			'resend_shipping_email',
 			'record_return_or_replacement',
 			'list_withdrawal_cases',
-			'inspect_withdrawal_case'
+			'inspect_withdrawal_case',
+			'begin_withdrawal_review',
+			'record_withdrawal_eligibility',
+			'record_withdrawal_return',
+			'close_withdrawal_case',
+			'resend_withdrawal_message'
 		]);
 		expect(Object.fromEntries(tools.map(({ name, annotations }) => [name, annotations]))).toEqual({
 			list_pending_orders: {
@@ -410,6 +458,36 @@ describe('fulfillment MCP protocol', () => {
 			inspect_withdrawal_case: {
 				readOnlyHint: true,
 				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			begin_withdrawal_review: {
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			record_withdrawal_eligibility: {
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			record_withdrawal_return: {
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			close_withdrawal_case: {
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			resend_withdrawal_message: {
+				readOnlyHint: false,
+				destructiveHint: true,
 				idempotentHint: true,
 				openWorldHint: false
 			}
@@ -474,6 +552,22 @@ describe('fulfillment MCP protocol', () => {
 			messages: expect.any(Object),
 			error: expect.any(Object)
 		});
+
+		for (const name of [
+			'begin_withdrawal_review',
+			'record_withdrawal_eligibility',
+			'record_withdrawal_return',
+			'close_withdrawal_case',
+			'resend_withdrawal_message'
+		]) {
+			const tool = tools.find((entry) => entry.name === name);
+			expect(tool?.inputSchema).toMatchObject({
+				type: 'object',
+				additionalProperties: false,
+				properties: { reference: expect.any(Object) }
+			});
+			expect(tool?.outputSchema?.properties).toHaveProperty('error');
+		}
 	});
 
 	it.each([
@@ -488,6 +582,93 @@ describe('fulfillment MCP protocol', () => {
 		['inspect_withdrawal_case', { reference: '' }],
 		['inspect_withdrawal_case', { reference: ' WDR-AAAAAAAAAAAAAAAAAAAAAA' }],
 		['inspect_withdrawal_case', { reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA', extra: true }],
+		[
+			'begin_withdrawal_review',
+			{ reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA', expected_status: 'submitted' }
+		],
+		[
+			'begin_withdrawal_review',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'submitted',
+				expected_revision: 0
+			}
+		],
+		[
+			'begin_withdrawal_review',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'reviewing',
+				expected_revision: 1
+			}
+		],
+		[
+			'record_withdrawal_eligibility',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'reviewing',
+				expected_revision: 1.5,
+				decision: 'support_handling',
+				internal_order_reference: 'internal-order-42',
+				country_code: 'SE'
+			}
+		],
+		[
+			'record_withdrawal_eligibility',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'reviewing',
+				expected_revision: 2,
+				decision: 'voluntary_non_eu',
+				internal_order_reference: 'internal-order-42',
+				country_code: 'US'
+			}
+		],
+		[
+			'record_withdrawal_return',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'reviewing',
+				expected_revision: 3,
+				outcome: 'parcel_received'
+			}
+		],
+		[
+			'record_withdrawal_return',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'awaiting_return',
+				expected_revision: -1,
+				outcome: 'parcel_received'
+			}
+		],
+		[
+			'close_withdrawal_case',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				expected_status: 'closed',
+				expected_revision: 4,
+				outcome_code: 'eligible_return_received'
+			}
+		],
+		[
+			'resend_withdrawal_message',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				source_message_id: 0,
+				mode: 'preview'
+			}
+		],
+		[
+			'resend_withdrawal_message',
+			{
+				reference: 'WDR-AAAAAAAAAAAAAAAAAAAAAA',
+				source_message_id: 1,
+				mode: 'confirm',
+				preview_token: 'v1.preview-token',
+				idempotency_key: 'not-a-uuid'
+			}
+		],
 		['inspect_order', { order_id: '' }],
 		['inspect_order', { order_id: ' order_2042' }],
 		['inspect_order', { order_id: 'order_2042', include_shipping_details: 'yes' }],
@@ -674,6 +855,330 @@ describe('fulfillment MCP protocol', () => {
 		const serialized = JSON.stringify(result);
 		expect(serialized).not.toContain('case_private_newer');
 		expect(serialized).not.toContain('idempotency');
+	});
+
+	it('begins withdrawal review with the expected state and revision', async () => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'begin_withdrawal_review', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'submitted',
+			expected_revision: 1
+		});
+
+		expectMirrored(result);
+		expect(result.structuredContent).toEqual({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			status: 'reviewing',
+			revision: 2
+		});
+		expect(fixture.services.withdrawalWorkflow.beginReview).toHaveBeenCalledWith({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expectedStatus: 'submitted',
+			expectedRevision: 1
+		});
+	});
+
+	it('records eligible EU review with normalized country and required instructions', async () => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'record_withdrawal_eligibility', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'reviewing',
+			expected_revision: 2,
+			decision: 'eligible_eu',
+			internal_order_reference: 'internal-order-42',
+			country_code: ' se ',
+			customer_instructions: 'Use the reviewed return address.'
+		});
+
+		expectMirrored(result);
+		expect(result.structuredContent).toEqual({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			status: 'awaiting_return',
+			revision: 3
+		});
+		expect(fixture.services.withdrawalWorkflow.recordEligibility).toHaveBeenCalledWith({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expectedStatus: 'reviewing',
+			expectedRevision: 2,
+			decision: 'eligible_eu',
+			internalOrderReference: 'internal-order-42',
+			countryCode: 'SE',
+			customerInstructions: 'Use the reviewed return address.'
+		});
+	});
+
+	it.each([
+		[
+			'eligible without instructions',
+			{
+				decision: 'eligible_eu',
+				country_code: 'SE'
+			}
+		],
+		[
+			'non-EU with instructions',
+			{
+				decision: 'ineligible_non_eu',
+				country_code: 'US',
+				customer_instructions: 'Unexpected instructions'
+			}
+		],
+		[
+			'support with instructions',
+			{
+				decision: 'support_handling',
+				country_code: 'SE',
+				customer_instructions: 'Unexpected instructions'
+			}
+		]
+	])('rejects conditional eligibility input: %s', async (_label, conditional) => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'record_withdrawal_eligibility', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'reviewing',
+			expected_revision: 2,
+			internal_order_reference: 'internal-order-42',
+			...conditional
+		});
+
+		expect(result).toMatchObject({
+			isError: true,
+			structuredContent: { error: { code: 'WITHDRAWAL_ELIGIBILITY_INVALID' } }
+		});
+		expect(fixture.services.withdrawalWorkflow.recordEligibility).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['ineligible_non_eu', 'US', 'ineligible'],
+		['support_handling', 'SE', 'support_handling']
+	] as const)(
+		'records %s without a voluntary non-EU path',
+		async (decision, countryCode, status) => {
+			const fixture = setup();
+			const result = await callTool(fixture.server, 'record_withdrawal_eligibility', {
+				reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+				expected_status: 'reviewing',
+				expected_revision: 2,
+				decision,
+				internal_order_reference: 'internal-order-42',
+				country_code: countryCode
+			});
+
+			expectMirrored(result);
+			expect(result.structuredContent).toEqual({
+				reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+				status,
+				revision: 3
+			});
+			expect(fixture.services.withdrawalWorkflow.recordEligibility).toHaveBeenCalledWith({
+				reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+				expectedStatus: 'reviewing',
+				expectedRevision: 2,
+				decision,
+				internalOrderReference: 'internal-order-42',
+				countryCode,
+				customerInstructions: undefined
+			});
+			for (const provider of [
+				fixture.services.stripe,
+				fixture.services.preparation,
+				fixture.services.submission,
+				fixture.services.reconciliation,
+				fixture.services.status,
+				fixture.services.shipping
+			]) {
+				for (const method of Object.values(provider)) expect(method).not.toHaveBeenCalled();
+			}
+		}
+	);
+
+	it('retains the exact ineligible and support-handoff customer copy', () => {
+		expect(WITHDRAWAL_LEGAL_STATUS_COPY.ineligible_decision).toBe(
+			'This order is not eligible for a change-of-mind return. Damaged or incorrect-item support remains available at merch@sveltesociety.dev.'
+		);
+		expect(WITHDRAWAL_LEGAL_STATUS_COPY.support_handoff).toBe(
+			'We will handle this request through damaged or incorrect-item support. Support remains available at merch@sveltesociety.dev.'
+		);
+		expect(WITHDRAWAL_LEGAL_STATUS_COPY.eligible_instructions).toContain(
+			"Do not send the parcel to the seller's registered address unless the instructions say so."
+		);
+	});
+
+	it('maps reviewed return and close actions to the workflow service', async () => {
+		const fixture = setup();
+		const recorded = await callTool(fixture.server, 'record_withdrawal_return', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'awaiting_return',
+			expected_revision: 3,
+			outcome: 'parcel_received',
+			parcel_reference: 'parcel-42'
+		});
+		const closed = await callTool(fixture.server, 'close_withdrawal_case', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'awaiting_return',
+			expected_revision: 4,
+			outcome_code: 'eligible_return_received'
+		});
+
+		expectMirrored(recorded);
+		expectMirrored(closed);
+		expect(recorded.structuredContent).toMatchObject({
+			status: 'awaiting_return',
+			revision: 4
+		});
+		expect(closed.structuredContent).toMatchObject({ status: 'closed', revision: 5 });
+		expect(fixture.services.withdrawalWorkflow.recordReturn).toHaveBeenCalledWith({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expectedStatus: 'awaiting_return',
+			expectedRevision: 3,
+			outcome: 'parcel_received',
+			parcelReference: 'parcel-42'
+		});
+		expect(fixture.services.withdrawalWorkflow.closeCase).toHaveBeenCalledWith({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expectedStatus: 'awaiting_return',
+			expectedRevision: 4,
+			outcomeCode: 'eligible_return_received'
+		});
+	});
+
+	it('returns the current safe status and revision for a workflow conflict', async () => {
+		const fixture = setup();
+		fixture.services.withdrawalWorkflow.beginReview.mockImplementationOnce(() => {
+			throw Object.assign(new Error('private stale detail'), {
+				code: 'WITHDRAWAL_CASE_CONFLICT',
+				currentStatus: 'reviewing',
+				currentRevision: 2
+			});
+		});
+
+		const result = await callTool(fixture.server, 'begin_withdrawal_review', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'submitted',
+			expected_revision: 1
+		});
+
+		expect(result).toEqual({
+			isError: true,
+			content: [
+				{
+					type: 'text',
+					text: JSON.stringify({
+						error: { code: 'WITHDRAWAL_CASE_CONFLICT' },
+						current_status: 'reviewing',
+						current_revision: 2
+					})
+				}
+			],
+			structuredContent: {
+				error: { code: 'WITHDRAWAL_CASE_CONFLICT' },
+				current_status: 'reviewing',
+				current_revision: 2
+			}
+		});
+		expect(JSON.stringify(result)).not.toContain('private stale detail');
+	});
+
+	it('returns only a stable fallback for a private workflow failure', async () => {
+		const fixture = setup();
+		fixture.services.withdrawalWorkflow.closeCase.mockImplementationOnce(() => {
+			throw new Error('private database path /data/shop.sqlite');
+		});
+
+		const result = await callTool(fixture.server, 'close_withdrawal_case', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			expected_status: 'ineligible',
+			expected_revision: 3,
+			outcome_code: 'ineligible_non_eu'
+		});
+
+		expect(result).toMatchObject({
+			isError: true,
+			structuredContent: { error: { code: 'WITHDRAWAL_CLOSE_ACTION_FAILED' } }
+		});
+		expect(JSON.stringify(result)).not.toContain('database path');
+		expect(JSON.stringify(result)).not.toContain('/data/shop.sqlite');
+	});
+
+	it('returns a read-like withdrawal resend preview without queueing', async () => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'resend_withdrawal_message', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			source_message_id: 1,
+			mode: 'preview'
+		});
+
+		expectMirrored(result);
+		expect(result.structuredContent).toEqual({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			source_message_id: 1,
+			mode: 'preview',
+			destination: 'withdrawal.private@example.test',
+			subject: 'Withdrawal return instructions — WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			text_body: 'Private exact preview body',
+			preview_token: 'v1.preview-token',
+			expires_at: '2026-07-17T10:10:00.000Z',
+			queued: false
+		});
+		expect(fixture.services.withdrawalWorkflow.resendMessage).toHaveBeenCalledWith({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			sourceMessageId: 1,
+			mode: 'preview',
+			previewToken: undefined,
+			idempotencyKey: undefined
+		});
+	});
+
+	it('rejects withdrawal resend confirm without both reviewed fields', async () => {
+		const fixture = setup();
+		const result = await callTool(fixture.server, 'resend_withdrawal_message', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			source_message_id: 1,
+			mode: 'confirm'
+		});
+
+		expect(result).toMatchObject({
+			isError: true,
+			structuredContent: { error: { code: 'WITHDRAWAL_MESSAGE_PREVIEW_REQUIRED' } }
+		});
+		expect(fixture.services.withdrawalWorkflow.resendMessage).not.toHaveBeenCalled();
+	});
+
+	it('queues withdrawal resend confirm without echoing preview content', async () => {
+		const fixture = setup();
+		fixture.services.withdrawalWorkflow.resendMessage.mockImplementationOnce((input) => ({
+			mode: 'confirm',
+			reference: input.reference,
+			sourceMessageId: input.sourceMessageId,
+			messageId: 17,
+			queued: true
+		}));
+		const result = await callTool(fixture.server, 'resend_withdrawal_message', {
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			source_message_id: 1,
+			mode: 'confirm',
+			preview_token: 'v1.preview-token',
+			idempotency_key: '9f0f79ee-8f68-4b46-84c0-2533fdc127a1'
+		});
+
+		expectMirrored(result);
+		expect(result.structuredContent).toEqual({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			source_message_id: 1,
+			mode: 'confirm',
+			message_id: 17,
+			queued: true
+		});
+		expect(JSON.stringify(result)).not.toContain('withdrawal.private@example.test');
+		expect(JSON.stringify(result)).not.toContain('Private exact preview body');
+		expect(JSON.stringify(result)).not.toContain('v1.preview-token');
+		expect(fixture.services.withdrawalWorkflow.resendMessage).toHaveBeenCalledWith({
+			reference: 'WDR-BBBBBBBBBBBBBBBBBBBBBB',
+			sourceMessageId: 1,
+			mode: 'confirm',
+			previewToken: 'v1.preview-token',
+			idempotencyKey: '9f0f79ee-8f68-4b46-84c0-2533fdc127a1'
+		});
 	});
 
 	it.each([
