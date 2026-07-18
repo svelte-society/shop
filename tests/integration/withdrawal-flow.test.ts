@@ -658,19 +658,46 @@ describe('withdrawal production-shaped flow', () => {
 				 provider_delivery_id = 'delivery_mcp_receipt', completed_at = ? WHERE id = ?`
 			)
 			.run(actionAt.toISOString(), receipt.id);
+		const inspectedForResend = await callMcpTool(server, 'inspect_withdrawal_case', {
+			reference: eligible.result.reference
+		});
+		const sourceMessage = (
+			inspectedForResend.messages as Array<{ kind: string; source_message_id: number }>
+		).find((message) => message.kind === 'receipt');
+		expect(sourceMessage).toMatchObject({
+			kind: 'receipt',
+			source_message_id: receipt.id
+		});
+		if (!sourceMessage) throw new Error('TEST_WITHDRAWAL_SOURCE_MESSAGE_MISSING');
 		const preview = await callMcpTool(server, 'resend_withdrawal_message', {
 			reference: eligible.result.reference,
-			source_message_id: receipt.id,
+			source_message_id: sourceMessage.source_message_id,
 			mode: 'preview'
 		});
 		expect(preview).toMatchObject({ mode: 'preview', queued: false });
-		await callMcpTool(server, 'resend_withdrawal_message', {
+		const confirmed = await callMcpTool(server, 'resend_withdrawal_message', {
 			reference: eligible.result.reference,
-			source_message_id: receipt.id,
+			source_message_id: sourceMessage.source_message_id,
 			mode: 'confirm',
 			preview_token: preview.preview_token,
 			idempotency_key: '9f0f79ee-8f68-4b46-84c0-2533fdc127a1'
 		});
+		const repeated = await callMcpTool(server, 'resend_withdrawal_message', {
+			reference: eligible.result.reference,
+			source_message_id: sourceMessage.source_message_id,
+			mode: 'confirm',
+			preview_token: preview.preview_token,
+			idempotency_key: '9f0f79ee-8f68-4b46-84c0-2533fdc127a1'
+		});
+		expect(repeated).toEqual(confirmed);
+		expect(
+			database
+				.prepare(
+					`SELECT resend_of_message_id FROM withdrawal_messages
+					 WHERE case_id = ? AND kind = 'resend'`
+				)
+				.all(eligible.record.id)
+		).toEqual([{ resend_of_message_id: receipt.id }]);
 
 		const listed = await callMcpTool(server, 'list_withdrawal_cases', { limit: 10 });
 		expect(listed.cases).toHaveLength(3);

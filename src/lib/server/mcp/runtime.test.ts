@@ -454,7 +454,13 @@ describe('runtime MCP composition', () => {
 					entered_order_reference: 'RUNTIME-PRIVATE-ORDER'
 				},
 				events: [expect.objectContaining({ result_code: 'NOTICE_RECEIVED' })],
-				messages: [expect.objectContaining({ kind: 'receipt', attempt_count: 0 })]
+				messages: [
+					expect.objectContaining({
+						source_message_id: expect.any(Number),
+						kind: 'receipt',
+						attempt_count: 0
+					})
+				]
 			}
 		});
 		expect(JSON.stringify(inspectedWithdrawalMessage)).not.toContain('case_runtime_private');

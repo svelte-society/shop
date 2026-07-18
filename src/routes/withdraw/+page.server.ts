@@ -149,7 +149,10 @@ export function _createWithdrawalPage(overrides: Partial<PageDependencies> = {})
 	const limiter = createFixedWindowRateLimiter();
 
 	const load: PageServerLoad = async ({ cookies, url }) => ({
-		csrfToken: _issueOrReuseWithdrawalCsrf(cookies, url.protocol === 'https:'),
+		csrfToken: _issueOrReuseWithdrawalCsrf(
+			cookies,
+			dependencies.production || url.protocol === 'https:'
+		),
 		itemRowCount: 1
 	});
 

@@ -68,7 +68,9 @@ export type WithdrawalCaseEventMetadata = {
 	createdAt: Date;
 };
 
-export type WithdrawalMessageDeliveryMetadata = Pick<
+export type WithdrawalMessageDeliveryMetadata = {
+	sourceMessageId: WithdrawalMessage['id'];
+} & Pick<
 	WithdrawalMessage,
 	'kind' | 'attemptCount' | 'nextAttemptAt' | 'providerDeliveryId' | 'completedAt' | 'lastErrorCode'
 >;
@@ -374,6 +376,7 @@ function mapCaseEvent(row: CaseEventRow): WithdrawalCaseEventMetadata {
 
 function messageDeliveryMetadata(message: WithdrawalMessage): WithdrawalMessageDeliveryMetadata {
 	return {
+		sourceMessageId: message.id,
 		kind: message.kind,
 		attemptCount: message.attemptCount,
 		nextAttemptAt: message.nextAttemptAt,

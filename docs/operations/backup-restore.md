@@ -54,15 +54,25 @@ reconciliation data unrecoverable. Public references and message metadata remain
 PII recovery path. Purged payloads are intentionally unrecoverable even when a current application
 key is available.
 
-Objects use this UTC key shape:
+Scheduled backups use the first UTC key shape. The stop-first local-order deletion procedure creates
+an immutable pre-deletion backup with the second shape; its UUID suffix prevents a same-second
+scheduled or deletion backup from overwriting it. Both forms have a checksum companion:
 
 ```text
 <prefix>/YYYY/MM/DD/shop-YYYYMMDDTHHmmssZ.sqlite.ssbk
+<prefix>/YYYY/MM/DD/shop-YYYYMMDDTHHmmssZ-<uuid>.sqlite.ssbk
 <prefix>/YYYY/MM/DD/shop-YYYYMMDDTHHmmssZ.sqlite.ssbk.sha256
+<prefix>/YYYY/MM/DD/shop-YYYYMMDDTHHmmssZ-<uuid>.sqlite.ssbk.sha256
 ```
 
 The encrypted object is `SSBK1`: five ASCII magic bytes, a 12-byte random IV, a 16-byte GCM tag,
 then ciphertext. The companion contains the lower-case SHA-256 of the complete encrypted object.
+When selecting a restore candidate, list the objects for the intended UTC date and record the exact
+full `.sqlite.ssbk` key, its matching `.sha256` key, the backup purpose (scheduled or pre-deletion),
+and the immutable application image in the incident record. Do not infer the candidate from a
+timestamp-only filename or drop a UUID suffix. Verify the selected pair's object metadata and
+checksum before running the offline restore; a pre-deletion backup is evidence tied to that deletion
+and must be identified as such in the restore approval.
 
 ## Restore procedure
 

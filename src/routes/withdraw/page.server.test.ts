@@ -124,6 +124,31 @@ describe('withdrawal page server', () => {
 		expect(cookies.sets).toHaveLength(1);
 	});
 
+	it('keeps the CSRF cookie Secure in production behind an HTTP-shaped internal URL', async () => {
+		const { page } = setup({ production: true });
+		const cookies = new TestCookies();
+
+		await page.load({
+			cookies,
+			url: new URL('http://shop.sveltesociety.dev/withdraw')
+		} as never);
+
+		expect(cookies.sets).toHaveLength(1);
+		expect(cookies.sets[0]?.options.secure).toBe(true);
+	});
+
+	it.each([
+		['HTTP', 'http://localhost:5173/withdraw', false],
+		['HTTPS', 'https://localhost:5173/withdraw', true]
+	])('uses the %s protocol for the CSRF cookie in development', async (_label, href, secure) => {
+		const { page } = setup({ production: false });
+		const cookies = new TestCookies();
+
+		await page.load({ cookies, url: new URL(href) } as never);
+
+		expect(cookies.sets[0]?.options.secure).toBe(secure);
+	});
+
 	it.each([
 		['missing', null],
 		['mismatched', 'wrong-token']

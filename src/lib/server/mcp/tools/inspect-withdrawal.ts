@@ -80,6 +80,7 @@ const outputSchema = v.strictObject({
 	messages: v.optional(
 		v.array(
 			v.strictObject({
+				source_message_id: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
 				kind: v.string(),
 				attempt_count: v.number(),
 				next_attempt_at: v.string(),
@@ -137,6 +138,7 @@ function inspectionResult(result: WithdrawalCaseInspection) {
 			created_at: event.createdAt.toISOString()
 		})),
 		messages: history.messages.map((message) => ({
+			source_message_id: message.sourceMessageId,
 			kind: message.kind,
 			attempt_count: message.attemptCount,
 			next_attempt_at: message.nextAttemptAt.toISOString(),

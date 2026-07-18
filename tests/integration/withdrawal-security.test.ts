@@ -266,6 +266,31 @@ describe('withdrawal artifact and response security', () => {
 		const serializedList = JSON.stringify(listContent);
 		for (const canary of Object.values(canaries)) expect(serializedList).not.toContain(canary);
 
+		const inspected = await callTool(server, 'inspect_withdrawal_case', {
+			reference: submitted.reference
+		});
+		expect(inspected.result.isError).not.toBe(true);
+		const inspectContent = inspected.result.structuredContent as {
+			messages: Array<Record<string, unknown>>;
+		};
+		expect(Object.keys(inspectContent.messages[0]).sort()).toEqual([
+			'attempt_count',
+			'completed_at',
+			'kind',
+			'last_error_code',
+			'next_attempt_at',
+			'provider_delivery_id',
+			'source_message_id'
+		]);
+		expect(inspectContent.messages[0]?.source_message_id).toEqual(expect.any(Number));
+		const internal = repository.loadEncryptedByReference(submitted.reference);
+		if (!internal) throw new Error('TEST_WITHDRAWAL_CASE_MISSING');
+		const serializedInspection = JSON.stringify(inspectContent);
+		expect(serializedInspection).not.toContain(internal.id);
+		expect(serializedInspection).not.toContain('idempotency');
+		expect(serializedInspection).not.toContain('resend_of_message');
+		expect(serializedInspection).not.toContain('ciphertext');
+
 		const invalid = await callTool(server, 'inspect_withdrawal_case', {
 			reference: canaries.enteredOrderReference
 		});

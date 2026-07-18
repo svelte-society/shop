@@ -95,7 +95,9 @@ attachment.
 
 Never enqueue a resend directly. In the same authorized review session:
 
-1. Inspect the case and select the exact source message ID.
+1. Call `inspect_withdrawal_case` and select the exact numeric `source_message_id` from the
+   intended message-history row. This is the only operational message identifier exposed for
+   resend; do not query internal case IDs, idempotency keys, resend-link IDs, or encrypted data.
 2. Call `resend_withdrawal_message` with `mode=preview`. Review destination, subject, and full text
    for the correct customer, case, legal status, and return instructions. Treat the preview and its
    token as PII/secrets.

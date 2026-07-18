@@ -255,6 +255,7 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 				],
 				messages: [
 					{
+						sourceMessageId: 7,
 						kind: 'receipt' as const,
 						attemptCount: 1,
 						nextAttemptAt: new Date('2026-07-17T09:31:00.000Z'),
@@ -843,6 +844,7 @@ describe('fulfillment MCP protocol', () => {
 			],
 			messages: [
 				{
+					source_message_id: 7,
 					kind: 'receipt',
 					attempt_count: 1,
 					next_attempt_at: '2026-07-17T09:31:00.000Z',

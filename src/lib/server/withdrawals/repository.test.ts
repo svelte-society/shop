@@ -317,7 +317,7 @@ describe('SqliteWithdrawalRepository submissions', () => {
 	});
 
 	it('reads PII-free history in ID order, excludes other cases, and performs no writes', () => {
-		repository.createSubmission(submission());
+		const created = repository.createSubmission(submission());
 		repository.createSubmission(
 			submission({
 				id: 'case_456',
@@ -354,7 +354,7 @@ describe('SqliteWithdrawalRepository submissions', () => {
 				 'reviewing', 'REVIEW_STARTED', ?)`
 			)
 			.run(new Date(now.getTime() - 2_000).toISOString());
-		database
+		const eligibleMessage = database
 			.prepare(
 				`INSERT INTO withdrawal_messages (
 				 case_id, kind, resend_of_message_id, idempotency_key, attempt_count,
@@ -392,6 +392,7 @@ describe('SqliteWithdrawalRepository submissions', () => {
 			],
 			messages: [
 				{
+					sourceMessageId: created.receiptMessageId,
 					kind: 'receipt',
 					attemptCount: 2,
 					nextAttemptAt: now,
@@ -400,6 +401,7 @@ describe('SqliteWithdrawalRepository submissions', () => {
 					lastErrorCode: null
 				},
 				{
+					sourceMessageId: Number(eligibleMessage.lastInsertRowid),
 					kind: 'eligible_instructions',
 					attemptCount: 1,
 					nextAttemptAt: new Date(now.getTime() - 1_000),
