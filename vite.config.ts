@@ -15,7 +15,7 @@ export const svelteKitOptions = {
 		// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
 		runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
 	},
-	adapter: adapter(),
+	adapter: adapter({ out: process.env.TEST_E2E_BUILD_OUT ?? 'build' }),
 	csp: {
 		mode: 'nonce' as const,
 		directives: {

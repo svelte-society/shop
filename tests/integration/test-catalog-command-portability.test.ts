@@ -43,6 +43,23 @@ describe('test catalog command portability', () => {
 		expect(command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 	});
 
+	it('builds one fixture artifact before the Playwright servers start', async () => {
+		const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {
+			scripts: Record<string, string>;
+		};
+		const gitignore = await readFile('.gitignore', 'utf8');
+		const dockerignore = await readFile('.dockerignore', 'utf8');
+		const readme = await readFile('README.md', 'utf8');
+
+		expect(packageJson.scripts['build:test-e2e']).toBe('node scripts/build-test-e2e.mjs');
+		expect(packageJson.scripts['test:e2e']).toBe('pnpm run build:test-e2e && playwright test');
+		expect(playwrightConfig.workers).toBe(2);
+		expect(gitignore).toContain('/build-e2e\n');
+		expect(dockerignore).toContain('build-e2e\n');
+		expect(readme).toContain('pnpm test:e2e');
+		expect(readme).not.toContain('pnpm playwright test');
+	});
+
 	it('passes fixture variables through webServer.env for every scenario', () => {
 		const configuredServers = playwrightConfig.webServer;
 		const webServers = Array.isArray(configuredServers) ? configuredServers : [configuredServers];
@@ -62,13 +79,14 @@ describe('test catalog command portability', () => {
 		expect(webServers).toHaveLength(5);
 		for (const [index, server] of webServers.slice(0, scenarios.length).entries()) {
 			const expected = scenarios[index];
-			expect(server?.command).toBe(
-				`pnpm exec vite dev --host 127.0.0.1 --port ${expected.port} --strictPort`
-			);
+			expect(server?.command).toBe('node build-e2e');
 			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 			expect(server?.env).toEqual({
 				...SHARED_FIXTURE_ENV,
 				...POLICY_FIXTURE_ENV,
+				HOST: '127.0.0.1',
+				PORT: String(expected.port),
+				ORIGIN: `http://127.0.0.1:${expected.port}`,
 				CHECKOUT_ENABLED: expected.checkout,
 				STOREFRONT_ENABLED: expected.storefront,
 				TEST_CATALOG_SCENARIO: expected.scenario,
@@ -76,12 +94,13 @@ describe('test catalog command portability', () => {
 			});
 		}
 		const withdrawalServer = webServers[4];
-		expect(withdrawalServer?.command).toBe(
-			'pnpm exec vite dev --host 127.0.0.1 --port 4277 --strictPort'
-		);
+		expect(withdrawalServer?.command).toBe('node build-e2e');
 		expect(withdrawalServer?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 		expect(withdrawalServer?.env).toEqual({
 			NODE_ENV: 'development',
+			HOST: '127.0.0.1',
+			PORT: '4277',
+			ORIGIN: 'http://127.0.0.1:4277',
 			STOREFRONT_ENABLED: 'false',
 			CHECKOUT_ENABLED: 'false',
 			DATABASE_BOOTSTRAP: 'true',
@@ -96,6 +115,25 @@ describe('test catalog command portability', () => {
 			WITHDRAWAL_DATA_KEY: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/u),
 			...POLICY_FIXTURE_ENV
 		});
+	});
+
+	it('applies the guarded fixture environment before building the shared artifact', async () => {
+		const { buildTestE2e } = await import('../../scripts/build-test-e2e.mjs');
+		const environment: Record<string, string | undefined> = { EXISTING_VALUE: 'preserved' };
+		const build = vi.fn(async () => undefined);
+
+		await buildTestE2e({
+			environment,
+			loadVite: async () => ({ build })
+		});
+
+		expect(environment).toEqual({
+			EXISTING_VALUE: 'preserved',
+			NODE_ENV: 'test',
+			TEST_CATALOG_FIXTURE: 'true',
+			TEST_E2E_BUILD_OUT: 'build-e2e'
+		});
+		expect(build).toHaveBeenCalledOnce();
 	});
 
 	it('applies the guarded fixture environment before starting Vite on the strict preview port', async () => {

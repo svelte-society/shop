@@ -2,6 +2,7 @@ import type { CatalogVariant } from '$lib/domain/catalog';
 import type { CatalogGateway } from '$lib/server/catalog/gateway';
 import { parseStripeCatalog } from '$lib/server/catalog/parse';
 import type { StripeCheckoutClient } from '$lib/server/stripe/checkout.server';
+import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import type { StripeOrderClient } from '$lib/server/stripe/paid-checkout';
 import {
 	STRIPE_CATALOG_LOADED_AT,
@@ -16,6 +17,21 @@ import {
 } from './stripe-paid-checkout';
 
 type CatalogScenario = 'available' | 'unavailable' | 'guard-proof';
+
+export class StripeFulfillmentError extends Error {
+	constructor(readonly code: string) {
+		super(code);
+		this.name = 'StripeFulfillmentError';
+	}
+}
+
+export function createStripeFulfillmentGateway(): StripeFulfillmentGateway {
+	return {
+		async retrieveFulfillmentDetails(): Promise<never> {
+			throw new StripeFulfillmentError('STRIPE_FIXTURE_UNAVAILABLE');
+		}
+	};
+}
 
 function scenario(): CatalogScenario {
 	const value = process.env.TEST_CATALOG_SCENARIO ?? 'available';

@@ -3,6 +3,7 @@
 .worktrees
 .svelte-kit
 node_modules
+build-e2e
 
 .env*
 !.env.example

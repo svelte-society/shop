@@ -10,7 +10,7 @@ process with a persistent `/data` volume.
 pnpm install
 pnpm test:unit
 pnpm test:integration
-pnpm playwright test
+pnpm test:e2e
 pnpm check
 pnpm lint
 pnpm build

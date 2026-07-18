@@ -34,9 +34,12 @@ function fixtureServer(
 	stripeScenario?: 'verified'
 ) {
 	return {
-		command: `pnpm exec vite dev --host 127.0.0.1 --port ${port} --strictPort`,
+		command: 'node build-e2e',
 		env: {
 			...SHARED_FIXTURE_ENV,
+			HOST: '127.0.0.1',
+			PORT: String(port),
+			ORIGIN: `http://127.0.0.1:${port}`,
 			STOREFRONT_ENABLED: storefrontEnabled ? 'true' : 'false',
 			CHECKOUT_ENABLED: checkoutEnabled ? 'true' : 'false',
 			TEST_CATALOG_SCENARIO: scenario,
@@ -50,9 +53,12 @@ function fixtureServer(
 
 function withdrawalServer() {
 	return {
-		command: 'pnpm exec vite dev --host 127.0.0.1 --port 4277 --strictPort',
+		command: 'node build-e2e',
 		env: {
 			NODE_ENV: 'development',
+			HOST: '127.0.0.1',
+			PORT: '4277',
+			ORIGIN: 'http://127.0.0.1:4277',
 			STOREFRONT_ENABLED: 'false',
 			CHECKOUT_ENABLED: 'false',
 			DATABASE_BOOTSTRAP: 'true',
@@ -89,6 +95,7 @@ export default defineConfig({
 	fullyParallel: true,
 	forbidOnly: true,
 	retries: 0,
+	workers: 2,
 	reporter: 'list',
 	use: {
 		baseURL: 'http://127.0.0.1:4273',
