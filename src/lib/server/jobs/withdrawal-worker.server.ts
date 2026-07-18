@@ -3,19 +3,17 @@ import type { AlertService } from '$lib/server/monitoring/alerts.server';
 import type { PlunkGateway } from '$lib/server/plunk/gateway';
 import { PlunkError } from '$lib/server/plunk/gateway';
 import type { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
+import { resolveOriginalWithdrawalMessageKind } from '$lib/server/withdrawals/message-kind.server';
 import { withdrawalMessage } from '$lib/server/withdrawals/messages.server';
 import type {
 	SqliteWithdrawalRepository,
-	WithdrawalMessage,
-	WithdrawalMessageKind
+	WithdrawalMessage
 } from '$lib/server/withdrawals/repository.server';
 import { isWithdrawalProviderDeliveryId } from '$lib/server/withdrawals/repository.server';
 import type {
 	WithdrawalReceiptDeliveryState,
 	WithdrawalReceiptDispatcher
 } from '$lib/server/withdrawals/submission.server';
-
-type OriginalWithdrawalMessageKind = Exclude<WithdrawalMessageKind, 'resend'>;
 
 export type WithdrawalMessageWorkerDependencies = {
 	repository: Pick<
@@ -144,21 +142,10 @@ export class WithdrawalMessageWorker implements WithdrawalReceiptDispatcher {
 		return 'delivered';
 	}
 
-	private originalKind(message: WithdrawalMessage): OriginalWithdrawalMessageKind {
-		let current = message;
-		const seen = new Set<number>();
-		while (current.kind === 'resend') {
-			if (current.resendOfMessageId === null || seen.has(current.id)) {
-				throw new Error('WITHDRAWAL_MESSAGE_ROW_INVALID');
-			}
-			seen.add(current.id);
-			const original = this.dependencies.repository.getMessage(current.resendOfMessageId);
-			if (!original || original.caseId !== message.caseId) {
-				throw new Error('WITHDRAWAL_MESSAGE_ROW_INVALID');
-			}
-			current = original;
-		}
-		return current.kind;
+	private originalKind(message: WithdrawalMessage): Exclude<WithdrawalMessage['kind'], 'resend'> {
+		const kind = resolveOriginalWithdrawalMessageKind(message, this.dependencies.repository);
+		if (kind === null) throw new Error('WITHDRAWAL_MESSAGE_ROW_INVALID');
+		return kind;
 	}
 
 	private alertUnsent(reference: string, now: Date): void {

@@ -18,6 +18,7 @@ import { WithdrawalMessageWorker } from './withdrawal-worker.server';
 const migrationsDirectory = resolve('migrations');
 const key = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
 const start = new Date('2026-07-17T08:30:00.000Z');
+const maximumResendTraversalDepth = 32;
 const payload: WithdrawalPayloadV1 = {
 	fullName: 'Private Test Name',
 	receiptEmail: 'private.customer@example.com',
@@ -97,6 +98,74 @@ function messageId(kind: WithdrawalMessageKind, attemptCount = 0): number {
 	return insertMessage(kind, attemptCount);
 }
 
+function completeMessage(id: number): void {
+	database
+		.prepare(
+			`UPDATE withdrawal_messages SET attempt_count = 1,
+			 provider_delivery_id = ?, completed_at = ? WHERE id = ?`
+		)
+		.run(`delivery_chain_${id}`, start.toISOString(), id);
+}
+
+function insertResendMessage(resendOfMessageId: number, completed: boolean): number {
+	const sequence = (
+		database.prepare('SELECT COUNT(*) AS count FROM withdrawal_messages').get() as { count: number }
+	).count;
+	const result = database
+		.prepare(
+			`INSERT INTO withdrawal_messages (
+			 case_id, kind, resend_of_message_id, idempotency_key, attempt_count,
+			 next_attempt_at, provider_delivery_id, completed_at, last_error_code
+			) VALUES ('case_123', 'resend', ?, ?, ?, ?, ?, ?, NULL)`
+		)
+		.run(
+			resendOfMessageId,
+			`worker-resend-chain-${sequence}`,
+			completed ? 1 : 0,
+			start.toISOString(),
+			completed ? `delivery_chain_${sequence + 1}` : null,
+			completed ? start.toISOString() : null
+		);
+	return Number(result.lastInsertRowid);
+}
+
+function insertResendChain(depth: number, sourceCompleted: boolean): number {
+	completeMessage(1);
+	let sourceMessageId = 1;
+	for (let index = 0; index < depth; index += 1) {
+		sourceMessageId = insertResendMessage(sourceMessageId, index < depth - 1 || sourceCompleted);
+	}
+	return sourceMessageId;
+}
+
+function invalidResendSource(
+	failure:
+		'self_cycle' | 'multi_node_cycle' | 'incomplete_ancestor' | 'incomplete_original' | 'over_limit'
+): number {
+	if (failure !== 'incomplete_original') completeMessage(1);
+	if (failure === 'self_cycle') {
+		const sourceMessageId = insertResendMessage(1, false);
+		database
+			.prepare('UPDATE withdrawal_messages SET resend_of_message_id = ? WHERE id = ?')
+			.run(sourceMessageId, sourceMessageId);
+		return sourceMessageId;
+	}
+	if (failure === 'multi_node_cycle') {
+		const first = insertResendMessage(1, false);
+		const second = insertResendMessage(first, true);
+		database
+			.prepare('UPDATE withdrawal_messages SET resend_of_message_id = ? WHERE id = ?')
+			.run(second, first);
+		return first;
+	}
+	if (failure === 'incomplete_ancestor') {
+		const incompleteAncestor = insertResendMessage(1, false);
+		return insertResendMessage(incompleteAncestor, false);
+	}
+	if (failure === 'incomplete_original') return insertResendMessage(1, false);
+	return insertResendChain(maximumResendTraversalDepth + 1, false);
+}
+
 function worker(plunk: PlunkGateway, caseReader = reader): WithdrawalMessageWorker {
 	return new WithdrawalMessageWorker({
 		repository,
@@ -150,6 +219,44 @@ describe('WithdrawalMessageWorker', () => {
 			lastErrorCode: null
 		});
 	});
+
+	it('delivers a claimed pending resend whose completed chain is exactly at the traversal limit', async () => {
+		const sourceMessageId = insertResendChain(maximumResendTraversalDepth, false);
+		const send = vi.fn(async (message: PlunkSendInput) => {
+			expect(message.subject).toBe('Withdrawal notice received — WDR-AAAAAAAAAAAAAAAAAAAAAA');
+			return { deliveryId: 'delivery_pending_resend_at_limit' };
+		});
+
+		await expect(worker({ send }).attemptReceipt(sourceMessageId, start)).resolves.toBe(
+			'delivered'
+		);
+
+		expect(send).toHaveBeenCalledOnce();
+		expect(repository.getMessage(sourceMessageId)).toMatchObject({
+			attemptCount: 1,
+			providerDeliveryId: 'delivery_pending_resend_at_limit',
+			completedAt: start
+		});
+	});
+
+	it.each([
+		'self_cycle',
+		'multi_node_cycle',
+		'incomplete_ancestor',
+		'incomplete_original',
+		'over_limit'
+	] as const)(
+		'maps the same invalid %s chain as workflow preview to the stable row error',
+		async (failure) => {
+			const sourceMessageId = invalidResendSource(failure);
+			const send = vi.fn(async () => ({ deliveryId: 'must_not_send' }));
+
+			await expect(worker({ send }).attemptReceipt(sourceMessageId, start)).rejects.toThrowError(
+				'WITHDRAWAL_MESSAGE_ROW_INVALID'
+			);
+			expect(send).not.toHaveBeenCalled();
+		}
+	);
 
 	it('settles an accepted response exactly once when shutdown aborts after provider resolution', async () => {
 		const controller = new AbortController();

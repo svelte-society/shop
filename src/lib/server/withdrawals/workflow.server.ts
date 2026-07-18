@@ -5,12 +5,9 @@ import type { WithdrawalStatus } from '$lib/domain/withdrawals';
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { WithdrawalCaseReader } from './case-reader.server';
 import { encryptWithdrawalPayload } from './crypto.server';
+import { resolveOriginalWithdrawalMessageKind } from './message-kind.server';
 import { withdrawalMessage } from './messages.server';
-import type {
-	SqliteWithdrawalRepository,
-	WithdrawalMessage,
-	WithdrawalMessageKind
-} from './repository.server';
+import type { SqliteWithdrawalRepository, WithdrawalMessage } from './repository.server';
 
 const ISO_3166_ALPHA_2 = new Set(
 	(
@@ -269,21 +266,10 @@ function messageConfiguration(dependencies: WithdrawalWorkflowDependencies): {
 function originalMessageKind(
 	source: WithdrawalMessage,
 	repository: Pick<SqliteWithdrawalRepository, 'getMessage'>
-): Exclude<WithdrawalMessageKind, 'resend'> {
-	let current = source;
-	const seen = new Set<number>();
-	while (current.kind === 'resend') {
-		if (current.resendOfMessageId === null || seen.has(current.id)) {
-			throw new WithdrawalWorkflowError('WITHDRAWAL_MESSAGE_PREVIEW_INVALID');
-		}
-		seen.add(current.id);
-		const original = repository.getMessage(current.resendOfMessageId);
-		if (!original || original.caseId !== source.caseId) {
-			throw new WithdrawalWorkflowError('WITHDRAWAL_MESSAGE_PREVIEW_INVALID');
-		}
-		current = original;
-	}
-	return current.kind;
+): Exclude<WithdrawalMessage['kind'], 'resend'> {
+	const kind = resolveOriginalWithdrawalMessageKind(source, repository);
+	if (kind === null) throw new WithdrawalWorkflowError('WITHDRAWAL_MESSAGE_PREVIEW_INVALID');
+	return kind;
 }
 
 export class WithdrawalWorkflowService {

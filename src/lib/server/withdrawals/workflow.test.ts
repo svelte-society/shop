@@ -16,6 +16,7 @@ const dataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
 const submittedAt = new Date('2026-07-17T08:30:00.000Z');
 const actionAt = new Date('2026-07-17T10:00:00.000Z');
 const reference = 'WDR-AAAAAAAAAAAAAAAAAAAAAA';
+const maximumResendTraversalDepth = 32;
 const seller = {
 	legalName: 'Svelte Society Merch AB',
 	registrationNumber: '559999-0000',
@@ -119,6 +120,74 @@ function advanceToStatus(
 		outcomeCode: 'ineligible_non_eu',
 		now: new Date('2026-07-17T10:15:00.000Z')
 	});
+}
+
+function completeMessage(messageId: number): void {
+	database
+		.prepare(
+			`UPDATE withdrawal_messages SET attempt_count = 1,
+			 provider_delivery_id = ?, completed_at = ? WHERE id = ?`
+		)
+		.run(`delivery_chain_${messageId}`, submittedAt.toISOString(), messageId);
+}
+
+function insertResendMessage(resendOfMessageId: number, completed = true): number {
+	const sequence = (
+		database.prepare('SELECT COUNT(*) AS count FROM withdrawal_messages').get() as { count: number }
+	).count;
+	const result = database
+		.prepare(
+			`INSERT INTO withdrawal_messages (
+			 case_id, kind, resend_of_message_id, idempotency_key, attempt_count,
+			 next_attempt_at, provider_delivery_id, completed_at, last_error_code
+			) VALUES ('case_123', 'resend', ?, ?, ?, ?, ?, ?, NULL)`
+		)
+		.run(
+			resendOfMessageId,
+			`resend-chain-${sequence}`,
+			completed ? 1 : 0,
+			submittedAt.toISOString(),
+			completed ? `delivery_chain_${sequence + 1}` : null,
+			completed ? submittedAt.toISOString() : null
+		);
+	return Number(result.lastInsertRowid);
+}
+
+function insertCompletedResendChain(depth: number): number {
+	completeMessage(1);
+	let sourceMessageId = 1;
+	for (let index = 0; index < depth; index += 1) {
+		sourceMessageId = insertResendMessage(sourceMessageId);
+	}
+	return sourceMessageId;
+}
+
+function invalidResendSource(
+	failure:
+		'self_cycle' | 'multi_node_cycle' | 'incomplete_ancestor' | 'incomplete_original' | 'over_limit'
+): number {
+	if (failure !== 'incomplete_original') completeMessage(1);
+	if (failure === 'self_cycle') {
+		const sourceMessageId = insertResendMessage(1);
+		database
+			.prepare('UPDATE withdrawal_messages SET resend_of_message_id = ? WHERE id = ?')
+			.run(sourceMessageId, sourceMessageId);
+		return sourceMessageId;
+	}
+	if (failure === 'multi_node_cycle') {
+		const first = insertResendMessage(1);
+		const second = insertResendMessage(first);
+		database
+			.prepare('UPDATE withdrawal_messages SET resend_of_message_id = ? WHERE id = ?')
+			.run(second, first);
+		return first;
+	}
+	if (failure === 'incomplete_ancestor') {
+		const incompleteAncestor = insertResendMessage(1, false);
+		return insertResendMessage(incompleteAncestor);
+	}
+	if (failure === 'incomplete_original') return insertResendMessage(1);
+	return insertCompletedResendChain(maximumResendTraversalDepth + 1);
 }
 
 beforeEach(() => {
@@ -1186,6 +1255,54 @@ describe('WithdrawalWorkflowService', () => {
 			subject: `Withdrawal notice received — ${reference}`,
 			textBody: expect.stringContaining('This receipt confirms submission only.')
 		});
+	});
+
+	it.each([
+		'self_cycle',
+		'multi_node_cycle',
+		'incomplete_ancestor',
+		'incomplete_original',
+		'over_limit'
+	] as const)('rejects a %s resend chain with only the stable preview error', (failure) => {
+		const sourceMessageId = invalidResendSource(failure);
+
+		expect(() =>
+			workflow.previewResend({ reference, sourceMessageId, now: actionAt })
+		).toThrowError(expect.objectContaining({ code: 'WITHDRAWAL_MESSAGE_PREVIEW_INVALID' }));
+	});
+
+	it('accepts a completed resend chain exactly at the traversal limit', () => {
+		const sourceMessageId = insertCompletedResendChain(maximumResendTraversalDepth);
+
+		const preview = workflow.previewResend({ reference, sourceMessageId, now: actionAt });
+
+		expect(preview).toMatchObject({
+			sourceMessageId,
+			subject: `Withdrawal notice received — ${reference}`
+		});
+	});
+
+	it('revalidates ancestor completion during confirmation', () => {
+		const sourceMessageId = insertCompletedResendChain(1);
+		const preview = workflow.previewResend({ reference, sourceMessageId, now: actionAt });
+		database
+			.prepare(
+				`UPDATE withdrawal_messages SET provider_delivery_id = NULL, completed_at = NULL
+				 WHERE id = 1`
+			)
+			.run();
+		const before = database.prepare('SELECT * FROM withdrawal_messages').all();
+
+		expect(() =>
+			workflow.confirmResend({
+				reference,
+				sourceMessageId,
+				previewToken: preview.previewToken,
+				idempotencyKey: '9f0f79ee-8f68-4b46-84c0-2533fdc127a1',
+				now: new Date(actionAt.getTime() + 60_000)
+			})
+		).toThrowError(expect.objectContaining({ code: 'WITHDRAWAL_MESSAGE_PREVIEW_INVALID' }));
+		expect(database.prepare('SELECT * FROM withdrawal_messages').all()).toEqual(before);
 	});
 
 	it('reuses one resend row when the same confirmation idempotency key is repeated', () => {
