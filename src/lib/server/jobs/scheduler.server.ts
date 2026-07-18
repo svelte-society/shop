@@ -436,7 +436,7 @@ export class OutboxScheduler implements Scheduler {
 		const cadence = new Date(
 			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 15, 0, 0)
 		);
-		if (now < cadence) return false;
+		if (now < cadence) cadence.setUTCDate(cadence.getUTCDate() - 1);
 		const nextCadence = new Date(cadence);
 		nextCadence.setUTCDate(nextCadence.getUTCDate() + 1);
 		const completed = this.options.database

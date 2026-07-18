@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { AlertService } from '$lib/server/monitoring/alerts.server';
 import type { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 
@@ -27,11 +28,13 @@ export class SqliteWithdrawalRetentionJob implements WithdrawalRetentionJob {
 			if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
 				throw new Error('WITHDRAWAL_RETENTION_FAILED');
 			}
+			throwIfAborted(signal);
 			while (true) {
-				throwIfAborted(signal);
 				const batch = this.dependencies.repository.purgeDue(now, PURGE_BATCH_LIMIT);
 				purged += batch;
 				if (batch < PURGE_BATCH_LIMIT) return { purged };
+				await yieldToEventLoop();
+				throwIfAborted(signal);
 			}
 		} catch (error) {
 			throwIfAborted(signal);

@@ -15,10 +15,14 @@ import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
-import type { WithdrawalRetentionJob } from './withdrawal-retention.server';
+import {
+	SqliteWithdrawalRetentionJob,
+	type WithdrawalRetentionJob
+} from './withdrawal-retention.server';
 import { SqliteOperationalChecksJob, type OperationalChecksJob } from './stale-orders.server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
+import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import { SqliteLeaseRepository } from './leases.server';
 import {
 	BACKUP_JOB_NAME,
@@ -139,6 +143,36 @@ function timerHarness() {
 			entry.callback();
 		}
 	};
+}
+
+function seedDueWithdrawalCases(databaseToSeed: ShopDatabase, dueAt: Date, count: number): void {
+	const timestamp = dueAt.toISOString();
+	const insert = databaseToSeed.prepare(`
+		INSERT INTO withdrawal_cases (
+			id, public_reference, status, revision, scope, eligibility, outcome_code,
+			schema_version, encryption_key_version, encrypted_payload, payload_nonce,
+			payload_tag, dedupe_fingerprint, created_at, updated_at,
+			reconciled_at, closed_at, pii_purge_due_at, purged_at
+		) VALUES (?, ?, 'closed', 1, 'entire_order', 'eligible_eu', 'WITHDRAWAL_COMPLETED',
+			1, 1, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
+	`);
+	const seed = databaseToSeed.transaction(() => {
+		for (let index = 0; index < count; index += 1) {
+			insert.run(
+				`retention_scheduler_case_${index}`,
+				`WDR-${String(index).padStart(22, '0')}`,
+				Buffer.from([index + 1]),
+				Buffer.alloc(12, index),
+				Buffer.alloc(16, index),
+				index.toString(16).padStart(64, '0'),
+				timestamp,
+				timestamp,
+				timestamp,
+				timestamp
+			);
+		}
+	});
+	seed();
 }
 
 let database: ShopDatabase;
@@ -2238,6 +2272,52 @@ describe('OutboxScheduler', () => {
 });
 
 describe('withdrawal retention scheduling', () => {
+	it.each([
+		{ priorCompleted: false, expectedRuns: 1 },
+		{ priorCompleted: true, expectedRuns: 0 }
+	])(
+		"checks the latest 03:15 UTC cadence before today's window (prior completed: $priorCompleted)",
+		async ({ priorCompleted, expectedRuns }) => {
+			const current = new Date('2026-07-17T02:00:00.000Z');
+			if (priorCompleted) {
+				database
+					.prepare(
+						`INSERT INTO job_runs (
+							name, owner_id, started_at, finished_at, result, error_code
+						) VALUES (?, 'retention-prior', ?, ?, 'completed', NULL)`
+					)
+					.run(
+						WITHDRAWAL_RETENTION_JOB_NAME,
+						'2026-07-16T03:15:00.000Z',
+						'2026-07-16T03:16:00.000Z'
+					);
+			}
+			const timers = timerHarness();
+			const retention: WithdrawalRetentionJob = {
+				run: vi.fn(async () => ({ purged: 0 }))
+			};
+			const scheduler = new OutboxScheduler({
+				database,
+				leases: new SqliteLeaseRepository(database),
+				worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+				withdrawalRetention: retention,
+				enabled: true,
+				ownerId: `retention-before-cadence-${priorCompleted}`,
+				clock: () => current,
+				schedule: timers.schedule,
+				scheduleWithdrawalRetention: timers.schedule,
+				cancel: timers.cancel
+			});
+
+			scheduler.start();
+			await settleAsyncWork();
+
+			expect(retention.run).toHaveBeenCalledTimes(expectedRuns);
+			expect(timers.handles(75 * 60_000)).toHaveLength(1);
+			await scheduler.stop();
+		}
+	);
+
 	it('catches up one missed 03:15 UTC run, records completion, and schedules the next day', async () => {
 		const current = new Date('2026-07-17T05:00:00.000Z');
 		const firstTimers = timerHarness();
@@ -2492,6 +2572,55 @@ describe('withdrawal retention scheduling', () => {
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
 		await scheduler.stop();
 		await contender.stop();
+	});
+
+	it('renews both retention leases between real full purge batches', async () => {
+		seedDueWithdrawalCases(database, initialNow, 101);
+		const timers = timerHarness();
+		let current = initialNow;
+		const retention = new SqliteWithdrawalRetentionJob({
+			repository: new SqliteWithdrawalRepository(database),
+			alerts: { enqueueAlert: vi.fn() }
+		});
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker: { drain: vi.fn(async () => ({ completed: 0, rescheduled: 0 })) },
+			withdrawalRetention: retention,
+			enabled: true,
+			ownerId: 'retention-real-batch-heartbeat',
+			clock: () => current,
+			schedule: timers.schedule,
+			cancel: timers.cancel
+		});
+
+		const active = scheduler.runWithdrawalRetentionOnce(initialNow);
+		await settleAsyncWork();
+		expect(
+			(
+				database
+					.prepare('SELECT COUNT(*) AS count FROM withdrawal_cases WHERE purged_at IS NOT NULL')
+					.get() as { count: number }
+			).count
+		).toBe(100);
+
+		current = new Date(initialNow.getTime() + 10 * 60_000);
+		timers.fire(10 * 60_000);
+		expect(database.prepare('SELECT expires_at FROM job_leases ORDER BY name').all()).toEqual([
+			{ expires_at: new Date(current.getTime() + 30 * 60_000).toISOString() },
+			{ expires_at: new Date(current.getTime() + 30 * 60_000).toISOString() }
+		]);
+
+		await active;
+		expect(
+			(
+				database
+					.prepare('SELECT COUNT(*) AS count FROM withdrawal_cases WHERE purged_at IS NOT NULL')
+					.get() as { count: number }
+			).count
+		).toBe(101);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await scheduler.stop();
 	});
 
 	it('skips both outbox drains while another owner holds the delivery guard and retries safely', async () => {
