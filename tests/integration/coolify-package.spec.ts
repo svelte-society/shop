@@ -157,6 +157,9 @@ describe('Coolify production package', () => {
 
 	it('documents the Cloudflare Tunnel loopback handoff without a static CSP override', async () => {
 		const runbook = await text('docs/operations/coolify.md');
+		const packageJson = JSON.parse(await text('package.json')) as {
+			scripts?: Record<string, string>;
+		};
 
 		for (const token of [
 			'shop.sveltesociety.dev',
@@ -177,32 +180,29 @@ describe('Coolify production package', () => {
 			expect(runbook).toContain(token);
 		}
 		for (const token of [
-			'curl --fail --silent --show-error --connect-timeout 5 --max-time 20',
-			'-D "$VERIFY_DIR/html.headers"',
-			'-o "$VERIFY_DIR/index.html"',
-			'ASSET_PATH="$(grep -Eo',
-			'case "$ASSET_PATH" in',
-			'ASSET_URL="https://shop.sveltesociety.dev$ASSET_PATH"',
-			'-D "$VERIFY_DIR/asset.headers"',
-			'"$ASSET_URL"',
-			'for HEADERS in "$VERIFY_DIR/html.headers" "$VERIFY_DIR/asset.headers"',
-			'assert_header "$HEADERS" strict-transport-security',
+			'pnpm verify:public-headers',
+			'Node 24 verifier',
+			'final HTTP response',
+			'Duplicate raw required security headers',
+			'same-origin HTTPS redirects',
+			'cross-origin redirects',
+			'quoted `src` or `href`',
+			'JavaScript, CSS, or font',
 			'max-age=31536000; includeSubDomains',
-			'assert_header "$HEADERS" x-content-type-options nosniff',
-			'assert_header "$HEADERS" x-frame-options DENY',
-			'assert_header "$HEADERS" referrer-policy strict-origin-when-cross-origin',
-			'assert_header "$HEADERS" permissions-policy',
+			'X-Content-Type-Options: nosniff',
+			'X-Frame-Options: DENY',
+			'strict-origin-when-cross-origin',
 			'accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), publickey-credentials-get=(), usb=()',
-			'tolower(actual) == tolower(expected)',
-			'header_value "$VERIFY_DIR/html.headers" content-security-policy',
-			"'nonce-[A-Za-z0-9+/_=-]+'",
-			'grep -Fqi "\'unsafe-inline\'"'
+			'same nonce token',
+			'`unsafe-inline`',
+			"frame-ancestors 'none'"
 		]) {
 			expect(runbook).toContain(token);
 		}
-		expect(
-			runbook.match(/curl --fail --silent --show-error --connect-timeout 5 --max-time 20/gu)
-		).toHaveLength(2);
+		expect(packageJson.scripts?.['verify:public-headers']).toBe(
+			'node scripts/verify-public-security-headers.mjs https://shop.sveltesociety.dev'
+		);
+		expect(runbook).toContain('pnpm verify:public-headers');
 		expect(runbook).toContain('nonce');
 		expect(runbook).not.toMatch(/middlewares\.[^.]+\.headers\.contentSecurityPolicy/u);
 	});
