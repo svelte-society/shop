@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 45s
     ports:
+      # prettier-ignore
       - "127.0.0.1:7178:3000"
     volumes:
       - shop-data:/data
