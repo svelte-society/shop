@@ -200,6 +200,10 @@ describe('public security header verification', () => {
 			'https://shop.sveltesociety.dev/_app/immutable/app.js'
 		],
 		[
+			'<link href="./_app/immutable/app.css" rel="stylesheet">',
+			'https://shop.sveltesociety.dev/_app/immutable/app.css'
+		],
+		[
 			[
 				'<script src=/_app/immutable/unquoted.js></script>',
 				'<img src="/_app/immutable/ignored.png">',

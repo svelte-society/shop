@@ -200,10 +200,15 @@ export function discoverImmutableAsset(html, pageUrl) {
 	if (typeof html !== 'string') throw error('public HTML body is invalid');
 	const page = pageUrl instanceof URL ? pageUrl : new URL(pageUrl);
 	const tagPattern = /<[A-Za-z][^<>]*>/gu;
-	const attributePattern = /\s(?:src|href)\s*=\s*(["'])(\/_app\/immutable\/[^"'<>\\\s]+)\1/giu;
+	const attributePattern = /\s(?:src|href)\s*=\s*(["'])([^"'<>\\\s]+)\1/giu;
 	for (const tag of html.matchAll(tagPattern)) {
 		for (const attribute of tag[0].matchAll(attributePattern)) {
-			const asset = new URL(attribute[2], page);
+			let asset;
+			try {
+				asset = new URL(attribute[2], page);
+			} catch {
+				continue;
+			}
 			if (asset.origin !== page.origin || !asset.pathname.startsWith('/_app/immutable/')) continue;
 			try {
 				expectedAssetContentTypes(asset);
