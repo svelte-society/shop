@@ -298,19 +298,81 @@ ss -ltnp | grep '127.0.0.1:7178'
 ! ss -ltnp | grep -E '(^|[[:space:]])(0\.0\.0\.0|\[::\]):7178'
 ```
 
-After deployment and every rollback, verify public HTML and one real immutable
-asset path copied from that HTML:
+After deployment and every rollback, run this fail-closed check. It downloads
+public HTML, derives a real immutable asset URL from that response, and compares
+header values case-insensitively while rejecting missing or weakened policies:
 
 ```sh
-curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/
-curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/_app/immutable/<real-built-asset>
+set -eu
+VERIFY_DIR="$(mktemp -d)"
+trap 'rm -rf -- "$VERIFY_DIR"' EXIT
+
+curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+  -D "$VERIFY_DIR/html.headers" \
+  -o "$VERIFY_DIR/index.html" \
+  https://shop.sveltesociety.dev/
+
+ASSET_PATH="$(grep -Eo "/_app/immutable/[^\"'[:space:]]+" "$VERIFY_DIR/index.html" | head -n 1)"
+case "$ASSET_PATH" in
+  /_app/immutable/*) ;;
+  *) echo 'No immutable asset URL found in public HTML' >&2; exit 1 ;;
+esac
+ASSET_URL="https://shop.sveltesociety.dev$ASSET_PATH"
+
+curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
+  -D "$VERIFY_DIR/asset.headers" \
+  -o /dev/null \
+  "$ASSET_URL"
+
+header_value() {
+  awk -v wanted="$2" '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      separator = index(line, ":")
+      if (separator == 0) next
+      name = substr(line, 1, separator - 1)
+      if (tolower(name) != tolower(wanted)) next
+      value = substr(line, separator + 1)
+      sub(/^[[:space:]]*/, "", value)
+      sub(/[[:space:]]*$/, "", value)
+      print value
+      exit
+    }
+  ' "$1"
+}
+
+assert_header() {
+  actual="$(header_value "$1" "$2")"
+  expected="$3"
+  if ! awk -v actual="$actual" -v expected="$expected" \
+    'BEGIN { exit(tolower(actual) == tolower(expected) ? 0 : 1) }'; then
+    printf 'Missing or incorrect %s header in %s\n' "$2" "$1" >&2
+    exit 1
+  fi
+}
+
+for HEADERS in "$VERIFY_DIR/html.headers" "$VERIFY_DIR/asset.headers"; do
+  assert_header "$HEADERS" strict-transport-security 'max-age=31536000; includeSubDomains'
+  assert_header "$HEADERS" x-content-type-options nosniff
+  assert_header "$HEADERS" x-frame-options DENY
+  assert_header "$HEADERS" referrer-policy strict-origin-when-cross-origin
+  assert_header "$HEADERS" permissions-policy 'accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), publickey-credentials-get=(), usb=()'
+done
+
+HTML_CSP="$(header_value "$VERIFY_DIR/html.headers" content-security-policy)"
+if ! printf '%s\n' "$HTML_CSP" | grep -Eqi "'nonce-[A-Za-z0-9+/_=-]+'"; then
+  echo 'HTML CSP is missing a nonce' >&2
+  exit 1
+fi
+if printf '%s\n' "$HTML_CSP" | grep -Fqi "'unsafe-inline'"; then
+  echo 'HTML CSP contains unsafe-inline' >&2
+  exit 1
+fi
 ```
 
-Both responses must include HSTS, `X-Content-Type-Options: nosniff`,
-`X-Frame-Options: DENY`, the strict referrer policy, and the permissions policy.
-The HTML response must also retain the application's nonce-bearing CSP without
-`unsafe-inline`. The immutable asset may omit CSP; never use a placeholder path
-for the actual verification.
+The immutable asset may omit CSP. Do not add or overwrite CSP at Cloudflare;
+the HTML nonce assertion proves that the application-generated policy remains.
 
 ## Deploy and rollback
 

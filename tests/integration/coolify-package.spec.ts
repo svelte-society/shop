@@ -177,17 +177,32 @@ describe('Coolify production package', () => {
 			expect(runbook).toContain(token);
 		}
 		for (const token of [
-			'curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/',
-			'curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/_app/immutable/<real-built-asset>',
-			'Both responses must include HSTS',
-			'X-Content-Type-Options: nosniff',
-			'X-Frame-Options: DENY',
-			'strict referrer policy',
-			'permissions policy',
-			"The HTML response must also retain the application's nonce-bearing CSP"
+			'curl --fail --silent --show-error --connect-timeout 5 --max-time 20',
+			'-D "$VERIFY_DIR/html.headers"',
+			'-o "$VERIFY_DIR/index.html"',
+			'ASSET_PATH="$(grep -Eo',
+			'case "$ASSET_PATH" in',
+			'ASSET_URL="https://shop.sveltesociety.dev$ASSET_PATH"',
+			'-D "$VERIFY_DIR/asset.headers"',
+			'"$ASSET_URL"',
+			'for HEADERS in "$VERIFY_DIR/html.headers" "$VERIFY_DIR/asset.headers"',
+			'assert_header "$HEADERS" strict-transport-security',
+			'max-age=31536000; includeSubDomains',
+			'assert_header "$HEADERS" x-content-type-options nosniff',
+			'assert_header "$HEADERS" x-frame-options DENY',
+			'assert_header "$HEADERS" referrer-policy strict-origin-when-cross-origin',
+			'assert_header "$HEADERS" permissions-policy',
+			'accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), publickey-credentials-get=(), usb=()',
+			'tolower(actual) == tolower(expected)',
+			'header_value "$VERIFY_DIR/html.headers" content-security-policy',
+			"'nonce-[A-Za-z0-9+/_=-]+'",
+			'grep -Fqi "\'unsafe-inline\'"'
 		]) {
 			expect(runbook).toContain(token);
 		}
+		expect(
+			runbook.match(/curl --fail --silent --show-error --connect-timeout 5 --max-time 20/gu)
+		).toHaveLength(2);
 		expect(runbook).toContain('nonce');
 		expect(runbook).not.toMatch(/middlewares\.[^.]+\.headers\.contentSecurityPolicy/u);
 	});
