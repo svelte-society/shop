@@ -15,7 +15,7 @@ const disabledStorefrontEnv = {
 	SELLER_COUNTRY: 'Sweden',
 	SELLER_EMAIL: 'merchant@example.com',
 	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
-	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
 	POLICY_EFFECTIVE_DATE: '2026-07-17'
 };
 

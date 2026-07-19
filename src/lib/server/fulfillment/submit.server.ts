@@ -38,6 +38,7 @@ export type SubmissionDependencies = {
 	styria: StyriaGateway;
 	brandName: string;
 	comment: string;
+	allowedCountries?: readonly string[];
 	alerts?: AlertService;
 };
 
@@ -150,7 +151,8 @@ export class FulfillmentSubmissionService implements SubmissionService {
 				order,
 				fulfillment: { recipient: details.recipient, address: details.address },
 				brandName: this.dependencies.brandName,
-				comment: this.dependencies.comment
+				comment: this.dependencies.comment,
+				allowedCountries: this.dependencies.allowedCountries
 			});
 			payloadHash = hashStyriaPayload(payload);
 		} catch {

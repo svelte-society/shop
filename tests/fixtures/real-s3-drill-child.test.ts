@@ -104,6 +104,7 @@ it('runs production backup and restore clients against the parent HTTPS fixture'
 				PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 				SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 				STRIPE_WEBHOOK_SECRET: 'whsec_real_s3_drill',
+				STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 				DATABASE_PATH: databasePath
 			}
 		});

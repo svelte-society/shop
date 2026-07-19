@@ -75,13 +75,15 @@ function build(
 		fulfillment?: StyriaFulfillmentDetails;
 		brandName?: string;
 		comment?: string;
+		allowedCountries?: readonly string[];
 	} = {}
 ) {
 	return buildStyriaPayload({
 		order: overrides.order ?? orderFixture(),
 		fulfillment: overrides.fulfillment ?? fulfillmentFixture(),
 		brandName: overrides.brandName ?? 'Svelte Society',
-		comment: overrides.comment ?? 'Approved Svelte Society fulfillment'
+		comment: overrides.comment ?? 'Approved Svelte Society fulfillment',
+		allowedCountries: overrides.allowedCountries
 	});
 }
 
@@ -133,7 +135,7 @@ describe('buildStyriaPayload', () => {
 
 		const order = orderFixture();
 		order.destinationCountry = 'US';
-		expect(build({ order, fulfillment }).shipping_address).toEqual({
+		expect(build({ order, fulfillment, allowedCountries: ['US'] }).shipping_address).toEqual({
 			firstName: 'Ada',
 			lastName: 'Lovelace',
 			company: '',
@@ -145,6 +147,23 @@ describe('buildStyriaPayload', () => {
 			country: 'United States',
 			phone1: '+46 70 123 45 67'
 		});
+	});
+
+	it('converts an enabled Asian destination and rejects it when omitted from the provider allowlist', () => {
+		const fulfillment = fulfillmentFixture();
+		fulfillment.address.countryCode = 'JP';
+		fulfillment.address.city = 'Tokyo';
+		fulfillment.address.postalCode = '100-0001';
+		fulfillment.address.state = 'Tokyo';
+		const order = orderFixture();
+		order.destinationCountry = 'JP';
+
+		expect(
+			build({ order, fulfillment, allowedCountries: ['SE', 'JP'] }).shipping_address.country
+		).toBe('Japan');
+		expect(() => build({ order, fulfillment, allowedCountries: ['SE'] })).toThrowError(
+			expect.objectContaining({ code: 'STYRIA_COUNTRY_UNSUPPORTED' })
+		);
 	});
 
 	it('copies checkout design placements and binds the immutable design reference', () => {

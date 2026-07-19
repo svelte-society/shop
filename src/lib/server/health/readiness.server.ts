@@ -1,5 +1,6 @@
 import { env } from '$env/dynamic/private';
 import { parsePublicConfig } from '$lib/config/public';
+import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 import { backupEncryptionKeyIsValid } from '$lib/server/backups/format';
 import { s3BackupStoreOptionsAreValid } from '$lib/server/backups/s3.server';
 import { applicationLifecycle, type ApplicationRuntime } from '$lib/server/app.server';
@@ -140,6 +141,7 @@ function validBackupConfiguration(environment: Record<string, string | undefined
 function productionConfigurationIsValid(environment: Record<string, string | undefined>): boolean {
 	try {
 		const publicConfig = parsePublicConfig(environment);
+		parseStyriaSupportedCountries(environment.STYRIA_SUPPORTED_COUNTRIES);
 		if (
 			!exactBoolean(environment, 'MCP_ENABLED') ||
 			!exactBoolean(environment, 'SCHEDULER_ENABLED') ||

@@ -54,7 +54,8 @@ const withdrawalRuntimeEnvironment = {
 	SELLER_COUNTRY: 'Sweden',
 	SELLER_EMAIL: 'merch@sveltesociety.dev',
 	DELIVERY_ESTIMATE_EU: '3–7 business days',
-	DELIVERY_ESTIMATE_US: '5–10 business days',
+	DELIVERY_ESTIMATE_ASIA: '7–15 business days',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	POLICY_EFFECTIVE_DATE: '2026-07-17'
 };
 const schedulerRuntimeEnvironment = {

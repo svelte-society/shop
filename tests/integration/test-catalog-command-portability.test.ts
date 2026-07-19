@@ -12,7 +12,8 @@ const SHARED_FIXTURE_ENV = {
 	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
 } as const;
 const POLICY_FIXTURE_ENV = {
 	SELLER_LEGAL_NAME: 'Svelte School AB',
@@ -24,7 +25,7 @@ const POLICY_FIXTURE_ENV = {
 	SELLER_COUNTRY: 'Sweden',
 	SELLER_EMAIL: 'merchant@example.com',
 	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
-	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
 	POLICY_EFFECTIVE_DATE: '2026-07-17'
 } as const;
 
@@ -113,6 +114,7 @@ describe('test catalog command portability', () => {
 			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 			PLUNK_BASE_URL: 'https://127.0.0.1:1',
 			WITHDRAWAL_DATA_KEY: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/u),
+			STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 			...POLICY_FIXTURE_ENV
 		});
 	});

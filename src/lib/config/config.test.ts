@@ -23,7 +23,7 @@ const validPolicyEnv = {
 	SELLER_COUNTRY: 'Sweden',
 	SELLER_EMAIL: 'merchant@example.com',
 	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
-	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
 	POLICY_EFFECTIVE_DATE: '2026-07-17'
 };
 
@@ -34,7 +34,8 @@ const validPrivateEnv = {
 	STRIPE_SECRET_KEY: 'sk_test_private_value',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_private_value',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
 };
 
 describe('parseWithdrawalConfig', () => {
@@ -188,7 +189,7 @@ describe('parsePrivateConfig', () => {
 		'SELLER_COUNTRY',
 		'SELLER_EMAIL',
 		'DELIVERY_ESTIMATE_EU',
-		'DELIVERY_ESTIMATE_US',
+		'DELIVERY_ESTIMATE_ASIA',
 		'POLICY_EFFECTIVE_DATE'
 	])('rejects checkout-enabled production without complete %s policy configuration', (name) => {
 		expect(() =>
@@ -242,9 +243,19 @@ describe('parsePrivateConfig', () => {
 			stripeSecretKey: 'sk_test_private_value',
 			stripeWebhookSecret: 'whsec_test_private_value',
 			stripePaidShippingRateId: 'shr_paid',
-			stripeFreeShippingRateId: 'shr_free'
+			stripeFreeShippingRateId: 'shr_free',
+			styriaSupportedCountries: ['SE', 'JP', 'TW']
 		});
 	});
+
+	it.each([undefined, '', 'se,JP', 'SE,JP,SE', 'SI', 'GB'])(
+		'%j is not a valid Styria destination allowlist',
+		(value) => {
+			expect(() =>
+				parsePrivateConfig({ ...validPrivateEnv, STYRIA_SUPPORTED_COUNTRIES: value })
+			).toThrowError('CONFIG_PRIVATE_INVALID');
+		}
+	);
 
 	it.each([
 		'STRIPE_SECRET_KEY',

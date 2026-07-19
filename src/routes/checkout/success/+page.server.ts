@@ -7,7 +7,10 @@ import { createStripeClient } from '$lib/server/stripe/client.server';
 import type { PageServerLoad } from './$types';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
-type StripeOrderGatewayFactory = (stripeSecretKey: string) => StripeOrderGateway;
+type StripeOrderGatewayFactory = (
+	stripeSecretKey: string,
+	allowedCountries: readonly string[]
+) => StripeOrderGateway;
 const CHECKOUT_SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]+$/;
 
 function verifiedSessionId(url: URL): string {
@@ -22,8 +25,11 @@ function verifiedSessionId(url: URL): string {
 	return parameters[0][1];
 }
 
-function defaultStripeOrderGatewayFactory(stripeSecretKey: string): StripeOrderGateway {
-	return createStripeOrderGateway(createStripeClient(stripeSecretKey));
+function defaultStripeOrderGatewayFactory(
+	stripeSecretKey: string,
+	allowedCountries: readonly string[]
+): StripeOrderGateway {
+	return createStripeOrderGateway(createStripeClient(stripeSecretKey), allowedCountries);
 }
 
 export function _createSuccessPageServerLoad(
@@ -37,7 +43,7 @@ export function _createSuccessPageServerLoad(
 		const sessionId = verifiedSessionId(url);
 		try {
 			const config = parsePrivateConfig(runtimeEnv);
-			gateway ??= createGateway(config.stripeSecretKey);
+			gateway ??= createGateway(config.stripeSecretKey, config.styriaSupportedCountries);
 			await gateway.retrievePaidCheckout(sessionId);
 		} catch {
 			error(404, 'Not found');

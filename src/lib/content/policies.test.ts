@@ -12,7 +12,7 @@ const config = {
 	sellerEmail: 'merchant@example.com',
 	supportEmail: 'merch@sveltesociety.dev',
 	deliveryEstimateEu: 'Reviewed EU estimate',
-	deliveryEstimateUs: 'Reviewed US estimate',
+	deliveryEstimateAsia: 'Reviewed Asia estimate',
 	policyEffectiveDate: '2026-07-17'
 };
 
@@ -47,19 +47,21 @@ describe('configured policy documents', () => {
 		}
 	});
 
-	it('publishes the configured shipping regions, rates, estimates, tax, and US import notice', () => {
+	it('publishes the configured shipping regions, rates, estimates, and non-EU import notice', () => {
 		const shipping = text(createPolicyDocuments(config).shipping);
 
 		expect(shipping).toContain('EUR');
 		expect(shipping).toContain('European Union except Slovenia');
-		expect(shipping).toContain('United States');
+		expect(shipping).toContain('selected destinations across Asia');
+		expect(shipping).not.toContain('United States');
 		expect(shipping).toContain('EUR 10');
 		expect(shipping).toContain('one total unit');
 		expect(shipping).toContain('two or more total units');
 		expect(shipping).toContain('Reviewed EU estimate');
-		expect(shipping).toContain('Reviewed US estimate');
+		expect(shipping).toContain('Reviewed Asia estimate');
 		expect(shipping).toContain('Final tax is calculated at checkout');
-		expect(shipping).toContain('import duties, brokerage fees, and carrier charges');
+		expect(shipping).toContain('customs duties, brokerage fees, or carrier charges');
+		expect(shipping).toContain('not guaranteed delivery dates');
 	});
 
 	it('publishes approval-first returns instructions without inventing a merchandise exclusion', () => {
@@ -81,6 +83,9 @@ describe('configured policy documents', () => {
 		expect(returns).toContain('you pay the direct return postage');
 		expect(returns).toContain('We currently claim no merchandise-specific exclusion');
 		expect(returns).toContain('Refunds are processed manually');
+		expect(returns).toContain('outside the EU');
+		expect(returns).toContain('no voluntary returns or exchanges for change of mind');
+		expect(returns).toContain('faulty, damaged, incorrect, or misdescribed goods');
 	});
 
 	it('describes the actual privacy services, local minimization, retention, bases, transfers, and rights', () => {
@@ -136,7 +141,7 @@ describe('configured policy documents', () => {
 			'receipt',
 			'invoice',
 			'European Union except Slovenia',
-			'United States',
+			'selected destinations across Asia',
 			'Styria',
 			'manual review',
 			'merch@sveltesociety.dev',
@@ -144,6 +149,7 @@ describe('configured policy documents', () => {
 		]) {
 			expect(terms).toContain(expected);
 		}
+		expect(terms).not.toContain('United States');
 		expect(
 			termsDocument.sections.find(
 				(section) => section.heading === 'Support, complaints, and returns'

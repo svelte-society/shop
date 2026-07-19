@@ -176,7 +176,12 @@ STYRIA_SECRET_KEY=<secret>
 STYRIA_BASE_URL=https://styriashirts.eu
 STYRIA_TIMEOUT_MS=10000
 STYRIA_BRAND_NAME=Svelte Society
+STYRIA_SUPPORTED_COUNTRIES=<reviewed-uppercase-comma-separated-ISO-alpha-2-list>
 ```
+
+The initial reviewed value is the EU except Slovenia plus the supported Asian destinations listed
+in `docs/superpowers/specs/2026-07-19-styria-supported-asia-destinations-design.md`. Keep `US` absent
+while Styria marks that route unavailable.
 
 ### Plunk
 
@@ -227,7 +232,7 @@ SELLER_CITY=<reviewed-value>
 SELLER_COUNTRY=Sweden
 SELLER_EMAIL=merch@sveltesociety.dev
 DELIVERY_ESTIMATE_EU=<reviewed-value>
-DELIVERY_ESTIMATE_US=<reviewed-value>
+DELIVERY_ESTIMATE_ASIA=Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit
 POLICY_EFFECTIVE_DATE=<reviewed-ISO-date>
 ```
 

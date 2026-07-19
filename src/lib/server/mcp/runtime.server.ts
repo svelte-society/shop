@@ -26,11 +26,15 @@ import { WithdrawalWorkflowService } from '$lib/server/withdrawals/workflow.serv
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { parseWithdrawalConfig } from '$lib/config/private.server';
+import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
 
 type RuntimeMcpDependencies = {
-	createStripeGateway?: (secretKey: string) => StripeFulfillmentGateway;
+	createStripeGateway?: (
+		secretKey: string,
+		allowedCountries: readonly string[]
+	) => StripeFulfillmentGateway;
 	createStyriaGateway?: (options: StyriaClientOptions) => StyriaGateway;
 	createPlunkGateway?: (secretKey: string) => PlunkGateway;
 };
@@ -59,8 +63,11 @@ function timeoutValue(environment: RuntimeEnvironment): number | undefined {
 	return timeoutMs;
 }
 
-function defaultStripeGateway(secretKey: string): StripeFulfillmentGateway {
-	return createStripeFulfillmentGateway(createStripeClient(secretKey));
+function defaultStripeGateway(
+	secretKey: string,
+	allowedCountries: readonly string[]
+): StripeFulfillmentGateway {
+	return createStripeFulfillmentGateway(createStripeClient(secretKey), allowedCountries);
 }
 
 class RuntimeWithdrawalError extends Error {
@@ -94,8 +101,10 @@ export function createRuntimeMcpServices(
 	dependencies: RuntimeMcpDependencies = {}
 ): McpServices {
 	const fulfillment = new SqliteFulfillmentRepository(database);
+	const allowedCountries = parseStyriaSupportedCountries(environment.STYRIA_SUPPORTED_COUNTRIES);
 	const stripe = (dependencies.createStripeGateway ?? defaultStripeGateway)(
-		requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY')
+		requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'),
+		allowedCountries
 	);
 	const styria = (dependencies.createStyriaGateway ?? createStyriaClient)({
 		appId: requiredEnvironmentValue(environment, 'STYRIA_APP_ID'),
@@ -215,7 +224,8 @@ export function createRuntimeMcpServices(
 		fulfillment,
 		stripe,
 		brandName,
-		comment: 'Approved Svelte Society fulfillment'
+		comment: 'Approved Svelte Society fulfillment',
+		allowedCountries
 	};
 
 	return {

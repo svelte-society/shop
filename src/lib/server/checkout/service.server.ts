@@ -1,6 +1,5 @@
 import { parseCart, selectShippingMode, totalUnits, type CartLine } from '$lib/domain/cart';
 import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
-import { ALLOWED_DESTINATIONS } from '$lib/domain/destinations';
 import type { NewCheckoutDraftLine } from '$lib/domain/orders';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import type { CheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
@@ -46,6 +45,7 @@ export type CheckoutServiceOptions = {
 	paidShippingRateId: string;
 	freeShippingRateId: string;
 	productionOrigin: URL;
+	allowedCountries: readonly string[];
 	clock?: () => Date;
 	alerts?: AlertService;
 };
@@ -156,7 +156,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 					})),
 					shippingRateId:
 						shippingMode === 'paid' ? options.paidShippingRateId : options.freeShippingRateId,
-					allowedCountries: ALLOWED_DESTINATIONS,
+					allowedCountries: options.allowedCountries,
 					successUrl: `${options.productionOrigin.origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
 					cancelUrl: `${options.productionOrigin.origin}/checkout/cancel`
 				});

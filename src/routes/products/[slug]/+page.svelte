@@ -55,8 +55,8 @@
 				<article>
 					<h3>Delivery</h3>
 					<p>
-						€10 for one item. Two or more items ship free to the EU, except Slovenia, and the United
-						States.
+						€10 for one item. Two or more items ship free across the EU, except Slovenia, and to
+						Styria-supported destinations in Asia.
 					</p>
 					<a href={resolve('/shipping' as '/')}>Shipping details</a>
 				</article>

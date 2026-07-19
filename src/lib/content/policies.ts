@@ -21,7 +21,7 @@ export type PolicyContentConfig = {
 	sellerEmail: string;
 	supportEmail: string;
 	deliveryEstimateEu: string;
-	deliveryEstimateUs: string;
+	deliveryEstimateAsia: string;
 	policyEffectiveDate: string;
 };
 
@@ -49,7 +49,9 @@ function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 		sections: [
 			{
 				heading: 'Where we ship',
-				paragraphs: ['We ship to the European Union except Slovenia, and to the United States.']
+				paragraphs: [
+					'We ship only to destinations currently supported by our fulfillment partner: the European Union except Slovenia, and selected destinations across Asia. Availability is enforced at checkout and may change if a fulfillment or carrier route is suspended.'
+				]
 			},
 			{
 				heading: 'Currency and shipping rate',
@@ -62,15 +64,15 @@ function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 				heading: 'Delivery estimates',
 				paragraphs: [
 					`European Union: ${config.deliveryEstimateEu}.`,
-					`United States: ${config.deliveryEstimateUs}.`,
-					'These are estimates, not guaranteed delivery dates. We will share tracking details when the carrier makes them available.'
+					`Supported Asian destinations: ${config.deliveryEstimateAsia}.`,
+					'These are estimates, not guaranteed delivery dates. We share tracking when the carrier provides it; tracking may not be available for every destination.'
 				]
 			},
 			{
-				heading: 'Tax and US import charges',
+				heading: 'Tax and non-EU import charges',
 				paragraphs: [
 					'Final tax is calculated at checkout from the delivery and business details provided there.',
-					'US customers are responsible for import duties, brokerage fees, and carrier charges assessed after checkout. These charges are not collected by this shop.'
+					"Deliveries outside the EU may be charged import VAT, customs duties, brokerage fees, or carrier charges after checkout. These charges are not collected by this shop and are the recipient's responsibility. Check your local import rules before ordering."
 				]
 			},
 			{
@@ -124,6 +126,12 @@ function returnsDocument(config: PolicyContentConfig): PolicyDocument {
 				paragraphs: [
 					'For a statutory change-of-mind withdrawal, you pay the direct return postage. Use the return instructions we provide so the parcel goes to the correct location.',
 					'For a valid complaint about a damaged or incorrect item, we pay the necessary return postage. Do not buy replacement postage until we have confirmed the return method.'
+				]
+			},
+			{
+				heading: 'Orders outside the EU',
+				paragraphs: [
+					'We offer no voluntary returns or exchanges for change of mind outside the EU. This does not limit mandatory rights that may apply to faulty, damaged, incorrect, or misdescribed goods, or other non-waivable consumer rights in your jurisdiction. Contact support before sending anything back.'
 				]
 			},
 			{
@@ -232,7 +240,7 @@ function termsDocument(config: PolicyContentConfig): PolicyDocument {
 				heading: 'Prices, VAT, and shipping',
 				paragraphs: [
 					'Prices are in EUR. Final VAT and other tax treatment are calculated at checkout from the delivery and business details provided there.',
-					'Shipping costs EUR 10 for one total unit and is free for two or more total units. The Shipping page contains delivery estimates and the US import-charge notice.'
+					'Shipping costs EUR 10 for one total unit and is free for two or more total units. The Shipping page contains delivery estimates and the notice about charges that may apply outside the EU.'
 				],
 				links: [{ label: 'Read the Shipping policy', href: '/shipping' }]
 			},
@@ -245,7 +253,7 @@ function termsDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Destinations and fulfillment',
 				paragraphs: [
-					'We accept delivery addresses in the European Union except Slovenia, and in the United States.',
+					'We accept delivery addresses in the European Union except Slovenia, and in selected destinations across Asia currently supported by Styria. Availability is enforced at checkout and may change if a fulfillment or carrier route is suspended.',
 					'Paid orders enter manual review before submission to Styria for manufacture and fulfillment. Estimates are not guarantees, and we do not promise a fixed public review window. Tracking is sent when it becomes available.'
 				]
 			},

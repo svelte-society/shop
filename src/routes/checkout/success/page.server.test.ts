@@ -10,7 +10,8 @@ const PRIVATE_ENV = {
 	STRIPE_SECRET_KEY: 'sk_test_success',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_success',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
 } as const;
 
 const PAID_CHECKOUT: PaidCheckoutSnapshot = {

@@ -34,6 +34,7 @@ beforeEach(async () => {
 		PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 		SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 		STRIPE_WEBHOOK_SECRET: 'whsec_readiness',
+		STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 		DATABASE_PATH: databasePath
 	};
 });
@@ -108,6 +109,18 @@ function runningScheduler(): Scheduler {
 }
 
 describe('local readiness', () => {
+	it.each([undefined, '', 'se,JP', 'SE,JP,SE', 'SI', 'GB'])(
+		'fails closed for an invalid Styria destination allowlist %j',
+		async (value) => {
+			environment.STYRIA_SUPPORTED_COUNTRIES = value;
+
+			const result = await checker()();
+
+			expect(result.ready).toBe(false);
+			expect(result.checks.configuration).toBe('failed');
+		}
+	);
+
 	it('reports a healthy migrated writable database with sufficient disk', async () => {
 		await expect(checker()()).resolves.toEqual({ ready: true, checks: allOkay });
 

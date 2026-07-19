@@ -138,6 +138,7 @@ function serviceFixture(
 		drafts?: RecordingDraftRepository;
 		stripe?: RecordingStripeGateway;
 		alerts?: AlertService;
+		allowedCountries?: readonly string[];
 	} = {}
 ) {
 	const resolveInputs: Array<Array<{ priceId: string; quantity: number }>> = [];
@@ -157,6 +158,7 @@ function serviceFixture(
 		paidShippingRateId: 'shr_paid_10_eur',
 		freeShippingRateId: 'shr_free',
 		productionOrigin: ORIGIN,
+		allowedCountries: options.allowedCountries ?? ALLOWED_DESTINATIONS,
 		clock: () => new Date(NOW),
 		alerts: options.alerts
 	});
@@ -169,6 +171,15 @@ async function expectCheckoutCode(promise: Promise<unknown>, code: string): Prom
 }
 
 describe('createCheckoutService', () => {
+	it('passes exactly the injected Styria-supported destinations to Stripe', async () => {
+		const { service, stripe } = serviceFixture({ allowedCountries: ['SE', 'JP', 'TW'] });
+
+		await service.start([{ priceId: medium.priceId, quantity: 1 }]);
+
+		expect(stripe.creations[0]?.allowedCountries).toEqual(['SE', 'JP', 'TW']);
+		expect(stripe.creations[0]?.allowedCountries).not.toContain('US');
+	});
+
 	it.each([
 		['non-array input', { lines: [{ priceId: medium.priceId, quantity: 1 }] }],
 		['empty cart', []],
@@ -384,6 +395,7 @@ describe('createCheckoutService', () => {
 			paidShippingRateId: 'shr_paid_10_eur',
 			freeShippingRateId: 'shr_free',
 			productionOrigin: ORIGIN,
+			allowedCountries: ALLOWED_DESTINATIONS,
 			clock: () => new Date(NOW)
 		});
 

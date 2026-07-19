@@ -13,6 +13,7 @@ const SHARED_FIXTURE_ENV = {
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	SELLER_LEGAL_NAME: 'Svelte School AB',
 	SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
 	SELLER_VAT_NUMBER: 'reviewed-vat-number',
@@ -22,7 +23,7 @@ const SHARED_FIXTURE_ENV = {
 	SELLER_COUNTRY: 'Sweden',
 	SELLER_EMAIL: 'merchant@example.com',
 	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
-	DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
 	POLICY_EFFECTIVE_DATE: '2026-07-17'
 } as const;
 
@@ -71,6 +72,7 @@ function withdrawalServer() {
 			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 			PLUNK_BASE_URL: 'https://127.0.0.1:1',
 			WITHDRAWAL_DATA_KEY: randomBytes(32).toString('base64'),
+			STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 			SELLER_LEGAL_NAME: 'Svelte School AB',
 			SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
 			SELLER_VAT_NUMBER: 'reviewed-vat-number',
@@ -80,7 +82,7 @@ function withdrawalServer() {
 			SELLER_COUNTRY: 'Sweden',
 			SELLER_EMAIL: 'merchant@example.com',
 			DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
-			DELIVERY_ESTIMATE_US: 'Reviewed US estimate',
+			DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
 			POLICY_EFFECTIVE_DATE: '2026-07-17'
 		},
 		port: 4277,

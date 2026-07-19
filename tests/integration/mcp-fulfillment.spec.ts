@@ -23,6 +23,7 @@ import {
 
 const runtimeEnvironment = {
 	STRIPE_SECRET_KEY: 'sk_test_lifecycle',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	STYRIA_APP_ID: 'app-lifecycle',
 	STYRIA_SECRET_KEY: 'secret-lifecycle',
 	STYRIA_BASE_URL: 'https://styria.example.test',

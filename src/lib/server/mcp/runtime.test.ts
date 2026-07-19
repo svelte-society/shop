@@ -20,6 +20,7 @@ const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => i
 const environment = {
 	PRODUCTION_ORIGIN: 'https://shop.runtime.test',
 	STRIPE_SECRET_KEY: 'sk_test_runtime',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	STYRIA_APP_ID: 'runtime-app',
 	STYRIA_SECRET_KEY: 'runtime-secret',
 	STYRIA_BASE_URL: 'https://styria.runtime.test',
@@ -262,7 +263,7 @@ describe('runtime MCP composition', () => {
 		expect(composed?.status).toBeDefined();
 		expect(composed?.shipping).toBeDefined();
 		expect(composed?.withdrawals).toBeDefined();
-		expect(createStripeGateway).toHaveBeenCalledWith('sk_test_runtime');
+		expect(createStripeGateway).toHaveBeenCalledWith('sk_test_runtime', ['SE', 'JP', 'TW']);
 		expect(createStyriaGateway).toHaveBeenCalledWith({
 			appId: 'runtime-app',
 			secretKey: 'runtime-secret',

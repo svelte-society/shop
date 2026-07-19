@@ -118,6 +118,7 @@ start_container() {
 		--env STRIPE_WEBHOOK_SECRET=whsec_docker_health
 		--env STYRIA_APP_ID=docker-health
 		--env STYRIA_SECRET_KEY=docker-health
+		--env STYRIA_SUPPORTED_COUNTRIES=SE,JP,TW
 		--env STYRIA_BASE_URL=https://styriashirts.eu
 		--env STYRIA_BRAND_NAME='Svelte Society'
 		--env PLUNK_SECRET_KEY=docker-health
@@ -133,7 +134,7 @@ start_container() {
 		--env SELLER_COUNTRY=Sweden
 		--env SELLER_EMAIL=merch@sveltesociety.dev
 		--env 'DELIVERY_ESTIMATE_EU=Docker health EU estimate'
-		--env 'DELIVERY_ESTIMATE_US=Docker health US estimate'
+		--env 'DELIVERY_ESTIMATE_ASIA=Docker health Asia estimate'
 		--env POLICY_EFFECTIVE_DATE=2026-07-18
 	)
 	if [[ "$scheduler" == true ]]; then

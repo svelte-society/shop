@@ -11,7 +11,7 @@
 	<title>Svelte Society Shop — Official Community Merch</title>
 	<meta
 		name="description"
-		content="Official Svelte Society apparel and accessories for Svelte developers. EU and US shipping. Free shipping on orders of two or more items."
+		content="Official Svelte Society apparel and accessories for Svelte developers. Shipping across the EU except Slovenia and to selected destinations in Asia. Free shipping on orders of two or more items."
 	/>
 </svelte:head>
 
@@ -61,7 +61,9 @@
 			</article>
 			<article>
 				<h3>Regions</h3>
-				<p>Shipping to the EU, except Slovenia, and the United States.</p>
+				<p>
+					Shipping across the EU, except Slovenia, and to Styria-supported destinations in Asia.
+				</p>
 			</article>
 			<article>
 				<h3>Tax</h3>

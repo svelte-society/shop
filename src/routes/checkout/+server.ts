@@ -61,7 +61,8 @@ function defaultCheckoutServiceFactory(config: PrivateConfig): CheckoutService {
 		stripe,
 		paidShippingRateId: config.stripePaidShippingRateId,
 		freeShippingRateId: config.stripeFreeShippingRateId,
-		productionOrigin: config.productionOrigin
+		productionOrigin: config.productionOrigin,
+		allowedCountries: config.styriaSupportedCountries
 	});
 }
 

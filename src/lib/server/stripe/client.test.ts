@@ -62,6 +62,18 @@ async function expectStableCode(promise: Promise<unknown>, code: string): Promis
 }
 
 describe('Stripe fulfillment details', () => {
+	it('rejects a current address omitted from the injected Styria allowlist', async () => {
+		const session = sessionFixture();
+		session.customer.shipping.address.country = 'JP';
+
+		await expectStableCode(
+			createStripeFulfillmentGateway(new ContractStripeClient(session), [
+				'SE'
+			]).retrieveFulfillmentDetails('cs_test_fulfillment'),
+			'STRIPE_FULFILLMENT_DESTINATION_UNSUPPORTED'
+		);
+	});
+
 	it('retrieves the complete current customer and shipping details transiently', async () => {
 		const client = new ContractStripeClient(sessionFixture());
 

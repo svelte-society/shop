@@ -35,7 +35,7 @@
 	<p>
 		Prices shown in EUR. Final tax is confirmed from your delivery and business details at checkout.
 	</p>
-	<p>Shipping to the EU, except Slovenia, and the United States.</p>
+	<p>Shipping across the EU, except Slovenia, and to Styria-supported destinations in Asia.</p>
 
 	<button type="button" disabled={!checkoutEnabled || checkoutPending} onclick={onCheckout}>
 		{checkoutPending

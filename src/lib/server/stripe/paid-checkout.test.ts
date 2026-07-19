@@ -130,6 +130,17 @@ function expandedCustomer(fixture: PaidCheckoutProviderFixture): StripeFixtureCu
 }
 
 describe('Stripe paid Checkout normalization', () => {
+	it('rejects a paid destination omitted from the injected Styria allowlist', async () => {
+		const fixture = paidCheckoutProviderFixture({ country: 'JP' });
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture), ['SE']).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_DESTINATION_INVALID'
+		);
+	});
+
 	it('normalizes a complete paid EU Checkout without retaining customer data', async () => {
 		const { snapshot, client } = await normalizedSnapshot();
 
@@ -193,7 +204,7 @@ describe('Stripe paid Checkout normalization', () => {
 		const fixture = paidCheckoutProviderFixture({ country: 'US' });
 
 		await expect(
-			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+			createStripeOrderGateway(new ContractStripeClient(fixture), ['US']).retrievePaidCheckout(
 				fixture.session.id
 			)
 		).resolves.toMatchObject({
@@ -208,7 +219,7 @@ describe('Stripe paid Checkout normalization', () => {
 		delete fixture.session.shipping_cost.taxes;
 
 		await expect(
-			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+			createStripeOrderGateway(new ContractStripeClient(fixture), ['US']).retrievePaidCheckout(
 				fixture.session.id
 			)
 		).resolves.toMatchObject({

@@ -1,36 +1,9 @@
 import { createHash } from 'node:crypto';
+import { ALLOWED_DESTINATIONS, isMarketDestination } from '$lib/domain/destinations';
 import type { OrderWithLines } from '$lib/domain/orders';
 import type { StyriaOrderPayload } from './types';
 
-const COUNTRY_NAMES = Object.freeze({
-	AT: 'Austria',
-	BE: 'Belgium',
-	BG: 'Bulgaria',
-	HR: 'Croatia',
-	CY: 'Cyprus',
-	CZ: 'Czechia',
-	DK: 'Denmark',
-	EE: 'Estonia',
-	FI: 'Finland',
-	FR: 'France',
-	DE: 'Germany',
-	GR: 'Greece',
-	HU: 'Hungary',
-	IE: 'Ireland',
-	IT: 'Italy',
-	LV: 'Latvia',
-	LT: 'Lithuania',
-	LU: 'Luxembourg',
-	MT: 'Malta',
-	NL: 'Netherlands',
-	PL: 'Poland',
-	PT: 'Portugal',
-	RO: 'Romania',
-	SK: 'Slovakia',
-	ES: 'Spain',
-	SE: 'Sweden',
-	US: 'United States'
-} satisfies Record<string, string>);
+const COUNTRY_NAMES = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' });
 
 const DESIGN_POSITION = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 
@@ -81,8 +54,10 @@ function isHttpsUrl(value: string): boolean {
 }
 
 export function styriaCountryName(code: string): string {
-	if (!Object.hasOwn(COUNTRY_NAMES, code)) fail('STYRIA_COUNTRY_UNSUPPORTED');
-	return COUNTRY_NAMES[code as keyof typeof COUNTRY_NAMES];
+	if (!isMarketDestination(code)) fail('STYRIA_COUNTRY_UNSUPPORTED');
+	const name = COUNTRY_NAMES.of(code);
+	if (typeof name !== 'string' || name.length === 0) fail('STYRIA_COUNTRY_UNSUPPORTED');
+	return name;
 }
 
 export function buildStyriaPayload(input: {
@@ -90,6 +65,7 @@ export function buildStyriaPayload(input: {
 	fulfillment: StyriaFulfillmentDetails;
 	brandName: string;
 	comment: string;
+	allowedCountries?: readonly string[];
 }): StyriaOrderPayload {
 	const { order, fulfillment } = input;
 	const { recipient, address } = fulfillment;
@@ -109,6 +85,9 @@ export function buildStyriaPayload(input: {
 		fail('STYRIA_FULFILLMENT_INVALID');
 	}
 	if (order.destinationCountry !== address.countryCode) fail('STYRIA_FULFILLMENT_INVALID');
+	if (!(input.allowedCountries ?? ALLOWED_DESTINATIONS).includes(address.countryCode)) {
+		fail('STYRIA_COUNTRY_UNSUPPORTED');
+	}
 	const fullCountryName = styriaCountryName(address.countryCode);
 
 	if (

@@ -676,6 +676,7 @@ describe('production-shaped backup and restore drill', () => {
 				PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 				SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 				STRIPE_WEBHOOK_SECRET: 'whsec_restore_drill',
+				STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 				DATABASE_PATH: databasePath
 			}
 		});

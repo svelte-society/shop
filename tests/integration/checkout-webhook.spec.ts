@@ -159,17 +159,17 @@ describe('checkout to Stripe webhook intake', () => {
 		expect(JSON.stringify(order)).not.toContain('+46701234567');
 	});
 
-	it('records a paid US customer without EU automatic tax', async () => {
-		const { order } = await intakePaidOrder('evt_test_us_customer', {
+	it('records a paid supported Asian customer without EU tax', async () => {
+		const { order } = await intakePaidOrder('evt_test_asia_customer', {
 			quantity: 1,
-			country: 'US',
+			country: 'JP',
 			shippingAmount: 1_000,
 			shippingTaxAmount: 0,
 			taxAmount: 0
 		});
 
 		expect(order).toMatchObject({
-			destinationCountry: 'US',
+			destinationCountry: 'JP',
 			amounts: { shipping: 1_000, tax: 0, total: 2_600 },
 			paymentStatus: 'paid'
 		});

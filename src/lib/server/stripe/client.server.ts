@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { isAllowedDestination } from '$lib/domain/destinations';
+import { ALLOWED_DESTINATIONS } from '$lib/domain/destinations';
 import type { StripeCheckoutClient } from './checkout.server';
 import type { FulfillmentDetails, StripeFulfillmentGateway } from './gateway';
 import type { StripeOrderClient } from './paid-checkout';
@@ -72,7 +72,8 @@ function splitName(value: unknown): { firstName: string; lastName: string } {
 
 function normalizeFulfillmentDetails(
 	requestedSessionId: string,
-	value: unknown
+	value: unknown,
+	allowedDestinations: ReadonlySet<string>
 ): FulfillmentDetails {
 	if (
 		!isRecord(value) ||
@@ -110,7 +111,7 @@ function normalizeFulfillmentDetails(
 	if (address.country === 'US' && state === '') {
 		fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
 	}
-	if (!isAllowedDestination(address.country)) {
+	if (!allowedDestinations.has(address.country)) {
 		fail('STRIPE_FULFILLMENT_DESTINATION_UNSUPPORTED');
 	}
 
@@ -138,8 +139,10 @@ function normalizeFulfillmentDetails(
 }
 
 export function createStripeFulfillmentGateway(
-	client: StripeFulfillmentClient
+	client: StripeFulfillmentClient,
+	allowedCountries: readonly string[] = ALLOWED_DESTINATIONS
 ): StripeFulfillmentGateway {
+	const allowedDestinations: ReadonlySet<string> = new Set(allowedCountries);
 	return {
 		async retrieveFulfillmentDetails(
 			checkoutSessionId: string,
@@ -163,7 +166,7 @@ export function createStripeFulfillmentGateway(
 				fail('STRIPE_FULFILLMENT_RETRIEVAL_FAILED');
 			}
 			if (signal?.aborted) fail('STRIPE_FULFILLMENT_RETRIEVAL_FAILED');
-			return normalizeFulfillmentDetails(checkoutSessionId, session);
+			return normalizeFulfillmentDetails(checkoutSessionId, session, allowedDestinations);
 		}
 	};
 }
