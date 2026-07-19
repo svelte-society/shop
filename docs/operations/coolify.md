@@ -4,34 +4,30 @@ This service runs as one adapter-node process and one Coolify replica. SQLite is
 the fulfillment system of record, so two application processes must never share
 the volume. Coolify application deployments normally use a rolling overlap when
 health checks pass; there is no rolling-update toggle assumed by this runbook.
-Production therefore uses the stop-first immutable-image procedure below.
+Production therefore uses the stop-first Compose procedure below.
 
 The relevant current Coolify references are the official guides for the
-[Dockerfile build pack](https://coolify.io/docs/applications/build-packs/dockerfile),
+[Docker Compose build pack](https://coolify.io/docs/applications/build-packs/docker-compose),
 [environment variables](https://coolify.io/docs/knowledge-base/environment-variables),
 [persistent storage](https://coolify.io/docs/knowledge-base/persistent-storage),
 [health checks](https://coolify.io/docs/knowledge-base/health-checks), and
-[rolling updates](https://coolify.io/docs/knowledge-base/rolling-updates), and
-[Traefik custom middlewares](https://coolify.io/docs/knowledge-base/proxy/traefik/custom-middlewares).
+[rolling updates](https://coolify.io/docs/knowledge-base/rolling-updates).
 
 ## Resource settings
 
-- Build recipe: the reviewed repository `Dockerfile`, built and published by the
-  release pipeline before the production outage.
-- Production resource type: `Docker Image`, pinned to the reviewed immutable tag
-  and recorded registry digest.
-- Domain: `https://shop.sveltesociety.dev` with Coolify-managed HTTPS.
-- Container port: `3000`. Do not publish it directly on the host.
-- Replicas: exactly `1`; do not use a second worker or process manager.
-- In **Advanced → Operations**, set **Stop Grace Period** to **45 seconds**.
-  Adapter-node has `SHUTDOWN_TIMEOUT=30`, so Coolify leaves 15 seconds of
-  platform headroom after the application deadline.
-- Persistent storage: one named volume with destination path `/data`.
-- Container health: the image healthcheck calls `GET /health/live`. Coolify gives
-  a Dockerfile healthcheck precedence over a UI healthcheck.
-- Deployment gate: `GET https://shop.sveltesociety.dev/health/ready` must return
-  `200` after bootstrap. Liveness can remain `200` while readiness is deliberately
-  `503`.
+- Project: `Svelte Society Shop`; environment: `production`.
+- Source: `https://github.com/svelte-society/shop`, branch `main`.
+- Build pack: Docker Compose; file: `/docker-compose.coolify.yml`.
+- Server: Coolify `localhost`.
+- Domain: leave empty. Cloudflare Tunnel owns public routing.
+- Container port: `3000`; host binding: `127.0.0.1:7178:3000`.
+- Cloudflare Tunnel origin: `http://localhost:7178`.
+- Replicas: exactly `1`; never scale the `shop` service.
+- Auto deploy: off. Deploy only through the stop-first procedure.
+- Persistent storage: Compose volume `shop-data` mounted at `/data`.
+- Stop grace period: `45s`; adapter-node uses `SHUTDOWN_TIMEOUT=30`.
+- Container health: the Dockerfile healthcheck calls `GET /health/live`.
+- Deployment gate: `GET https://shop.sveltesociety.dev/health/ready` returns `200`.
 
 The image runs as UID/GID `10001:10001`. A newly created named volume is seeded
 from the image's `/data` directory with the correct ownership. For an existing
@@ -113,10 +109,10 @@ ADMIN_EMAIL=merch@sveltesociety.dev
 application does not parse `X-Forwarded-For`. Determine `XFF_DEPTH` from the
 right side of the received chain: it is the verified number of trusted proxies
 between the public client and Node, not a guessed constant. Send a request from
-a known external address, inspect Traefik's forwarding chain and the app's
-rate-limit/log address, and confirm the selected address is the known client.
-Repeat after any proxy/CDN topology change. Never trust a leftmost value supplied
-by the client.
+a known external address, inspect Cloudflare Tunnel's forwarding chain and the
+app's rate-limit/log address, and confirm the selected address is the known
+client. Repeat after any Cloudflare Tunnel/CDN topology change. Never trust a
+leftmost value supplied by the client.
 
 ### SQLite
 
@@ -250,7 +246,7 @@ receipt routes remain available independently of those flags.
 3. Open `/withdraw` through public HTTPS. Submit a synthetic notice through review and explicit
    confirmation, retain the submitting browser cookie, record the `WDR-…` reference, and download
    its durable receipt. Confirm another browser without that cookie cannot retrieve the receipt.
-4. Restart the same immutable image against the same `/data` volume and verify the case still
+4. Restart the same reviewed `main` commit against the same `/data` volume and verify the case still
    exists. If enabling internal MCP for operator verification, set one fresh bearer token, restart
    stop-first, and prove authenticated `list_withdrawal_cases` and `inspect_withdrawal_case`; then
    disable it again unless the reviewed operational workflow requires it.
@@ -273,54 +269,34 @@ Use this sequence only for an empty production volume:
    scheduler or accept checkout.
 3. Verify `/data/shop.sqlite` exists, is owned by `10001:10001`, and the logs do
    not report an active scheduler. Stop the container cleanly.
-4. Change to `DATABASE_BOOTSTRAP=false` and redeploy the same image against the
-   same volume. Readiness must become `200` before any feature flag is enabled.
+4. Change to `DATABASE_BOOTSTRAP=false` and redeploy the same reviewed `main`
+   commit against the same volume. Readiness must become `200` before any
+   feature flag is enabled.
 
 Never leave bootstrap set to `true`, and never use it to recover a missing
 volume. If a normal or rollback container reports a missing database, keep it
 out of service and restore or reattach the correct volume.
 
-## Security headers for static assets
+## Cloudflare Tunnel and headers
 
-SvelteKit generates a per-response nonce CSP for dynamic HTML. Adapter-node
-serves built static assets before SvelteKit server hooks, so the Coolify HTTPS
-router must add the non-CSP baseline headers to every response. Do not define a
-Traefik CSP header: it would overwrite the dynamic nonce-bearing policy.
+Cloudflare Tunnel runs directly on the Coolify host and forwards
+`shop.sveltesociety.dev` to `http://localhost:7178`. The Compose mapping binds
+port `7178` only to `127.0.0.1`; do not change it to `7178:3000` or add a
+Coolify domain.
 
-For a standard Coolify application, open **Container Labels**, uncheck
-**Readonly labels**, add these definitions, then append the middleware to the
-actual generated HTTPS router. Preserve every generated label and any existing
-middleware such as `gzip`:
+Dynamic HTML retains the application's nonce-bearing CSP. Because this path
+bypasses Coolify Traefik, configure Cloudflare response-header transforms for
+static assets to add HSTS, `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, the strict referrer policy, and the permissions policy.
+Do not add or overwrite Content-Security-Policy at Cloudflare.
 
-```text
-traefik.http.middlewares.shop-security.headers.stsSeconds=31536000
-traefik.http.middlewares.shop-security.headers.stsIncludeSubdomains=true
-traefik.http.middlewares.shop-security.headers.contentTypeNosniff=true
-traefik.http.middlewares.shop-security.headers.frameDeny=true
-traefik.http.middlewares.shop-security.headers.referrerPolicy=strict-origin-when-cross-origin
-traefik.http.middlewares.shop-security.headers.permissionsPolicy=accelerometer=(),autoplay=(),camera=(),display-capture=(),encrypted-media=(),fullscreen=(),geolocation=(),gyroscope=(),magnetometer=(),microphone=(),payment=(),publickey-credentials-get=(),usb=()
-traefik.http.routers.https-0-<resource-uuid>.middlewares=gzip,shop-security
-```
-
-`https-0-<resource-uuid>` is a placeholder. Copy the router key Coolify actually
-generated; do not paste a guessed UUID. Coolify warns that disabling Readonly
-labels also disables future label auto-generation. After each domain or proxy
-change, compare the editable labels with **Reset Labels to Defaults** before
-redeploying so routing labels are not lost.
-
-Verify through public HTTPS after redeployment:
+On the Coolify host, verify:
 
 ```sh
-curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/
-curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/_app/immutable/<real-built-asset>
+curl --fail http://localhost:7178/health/live
+ss -ltnp | grep '127.0.0.1:7178'
+! ss -ltnp | grep -E '(^|[[:space:]])(0\.0\.0\.0|\[::\]):7178'
 ```
-
-Both responses must include HSTS, `X-Content-Type-Options: nosniff`,
-`X-Frame-Options: DENY`, the strict referrer policy, and the permissions policy.
-The HTML response must also include the application's nonce-bearing CSP without
-`unsafe-inline`. The static subresource may omit CSP; it must have the proxy
-baseline headers. Use a real asset path from the deployed HTML, not the
-placeholder above.
 
 ## Deploy and rollback
 
@@ -331,13 +307,12 @@ workflow for every production deployment:
 1. Disable **Auto Deploy** in **Advanced**. Disable any Git-provider or manually
    configured webhook deployments as well, and verify the deployment queue is
    empty. Keep automatic deployments and webhook deployments off for this resource.
-2. From the reviewed commit, run all checks, build the Dockerfile, publish an
-   immutable image such as `ghcr.io/svelte-society/shop:<full-git-sha>`, record
-   its registry digest, and complete any required encrypted off-host backup.
-   Do this before the outage window. Never deploy a mutable `latest` tag.
-3. Configure/select that exact reviewed immutable image in the production
-   Docker Image resource, but do not start a deployment yet. Keep exactly one
-   replica and `DATABASE_BOOTSTRAP=false`.
+2. Review and merge the intended commit to `main`, run all checks from that
+   reviewed `main` commit, and complete any required encrypted off-host backup.
+   Do this before the outage window.
+3. In the Docker Compose resource, select that reviewed `main` commit but do
+   not start a deployment yet. Keep exactly one replica and
+   `DATABASE_BOOTSTRAP=false`.
 4. Use Coolify **Stop** on the current resource. On the Docker host, set the
    actual named volume and verify no running or stopped container still owns it:
 
@@ -351,7 +326,7 @@ workflow for every production deployment:
    Both listings must be empty. If a stopped old container remains, confirm its
    Coolify resource labels and remove that exact old container before proceeding.
    Do not start the replacement while any old container or process mounts `/data`.
-5. Deploy the recorded digest/tag. Require container health and
+5. Deploy the selected reviewed `main` commit. Require container health and
    `/health/ready = 200`, then prove exactly one running container with exactly
    one application process mounts the volume:
 
@@ -367,9 +342,9 @@ workflow for every production deployment:
    features in the controlled launch order.
 
 For rollback, turn checkout off, stop the current container, select the reviewed
-previous immutable image, repeat the zero-container volume check, and attach the
-same `/data` volume with `DATABASE_BOOTSTRAP=false`. Confirm the older image
-supports the applied schema,
+previous `main` commit in the Compose resource, repeat the zero-container volume
+check, and attach the same `/data` volume with `DATABASE_BOOTSTRAP=false`.
+Confirm the older commit supports the applied schema,
 then require readiness and the HTTPS checks. If it does not support the current
 schema, follow the reviewed restore procedure instead of starting it. A missing
 database is a restore/volume incident; bootstrap is not rollback recovery.

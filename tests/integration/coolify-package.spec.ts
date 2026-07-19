@@ -130,7 +130,25 @@ describe('Coolify production package', () => {
 		expect(dockerScript).toContain('WHERE completed_at IS NULL AND next_attempt_at <= ?');
 	});
 
-	it('documents the verified Coolify and proxy handoff without a static CSP override', async () => {
+	it('publishes the shop only on host loopback for Cloudflare Tunnel', async () => {
+		const compose = await text('docker-compose.coolify.yml');
+
+		expect(compose).toContain('dockerfile: Dockerfile');
+		expect(compose).toContain('"127.0.0.1:7178:3000"');
+		expect(compose).not.toMatch(/^\s*-\s*["']?7178:3000["']?\s*$/mu);
+		expect(compose).toContain('shop-data:/data');
+		expect(compose).toContain('stop_grace_period: 45s');
+		expect(compose).toContain('HOST: 0.0.0.0');
+		expect(compose).toContain('PORT: 3000');
+		expect(compose).toContain('DATABASE_PATH: /data/shop.sqlite');
+		expect(compose).toContain('STOREFRONT_ENABLED: ${STOREFRONT_ENABLED:-false}');
+		expect(compose).toContain('CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-false}');
+		expect(compose).toContain('MCP_ENABLED: ${MCP_ENABLED:-false}');
+		expect(compose).toContain('SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}');
+		expect(compose).not.toMatch(/^\s*networks:/mu);
+	});
+
+	it('documents the Cloudflare Tunnel loopback handoff without a static CSP override', async () => {
 		const runbook = await text('docs/operations/coolify.md');
 
 		for (const token of [
@@ -142,12 +160,12 @@ describe('Coolify production package', () => {
 			'DATABASE_BOOTSTRAP=false',
 			'/data',
 			'10001:10001',
-			'https-0-<resource-uuid>',
-			'Readonly labels',
-			'https://coolify.io/docs/applications/build-packs/dockerfile',
+			'http://localhost:7178',
+			'127.0.0.1:7178:3000',
+			'docker-compose.coolify.yml',
+			'https://coolify.io/docs/applications/build-packs/docker-compose',
 			'https://coolify.io/docs/knowledge-base/persistent-storage',
-			'https://coolify.io/docs/knowledge-base/health-checks',
-			'https://coolify.io/docs/knowledge-base/proxy/traefik/custom-middlewares'
+			'https://coolify.io/docs/knowledge-base/health-checks'
 		]) {
 			expect(runbook).toContain(token);
 		}
@@ -155,7 +173,7 @@ describe('Coolify production package', () => {
 		expect(runbook).not.toMatch(/middlewares\.[^.]+\.headers\.contentSecurityPolicy/u);
 	});
 
-	it('documents runtime-only secrets and a stop-first immutable-image deployment', async () => {
+	it('documents runtime-only secrets and stop-first single-volume deployment', async () => {
 		const runbook = await text('docs/operations/coolify.md');
 		for (const name of [
 			'STRIPE_SECRET_KEY',
@@ -175,10 +193,7 @@ describe('Coolify production package', () => {
 			'BuildKit',
 			'automatic deployments',
 			'webhook deployments',
-			'immutable image',
-			'Advanced',
-			'Operations',
-			'45 seconds',
+			'45s',
 			'docker ps --filter "volume=$VOLUME_NAME"',
 			'exactly one'
 		]) {
