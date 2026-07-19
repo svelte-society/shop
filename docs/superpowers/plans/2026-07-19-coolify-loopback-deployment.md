@@ -154,10 +154,10 @@ volumes:
 Run:
 
 ```bash
-rtk docker compose --env-file .env.test -f docker-compose.coolify.yml config --quiet
+rtk docker compose --env-file .env.example -f docker-compose.coolify.yml config --quiet
 ```
 
-Expected: exit `0`. Missing production-only values may render as empty test values; no secret may appear in output because `--quiet` prints nothing.
+Expected: exit `0` from a clean checkout using the tracked, non-secret `.env.example`. Compose may warn that operator-supplied values such as `ORIGIN` or `XFF_DEPTH` are unset and render them as empty; `--quiet` suppresses the rendered configuration, and no secret may appear in output.
 
 - [ ] **Step 5: Replace obsolete routing assertions with the Cloudflare loopback contract**
 

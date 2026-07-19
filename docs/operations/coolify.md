@@ -298,6 +298,20 @@ ss -ltnp | grep '127.0.0.1:7178'
 ! ss -ltnp | grep -E '(^|[[:space:]])(0\.0\.0\.0|\[::\]):7178'
 ```
 
+After deployment and every rollback, verify public HTML and one real immutable
+asset path copied from that HTML:
+
+```sh
+curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/
+curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/_app/immutable/<real-built-asset>
+```
+
+Both responses must include HSTS, `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, the strict referrer policy, and the permissions policy.
+The HTML response must also retain the application's nonce-bearing CSP without
+`unsafe-inline`. The immutable asset may omit CSP; never use a placeholder path
+for the actual verification.
+
 ## Deploy and rollback
 
 Coolify's documented rolling update starts the replacement before stopping the

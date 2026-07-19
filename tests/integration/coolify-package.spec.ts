@@ -132,6 +132,7 @@ describe('Coolify production package', () => {
 
 	it('publishes the shop only on host loopback for Cloudflare Tunnel', async () => {
 		const compose = await text('docker-compose.coolify.yml');
+		const plan = await text('docs/superpowers/plans/2026-07-19-coolify-loopback-deployment.md');
 
 		expect(compose).toContain('dockerfile: Dockerfile');
 		expect(compose).toContain('"127.0.0.1:7178:3000"');
@@ -146,6 +147,12 @@ describe('Coolify production package', () => {
 		expect(compose).toContain('MCP_ENABLED: ${MCP_ENABLED:-false}');
 		expect(compose).toContain('SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}');
 		expect(compose).not.toMatch(/^\s*networks:/mu);
+		expect(plan).toContain(
+			'rtk docker compose --env-file .env.example -f docker-compose.coolify.yml config --quiet'
+		);
+		expect(plan).not.toContain(
+			'rtk docker compose --env-file .env.test -f docker-compose.coolify.yml config --quiet'
+		);
 	});
 
 	it('documents the Cloudflare Tunnel loopback handoff without a static CSP override', async () => {
@@ -166,6 +173,18 @@ describe('Coolify production package', () => {
 			'https://coolify.io/docs/applications/build-packs/docker-compose',
 			'https://coolify.io/docs/knowledge-base/persistent-storage',
 			'https://coolify.io/docs/knowledge-base/health-checks'
+		]) {
+			expect(runbook).toContain(token);
+		}
+		for (const token of [
+			'curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/',
+			'curl -fsS -D - -o /dev/null https://shop.sveltesociety.dev/_app/immutable/<real-built-asset>',
+			'Both responses must include HSTS',
+			'X-Content-Type-Options: nosniff',
+			'X-Frame-Options: DENY',
+			'strict referrer policy',
+			'permissions policy',
+			"The HTML response must also retain the application's nonce-bearing CSP"
 		]) {
 			expect(runbook).toContain(token);
 		}
