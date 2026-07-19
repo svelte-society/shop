@@ -80,7 +80,7 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 	const images = source.images.map(httpsUrl).filter((image): image is string => image !== null);
 	if (images.length === 0) add('PRODUCT_IMAGE_INVALID');
 
-	if (source.type !== 'good' || source.shippable !== true || !source.tax_code) {
+	if (source.shippable !== true || !source.tax_code) {
 		add('PRODUCT_PHYSICAL_GOODS_INVALID');
 	}
 

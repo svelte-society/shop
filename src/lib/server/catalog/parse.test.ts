@@ -87,6 +87,16 @@ describe('parseStripeCatalog', () => {
 		expect(Object.keys(snapshot.products[0].designPlacements)).toEqual(['back', 'front']);
 	});
 
+	it('accepts a shippable physical Product with Stripe legacy type service', async () => {
+		const product = stripeProduct({ type: 'service', shippable: true });
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.diagnostics).toEqual([]);
+		expect(snapshot.products).toHaveLength(1);
+		expect(snapshot.products[0].providerId).toBe(product.id);
+	});
+
 	it('parses a valid single-variant accessory without apparel fit', async () => {
 		const snapshot = await parse([stripeAccessoryProduct()], [stripeAccessoryPrice()]);
 
