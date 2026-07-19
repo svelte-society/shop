@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	discoverImmutableAsset,
 	resolveSameOriginRedirect,
+	validateFinalAssetUrl,
 	verifyResponseSequence
 } from '../../scripts/verify-public-security-headers.mjs';
 
@@ -88,6 +89,14 @@ describe('public security header verification', () => {
 				{ kind: 'html' }
 			)
 		).toThrow(/incorrect referrer-policy/iu);
+	});
+
+	it('rejects a required security header value with changed casing', () => {
+		expect(() =>
+			verifyResponseSequence([response({ override: { 'x-frame-options': 'deny' } })], {
+				kind: 'html'
+			})
+		).toThrow(/incorrect x-frame-options/iu);
 	});
 
 	it('rejects duplicate required raw security headers', () => {
@@ -211,5 +220,22 @@ describe('public security header verification', () => {
 				'https://shop.sveltesociety.dev'
 			)
 		).toThrow(/cross-origin redirect/iu);
+	});
+
+	it('rejects same-origin asset redirects that escape immutable paths or change asset type', () => {
+		const extracted = new URL('https://shop.sveltesociety.dev/_app/immutable/app.js');
+		const escaped = resolveSameOriginRedirect(
+			extracted,
+			'/login',
+			'https://shop.sveltesociety.dev'
+		);
+		const changedType = resolveSameOriginRedirect(
+			extracted,
+			'/_app/immutable/app.css',
+			'https://shop.sveltesociety.dev'
+		);
+
+		expect(() => validateFinalAssetUrl(extracted, escaped)).toThrow(/immutable path/iu);
+		expect(() => validateFinalAssetUrl(extracted, changedType)).toThrow(/asset type/iu);
 	});
 });

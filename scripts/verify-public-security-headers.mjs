@@ -80,7 +80,7 @@ function singleRawHeader(response, wanted) {
 function verifyExactSecurityHeaders(response) {
 	for (const [name, expected] of Object.entries(EXPECTED_SECURITY_HEADERS)) {
 		const actual = singleRawHeader(response, name);
-		if (actual.toLowerCase() !== expected.toLowerCase()) {
+		if (actual !== expected) {
 			throw error(`incorrect ${name} header`);
 		}
 	}
@@ -236,6 +236,26 @@ export function resolveSameOriginRedirect(currentUrl, location, allowedOrigin) {
 }
 
 /**
+ * @param {string | URL} extractedAssetUrl
+ * @param {string | URL} finalAssetUrl
+ * @returns {URL}
+ */
+export function validateFinalAssetUrl(extractedAssetUrl, finalAssetUrl) {
+	const extracted =
+		extractedAssetUrl instanceof URL ? extractedAssetUrl : new URL(extractedAssetUrl);
+	const final = finalAssetUrl instanceof URL ? finalAssetUrl : new URL(finalAssetUrl);
+	if (final.origin !== extracted.origin || !final.pathname.startsWith('/_app/immutable/')) {
+		throw error('final asset URL must remain on the immutable path');
+	}
+	const extractedTypes = expectedAssetContentTypes(extracted);
+	const finalTypes = expectedAssetContentTypes(final);
+	if (extractedTypes.join('\n') !== finalTypes.join('\n')) {
+		throw error('final asset type differs from the extracted asset type');
+	}
+	return final;
+}
+
+/**
  * @param {URL} url
  * @param {RequestOptions} options
  * @returns {Promise<RequestResult>}
@@ -370,7 +390,8 @@ export async function verifyPublicSecurityHeaders(origin, requestOptions = {}) {
 	verifyResponseSequence(htmlResult.responses, { kind: 'html' });
 	const assetUrl = discoverImmutableAsset(htmlResult.body, htmlResult.url);
 	const assetResult = await requestFinalResponse(assetUrl, requestOptions);
-	verifyResponseSequence(assetResult.responses, { kind: 'asset', assetUrl: assetResult.url });
+	validateFinalAssetUrl(assetUrl, assetResult.url);
+	verifyResponseSequence(assetResult.responses, { kind: 'asset', assetUrl });
 	return { htmlUrl: htmlResult.url, assetUrl: assetResult.url };
 }
 
