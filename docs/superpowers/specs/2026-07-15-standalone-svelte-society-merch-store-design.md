@@ -38,7 +38,7 @@ The storefront is independent from `sveltesociety.dev`. It reuses the current So
 
 ## Fixed Business Rules
 
-1. Svelte School AB is the merchant of record.
+1. Svelte Summit AB is the merchant of record.
 2. Styria manufactures and ships standard, non-personalized products on demand.
 3. Currency is EUR.
 4. Sales destinations are EU member states except Slovenia, plus the United States.
@@ -729,7 +729,7 @@ Operational alerts:
 
 Before checkout opens, publish:
 
-- Svelte School AB seller identity and contact details
+- Svelte Summit AB seller identity and contact details
 - EUR pricing and VAT presentation
 - Supported and excluded destinations
 - Shipping rates and delivery estimates

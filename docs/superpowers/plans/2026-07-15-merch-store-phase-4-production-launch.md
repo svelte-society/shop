@@ -380,7 +380,7 @@ export type PolicyDocument = { title: string; effectiveDate: string; sections: P
 
 - [ ] Privacy must describe Stripe, Styria, Plunk, carriers, Umami, structured logs, local operational state, encrypted S3 backups, purposes, retention summary, legal bases, transfers, rights, and contact. State that SQLite excludes name/address/phone/VAT/payment-method data, encrypted backups roll for 30 days, and local operational records have no automatic deletion in the MVP but support reviewed deletion when required.
 
-- [ ] Terms must identify Svelte School AB from configured legal fields and cover products, pricing/VAT, payment, Stripe receipt/invoice, destinations, fulfillment, Styria manual review without a public 24-hour promise, support, returns, and governing mandatory consumer rights.
+- [ ] Terms must identify Svelte Summit AB from configured legal fields and cover products, pricing/VAT, payment, Stripe receipt/invoice, destinations, fulfillment, Styria manual review without a public 24-hour promise, support, returns, and governing mandatory consumer rights.
 
 - [ ] About must remain short: official Society merch for community identity; do not claim purchases fund Svelte Society.
 

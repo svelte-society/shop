@@ -218,7 +218,7 @@ SOCIETY_ASSET_ORIGINS=<comma-separated-exact-https-origins>
 ### Seller and policy content
 
 ```text
-SELLER_LEGAL_NAME=Svelte School AB
+SELLER_LEGAL_NAME=Svelte Summit AB
 SELLER_REGISTRATION_NUMBER=<reviewed-value>
 SELLER_VAT_NUMBER=<reviewed-value>
 SELLER_ADDRESS_LINE1=<reviewed-value>
