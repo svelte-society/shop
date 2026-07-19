@@ -1300,6 +1300,43 @@ describe('OutboxScheduler', () => {
 		]);
 	});
 
+	it('does not start the withdrawal drain after shutdown aborts the commerce drain', async () => {
+		let receivedSignal: AbortSignal | undefined;
+		const worker: OutboxWorker = {
+			drain: vi.fn(
+				(_now: Date, _limit?: number, signal?: AbortSignal) =>
+					new Promise<{ completed: number; rescheduled: number }>((resolve) => {
+						receivedSignal = signal;
+						signal?.addEventListener('abort', () => resolve({ completed: 0, rescheduled: 1 }), {
+							once: true
+						});
+					})
+			)
+		};
+		const withdrawalWorker = { drain: vi.fn(async () => undefined) };
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'scheduler-aborts-between-drains',
+			clock: () => initialNow
+		});
+
+		const active = scheduler.runOutboxOnce();
+		await vi.waitFor(() => expect(receivedSignal).toBeInstanceOf(AbortSignal));
+		const stopping = scheduler.stop();
+
+		await active;
+		await stopping;
+		expect(withdrawalWorker.drain).not.toHaveBeenCalled();
+		expect(database.prepare('SELECT result, error_code FROM job_runs').all()).toEqual([
+			{ result: 'completed', error_code: null }
+		]);
+		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+	});
+
 	it('aborts and waits for the withdrawal drain before shutdown releases the shared run', async () => {
 		let withdrawalSignal: AbortSignal | undefined;
 		let withdrawalSettled = false;

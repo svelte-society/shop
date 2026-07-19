@@ -155,6 +155,7 @@ function prepareDatabase(databasePath) {
 async function waitForReady(port, childExit) {
 	const deadline = Date.now() + startupDeadlineMs;
 	let lastStatus = 0;
+	let lastBody = '';
 	while (Date.now() < deadline) {
 		const exited = await Promise.race([
 			childExit.then((result) => ({ exited: true, result })),
@@ -167,13 +168,13 @@ async function waitForReady(port, childExit) {
 				signal: AbortSignal.timeout(1_000)
 			});
 			lastStatus = response.status;
-			await response.body?.cancel();
+			lastBody = await response.text();
 			if (lastStatus === 200) return;
 		} catch {
 			// The adapter may not have bound its socket yet.
 		}
 	}
-	throw new Error(`APPLICATION_NOT_READY:${lastStatus}`);
+	throw new Error(`APPLICATION_NOT_READY:${lastStatus}:${lastBody}`);
 }
 
 function assertDatabaseSettlement(databasePath) {
@@ -265,6 +266,18 @@ try {
 			CHECKOUT_ENABLED: 'false',
 			MCP_ENABLED: 'false',
 			SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+			WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 13).toString('base64'),
+			SELLER_LEGAL_NAME: 'Svelte Summit AB',
+			SELLER_REGISTRATION_NUMBER: 'PROCESS-SHUTDOWN',
+			SELLER_VAT_NUMBER: 'PROCESS-SHUTDOWN',
+			SELLER_ADDRESS_LINE1: 'Process shutdown fixture',
+			SELLER_POSTAL_CODE: '00000',
+			SELLER_CITY: 'Stockholm',
+			SELLER_COUNTRY: 'Sweden',
+			SELLER_EMAIL: 'merch@sveltesociety.dev',
+			DELIVERY_ESTIMATE_EU: 'Process shutdown fixture',
+			DELIVERY_ESTIMATE_US: 'Process shutdown fixture',
+			POLICY_EFFECTIVE_DATE: '2026-07-17',
 			STRIPE_WEBHOOK_SECRET: 'whsec_process_shutdown',
 			STRIPE_SECRET_KEY: 'sk_test_process_shutdown',
 			STYRIA_APP_ID: 'process-shutdown',

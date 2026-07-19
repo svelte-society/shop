@@ -594,7 +594,9 @@ export class OutboxScheduler implements Scheduler {
 			heartbeat.unref?.();
 
 			await this.options.worker.drain(now, OUTBOX_DRAIN_LIMIT, signal);
-			await this.options.withdrawalWorker?.drain(now, OUTBOX_DRAIN_LIMIT, signal);
+			if (!signal.aborted) {
+				await this.options.withdrawalWorker?.drain(now, OUTBOX_DRAIN_LIMIT, signal);
+			}
 			if (!primaryLeaseMaintained || !guardLeaseMaintained) {
 				throw new Error('OUTBOX_LEASE_LOST');
 			}
