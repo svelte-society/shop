@@ -252,7 +252,8 @@ function termsDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Support, complaints, and returns',
 				paragraphs: [
-					`Contact ${config.supportEmail} for order support. Returns, EU withdrawal, damaged or incorrect items, postage, and manual refunds are explained on the Returns page.`
+					`Contact ${config.supportEmail} for order support. Returns, EU withdrawal, damaged or incorrect items, postage, and manual refunds are explained on the Returns page.`,
+					'For an eligible EU withdrawal, unless we have offered to collect the goods, you must send them back or hand them over to us or our designated recipient in Sweden without undue delay and no later than 14 days after notifying us. You are responsible for the direct return postage. We recommend using a tracked service. Please contact us before sending the parcel so we can provide complete return instructions. Not contacting us first does not invalidate an otherwise timely statutory return or limit your right to notify us of withdrawal by another clear statement.'
 				],
 				links: [
 					{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` },

@@ -119,7 +119,8 @@ describe('configured policy documents', () => {
 	});
 
 	it('identifies the configured seller and states the scoped commercial terms', () => {
-		const terms = text(createPolicyDocuments(config).terms);
+		const termsDocument = createPolicyDocuments(config).terms;
+		const terms = text(termsDocument);
 
 		for (const expected of [
 			'Svelte School AB',
@@ -143,6 +144,13 @@ describe('configured policy documents', () => {
 		]) {
 			expect(terms).toContain(expected);
 		}
+		expect(
+			termsDocument.sections.find(
+				(section) => section.heading === 'Support, complaints, and returns'
+			)?.paragraphs
+		).toContain(
+			'For an eligible EU withdrawal, unless we have offered to collect the goods, you must send them back or hand them over to us or our designated recipient in Sweden without undue delay and no later than 14 days after notifying us. You are responsible for the direct return postage. We recommend using a tracked service. Please contact us before sending the parcel so we can provide complete return instructions. Not contacting us first does not invalidate an otherwise timely statutory return or limit your right to notify us of withdrawal by another clear statement.'
+		);
 		expect(terms).not.toContain('24-hour');
 	});
 
