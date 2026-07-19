@@ -121,8 +121,10 @@ function verifyHtmlCsp(response) {
 	const scriptNonces = nonceTokens(directives.get('script-src') ?? []);
 	const styleNonces = nonceTokens(directives.get('style-src') ?? []);
 	if (scriptNonces.length !== 1) throw error('HTML CSP requires exactly one script-src nonce');
-	if (styleNonces.length !== 1) throw error('HTML CSP requires exactly one style-src nonce');
-	if (scriptNonces[0] !== styleNonces[0]) throw error('HTML CSP nonce mismatch');
+	if (styleNonces.length > 1) throw error('HTML CSP allows at most one style-src nonce');
+	if (styleNonces.length === 1 && scriptNonces[0] !== styleNonces[0]) {
+		throw error('HTML CSP nonce mismatch');
+	}
 
 	const frameAncestors = directives.get('frame-ancestors') ?? [];
 	if (frameAncestors.length !== 1 || frameAncestors[0].toLowerCase() !== "'none'") {

@@ -148,7 +148,7 @@
 
 	.line-actions input {
 		width: 4.25rem;
-		border: 1px solid oklch(65% 0.025 255);
+		border: 1px solid var(--color-control-border, oklch(51% 0.024 255));
 		padding-inline: 0.65rem;
 		background: white;
 		color: inherit;

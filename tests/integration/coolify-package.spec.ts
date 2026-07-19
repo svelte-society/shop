@@ -193,7 +193,8 @@ describe('Coolify production package', () => {
 			'X-Frame-Options: DENY',
 			'strict-origin-when-cross-origin',
 			'accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), publickey-credentials-get=(), usb=()',
-			'same nonce token',
+			'styles need no nonce',
+			'must match the script nonce',
 			'`unsafe-inline`',
 			"frame-ancestors 'none'"
 		]) {

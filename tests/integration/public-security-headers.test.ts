@@ -62,6 +62,12 @@ describe('public security header verification', () => {
 		expect(() => verifyResponseSequence([response()], { kind: 'html' })).not.toThrow();
 	});
 
+	it('accepts extracted production styles without a style nonce', () => {
+		const csp =
+			"default-src 'self'; script-src 'self' 'nonce-script123'; style-src 'self'; frame-ancestors 'none'";
+		expect(() => verifyResponseSequence([response({ csp })], { kind: 'html' })).not.toThrow();
+	});
+
 	it.each([
 		['https://shop.sveltesociety.dev/_app/immutable/app.js', 'application/javascript'],
 		['https://shop.sveltesociety.dev/_app/immutable/app.css', 'text/css; charset=utf-8'],

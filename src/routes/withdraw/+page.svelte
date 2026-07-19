@@ -334,6 +334,7 @@
 							autocomplete="name"
 							bind:value={fullName}
 							aria-describedby={form?.errors?.fullName ? 'fullName-error' : undefined}
+							aria-invalid={form?.errors?.fullName ? 'true' : undefined}
 						/>{#if form?.errors?.fullName}<p class="field-error" id="fullName-error">
 								{form.errors.fullName}
 							</p>{/if}
@@ -350,6 +351,7 @@
 							aria-describedby={form?.errors?.receiptEmail
 								? 'receiptEmail-error'
 								: 'receiptEmail-hint'}
+							aria-invalid={form?.errors?.receiptEmail ? 'true' : undefined}
 						/>{#if form?.errors?.receiptEmail}<p class="field-error" id="receiptEmail-error">
 								{form.errors.receiptEmail}
 							</p>{/if}
@@ -367,6 +369,7 @@
 							aria-describedby={form?.errors?.enteredOrderReference
 								? 'enteredOrderReference-error'
 								: 'order-hint'}
+							aria-invalid={form?.errors?.enteredOrderReference ? 'true' : undefined}
 						/>{#if form?.errors?.enteredOrderReference}<p
 								class="field-error"
 								id="enteredOrderReference-error"
@@ -503,22 +506,25 @@
 	}
 	form {
 		display: grid;
-		gap: 2.75rem;
+		gap: 1.5rem;
 	}
 	fieldset {
 		display: grid;
 		gap: 1.25rem;
 		margin: 0;
-		padding: 0 0 2.75rem;
-		border: 0;
-		border-bottom: 1px solid var(--color-border);
+		border: 1px solid var(--color-border);
+		border-radius: 0.85rem;
+		background: color-mix(in oklch, var(--color-svelte-50) 72%, var(--color-white));
+		padding: clamp(1.25rem, 3vw, 2rem);
 	}
 	legend,
 	h2 {
 		margin-bottom: 1.25rem;
-		padding: 0;
 		font-size: clamp(1.35rem, 3vw, 1.75rem);
 		font-weight: 800;
+	}
+	legend {
+		padding-inline: 0.4rem;
 	}
 	.field {
 		display: grid;
@@ -535,18 +541,24 @@
 	input:not([type='radio']):not([type='hidden']) {
 		min-height: 3rem;
 		width: 100%;
-		border: 1px solid var(--color-border-strong);
+		border: 2px solid var(--color-control-border);
 		border-radius: 0.45rem;
 		background: var(--color-white);
 		padding: 0.65rem 0.8rem;
 		color: var(--color-ink);
 		font: inherit;
 	}
+	input:not([type='radio']):not([type='hidden']):hover {
+		border-color: var(--color-ink);
+	}
+	input[aria-invalid='true'] {
+		border-color: #a32910;
+	}
 	input:focus-visible,
 	button:focus-visible,
 	a:focus-visible {
-		outline: 3px solid var(--color-svelte-500);
-		outline-offset: 3px;
+		outline: 2px solid transparent;
+		box-shadow: var(--focus-ring);
 	}
 	.radio-row {
 		display: grid;
@@ -602,7 +614,7 @@
 	}
 	.secondary-action,
 	.remove-action {
-		border: 1px solid var(--color-border-strong);
+		border: 1px solid var(--color-control-border);
 		background: transparent;
 		color: var(--color-ink);
 	}

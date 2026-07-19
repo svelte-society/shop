@@ -319,10 +319,11 @@ exactly HSTS `max-age=31536000; includeSubDomains`,
 
 The verifier derives the asset only from a quoted `src` or `href` value under
 `/_app/immutable/` in the downloaded HTML and requires the content type expected
-for the selected JavaScript, CSS, or font extension. HTML CSP must contain the
-same nonce token in both `script-src` and `style-src`, must not contain
-`unsafe-inline`, and must set `frame-ancestors 'none'`. The immutable asset may
-omit CSP. Do not add or overwrite CSP at Cloudflare.
+for the selected JavaScript, CSS, or font extension. HTML CSP must contain exactly
+one `script-src` nonce and must not contain `unsafe-inline`. Extracted production
+styles need no nonce; if `style-src` contains one, it must match the script nonce.
+HTML CSP must also set `frame-ancestors 'none'`. The immutable asset may omit CSP.
+Do not add or overwrite CSP at Cloudflare.
 
 ## Deploy and rollback
 

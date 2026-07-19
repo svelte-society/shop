@@ -4,6 +4,7 @@ import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
 import { createCart } from '$lib/stores/cart.svelte';
+import CartLineItem from './CartLineItem.svelte';
 import ProductCard from './ProductCard.svelte';
 import ProductPurchase from './ProductPurchase.svelte';
 import VariantPicker from './VariantPicker.svelte';
@@ -117,5 +118,26 @@ describe('storefront contrast semantics', () => {
 		expect(contrast(optionStyle.borderTopColor, paper)).toBeGreaterThanOrEqual(3);
 		expect(controlBorder).not.toBe('');
 		expect(rgb(optionStyle.borderTopColor)).toEqual(rgb(controlBorder));
+	});
+
+	it('keeps the cart quantity boundary at 3:1 against white and paper', () => {
+		render(CartLineItem, {
+			product,
+			variant: product.variants[0],
+			quantity: 1,
+			maxQuantity: 20,
+			onQuantityChange: () => undefined,
+			onRemove: () => undefined
+		});
+
+		const rootStyle = getComputedStyle(document.documentElement);
+		const controlBorder = rootStyle.getPropertyValue('--color-control-border').trim();
+		const white = rootStyle.getPropertyValue('--color-white').trim();
+		const paper = rootStyle.getPropertyValue('--color-paper').trim();
+		const quantityStyle = getComputedStyle(page.getByLabelText('Quantity').element());
+
+		expect(contrast(quantityStyle.borderTopColor, white)).toBeGreaterThanOrEqual(3);
+		expect(contrast(quantityStyle.borderTopColor, paper)).toBeGreaterThanOrEqual(3);
+		expect(rgb(quantityStyle.borderTopColor)).toEqual(rgb(controlBorder));
 	});
 });

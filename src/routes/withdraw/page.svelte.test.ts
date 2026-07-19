@@ -1,3 +1,4 @@
+import '../../app.css';
 import { describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
@@ -14,6 +15,28 @@ const fields = {
 };
 
 describe('withdrawal page', () => {
+	it('visually groups form sections and keeps controls visibly bounded and focused', () => {
+		render(WithdrawalPage, { data, form: { fields, itemRowCount: 1 } });
+
+		const fieldsetStyle = getComputedStyle(
+			page.getByRole('group', { name: 'Your details' }).element()
+		);
+		const input = page.getByLabelText('Full name').element() as HTMLInputElement;
+		const inputStyle = getComputedStyle(input);
+		const secondaryStyle = getComputedStyle(
+			page.getByRole('button', { name: 'Add another item' }).element()
+		);
+
+		expect(fieldsetStyle.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+		expect(fieldsetStyle.borderTopStyle).toBe('solid');
+		expect(inputStyle.borderTopStyle).toBe('solid');
+		expect(Number.parseFloat(inputStyle.borderTopWidth)).toBeGreaterThanOrEqual(2);
+		expect(secondaryStyle.borderTopStyle).toBe('solid');
+
+		input.focus();
+		expect(getComputedStyle(input).boxShadow).not.toBe('none');
+	});
+
 	it('uses persistent labels, semantic groups, native scope radios, and one specific-item row', async () => {
 		render(WithdrawalPage, { data, form: { fields, itemRowCount: 1 } });
 		await expect
@@ -108,6 +131,13 @@ describe('withdrawal page', () => {
 			expect(control).toHaveAttribute('aria-invalid', 'true');
 			expect(document.querySelector(`#${name}-0-error`)).not.toBeNull();
 		}
+		await expect.element(page.getByLabelText('Full name')).toHaveAttribute('aria-invalid', 'true');
+		await expect
+			.element(page.getByLabelText('Receipt email'))
+			.toHaveAttribute('aria-invalid', 'true');
+		await expect
+			.element(page.getByLabelText('Order reference'))
+			.not.toHaveAttribute('aria-invalid');
 	});
 
 	it('renders and focuses generic secure action failures', async () => {
