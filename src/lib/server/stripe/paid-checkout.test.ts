@@ -176,6 +176,19 @@ describe('Stripe paid Checkout normalization', () => {
 		]);
 	});
 
+	it('accepts an absent Customer shipping phone when Checkout customer phone copies agree', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		const customer = expandedCustomer(fixture);
+		if (!customer.shipping) throw new Error();
+		customer.shipping.phone = null;
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({ customerId: customer.id, destinationCountry: 'SE' });
+	});
+
 	it('normalizes a valid US Checkout with zero automatic tax', async () => {
 		const fixture = paidCheckoutProviderFixture({ country: 'US' });
 

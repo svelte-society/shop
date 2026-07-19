@@ -89,6 +89,28 @@ describe('Stripe fulfillment details', () => {
 		]);
 	});
 
+	it('uses the current Customer phone when the optional shipping phone is absent', async () => {
+		const session = sessionFixture();
+		session.customer.shipping.phone = null as unknown as string;
+
+		await expect(
+			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(
+				'cs_test_fulfillment'
+			)
+		).resolves.toMatchObject({ recipient: { phone: '+46 70 123 45 67' } });
+	});
+
+	it('uses the legacy shipping phone when the current Customer phone is absent', async () => {
+		const session = sessionFixture();
+		session.customer.phone = null as unknown as string;
+
+		await expect(
+			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(
+				'cs_test_fulfillment'
+			)
+		).resolves.toMatchObject({ recipient: { phone: '+46 70 123 45 67' } });
+	});
+
 	it('uses a shutdown-safe five-second no-retry request when given a scheduler signal', async () => {
 		const client = new ContractStripeClient(sessionFixture());
 		const signal = new AbortController().signal;
@@ -156,7 +178,10 @@ describe('Stripe fulfillment details', () => {
 		],
 		[
 			'phone',
-			(session: ReturnType<typeof sessionFixture>) => (session.customer.shipping.phone = '')
+			(session: ReturnType<typeof sessionFixture>) => {
+				session.customer.phone = '';
+				session.customer.shipping.phone = '';
+			}
 		],
 		[
 			'address line',
@@ -181,6 +206,18 @@ describe('Stripe fulfillment details', () => {
 	])('rejects a missing %s with a stable error', async (_label, mutate) => {
 		const session = sessionFixture();
 		mutate(session);
+
+		await expectStableCode(
+			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(
+				'cs_test_fulfillment'
+			),
+			'STRIPE_FULFILLMENT_DETAILS_INVALID'
+		);
+	});
+
+	it('rejects conflicting current and legacy phone values with a stable error', async () => {
+		const session = sessionFixture();
+		session.customer.shipping.phone = '+46 70 999 99 99';
 
 		await expectStableCode(
 			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(

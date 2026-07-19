@@ -55,6 +55,12 @@ function optionalString(value: unknown, maxLength: number): string {
 	return value;
 }
 
+function optionalPhone(value: unknown): string {
+	if (value === null || value === undefined || value === '') return '';
+	if (!isExactString(value, 100)) fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
+	return value;
+}
+
 function splitName(value: unknown): { firstName: string; lastName: string } {
 	if (!isExactString(value, 400)) fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
 	const match = /^(\S+)\s+(\S(?:.*\S)?)$/.exec(value);
@@ -77,13 +83,19 @@ function normalizeFulfillmentDetails(
 		value.customer.deleted === true ||
 		!isExactString(value.customer.email, 500) ||
 		!isRecord(value.customer.shipping) ||
-		!isExactString(value.customer.shipping.phone, 100) ||
 		!isRecord(value.customer.shipping.address)
 	) {
 		fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
 	}
 
 	const { firstName, lastName } = splitName(value.customer.shipping.name);
+	const customerPhone = optionalPhone(value.customer.phone);
+	const shippingPhone = optionalPhone(value.customer.shipping.phone);
+	if (customerPhone !== '' && shippingPhone !== '' && shippingPhone !== customerPhone) {
+		fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
+	}
+	const phone = customerPhone || shippingPhone;
+	if (phone === '') fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
 	const address = value.customer.shipping.address;
 	if (
 		!isExactString(address.line1, 500) ||
@@ -111,7 +123,7 @@ function normalizeFulfillmentDetails(
 			firstName,
 			lastName,
 			company,
-			phone: value.customer.shipping.phone
+			phone
 		},
 		address: {
 			line1: address.line1,

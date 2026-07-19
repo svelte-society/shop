@@ -296,7 +296,6 @@ function validateCustomer(session: UnknownRecord): {
 		!isExactNonEmptyString(customer.phone) ||
 		!isRecord(customer.shipping) ||
 		!isExactNonEmptyString(customer.shipping.name) ||
-		!isExactNonEmptyString(customer.shipping.phone) ||
 		!TAX_EXEMPT_VALUES.has(customer.tax_exempt as string)
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
@@ -350,9 +349,12 @@ function validateCustomer(session: UnknownRecord): {
 
 	const sessionShipping = shippingIdentity(session);
 	const customerShippingAddress = normalizeShippingAddress(customer.shipping.address);
+	const customerShippingPhone = customer.shipping.phone;
 	if (
 		customer.shipping.name !== sessionShipping.name ||
-		customer.shipping.phone !== customerDetails.phone ||
+		(customerShippingPhone !== null &&
+			customerShippingPhone !== undefined &&
+			customerShippingPhone !== customerDetails.phone) ||
 		!addressesEqual(customerShippingAddress, sessionShipping.address)
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
