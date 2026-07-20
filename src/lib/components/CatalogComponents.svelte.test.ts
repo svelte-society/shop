@@ -21,6 +21,7 @@ const apparel: PublicCatalogProduct = {
 	care: 'Wash at 30°C',
 	fit: 'Regular fit',
 	sizeGuideUrl: null,
+	sizeChart: null,
 	variants: [
 		{
 			priceId: 'price_tee',

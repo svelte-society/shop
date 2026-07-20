@@ -22,6 +22,7 @@ const apparel: PublicCatalogProduct = {
 	care: 'Wash at 30°C',
 	fit: 'Regular fit',
 	sizeGuideUrl: 'https://cdn.example.com/size-guide.pdf',
+	sizeChart: null,
 	variants: [
 		{
 			priceId: 'price_small',

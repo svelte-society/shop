@@ -5,8 +5,10 @@ import type {
 	CatalogDiagnostic,
 	CatalogProduct,
 	CatalogSnapshot,
-	CatalogVariant
+	CatalogVariant,
+	ProductSizeChart
 } from '$lib/domain/catalog';
+import { isProductSizeChart } from '$lib/domain/catalog';
 
 type ParsedProduct = Omit<CatalogProduct, 'variants'>;
 
@@ -48,6 +50,23 @@ function httpsUrl(value: string | null | undefined): string | null {
 		return url.protocol === 'https:' ? url.toString() : null;
 	} catch {
 		return null;
+	}
+}
+
+function sizeChartMetadata(value: string | undefined): {
+	sizeChart: ProductSizeChart | null;
+	valid: boolean;
+} {
+	const source = nonEmpty(value);
+	if (!source) return { sizeChart: null, valid: true };
+
+	try {
+		const parsed: unknown = JSON.parse(source);
+		return isProductSizeChart(parsed)
+			? { sizeChart: parsed, valid: true }
+			: { sizeChart: null, valid: false };
+	} catch {
+		return { sizeChart: null, valid: false };
 	}
 }
 
@@ -120,6 +139,9 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 	const sizeGuideUrl = sizeGuideValue ? httpsUrl(sizeGuideValue) : null;
 	if (sizeGuideValue && !sizeGuideUrl) add('PRODUCT_SIZE_GUIDE_INVALID');
 
+	const { sizeChart, valid: sizeChartValid } = sizeChartMetadata(source.metadata.size_chart_json);
+	if (!sizeChartValid) add('PRODUCT_SIZE_CHART_INVALID');
+
 	if (
 		diagnostics.length > 0 ||
 		!name ||
@@ -147,6 +169,7 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 			care,
 			fit: category === 'apparel' ? fit : null,
 			sizeGuideUrl,
+			sizeChart,
 			designReference,
 			designPlacements: Object.fromEntries(
 				designEntries.map(([position, url]) => [position, url as string])

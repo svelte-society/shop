@@ -28,6 +28,7 @@ const product: CatalogProduct = {
 	care: 'Wash at 30°C',
 	fit: 'Regular fit',
 	sizeGuideUrl: 'https://cdn.example.com/guides/tee.pdf',
+	sizeChart: null,
 	designReference: 'society-community-v1',
 	designPlacements: {
 		back: 'https://cdn.example.com/designs/back.svg',

@@ -20,6 +20,7 @@ const product: PublicCatalogProduct = {
 	care: 'Dishwasher safe',
 	fit: null,
 	sizeGuideUrl: null,
+	sizeChart: null,
 	variants: [
 		{
 			priceId: 'price_mug',

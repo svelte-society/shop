@@ -17,6 +17,12 @@ export type CatalogVariant = {
 	styriaProductNumber: string;
 };
 
+export type ProductSizeChart = {
+	unit: 'cm';
+	sizes: string[];
+	measurements: Array<{ label: string; values: number[] }>;
+};
+
 export type CatalogProduct = {
 	providerId: string;
 	slug: string;
@@ -29,6 +35,7 @@ export type CatalogProduct = {
 	care: string;
 	fit: string | null;
 	sizeGuideUrl: string | null;
+	sizeChart: ProductSizeChart | null;
 	designReference: string;
 	designPlacements: Record<string, string>;
 	variants: CatalogVariant[];
@@ -116,6 +123,44 @@ function isCatalogVariant(input: unknown): input is CatalogVariant {
 	);
 }
 
+export function isProductSizeChart(input: unknown): input is ProductSizeChart {
+	if (
+		!isRecord(input) ||
+		!hasExactKeys(input, ['unit', 'sizes', 'measurements']) ||
+		input.unit !== 'cm' ||
+		!Array.isArray(input.sizes) ||
+		input.sizes.length === 0 ||
+		input.sizes.length > 20 ||
+		!input.sizes.every(isNonEmptyString) ||
+		new Set(input.sizes).size !== input.sizes.length ||
+		!Array.isArray(input.measurements) ||
+		input.measurements.length === 0 ||
+		input.measurements.length > 10
+	) {
+		return false;
+	}
+
+	const labels = new Set<string>();
+	for (const measurement of input.measurements) {
+		if (
+			!isRecord(measurement) ||
+			!hasExactKeys(measurement, ['label', 'values']) ||
+			!isNonEmptyString(measurement.label) ||
+			labels.has(measurement.label) ||
+			!Array.isArray(measurement.values) ||
+			measurement.values.length !== input.sizes.length ||
+			!measurement.values.every(
+				(value) => typeof value === 'number' && Number.isFinite(value) && value > 0
+			)
+		) {
+			return false;
+		}
+		labels.add(measurement.label);
+	}
+
+	return true;
+}
+
 function isCatalogProduct(input: unknown): input is CatalogProduct {
 	if (
 		!isRecord(input) ||
@@ -131,6 +176,7 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 			'care',
 			'fit',
 			'sizeGuideUrl',
+			'sizeChart',
 			'designReference',
 			'designPlacements',
 			'variants'
@@ -149,6 +195,7 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 		(input.fit !== null && !isNonEmptyString(input.fit)) ||
 		(input.category === 'apparel' && !isNonEmptyString(input.fit)) ||
 		(input.sizeGuideUrl !== null && !isHttpsUrl(input.sizeGuideUrl)) ||
+		(input.sizeChart !== null && !isProductSizeChart(input.sizeChart)) ||
 		!isNonEmptyString(input.designReference) ||
 		!isRecord(input.designPlacements) ||
 		Object.keys(input.designPlacements).length === 0 ||
@@ -196,6 +243,16 @@ export function cloneCatalogSnapshot(
 		products: snapshot.products.map((product) => ({
 			...product,
 			images: [...product.images],
+			sizeChart: product.sizeChart
+				? {
+						unit: product.sizeChart.unit,
+						sizes: [...product.sizeChart.sizes],
+						measurements: product.sizeChart.measurements.map((measurement) => ({
+							label: measurement.label,
+							values: [...measurement.values]
+						}))
+					}
+				: null,
 			designPlacements: { ...product.designPlacements },
 			variants: product.variants.map((variant) => ({ ...variant }))
 		})),
@@ -208,6 +265,15 @@ export function cloneCatalogSnapshot(
 export function freezeCatalogSnapshot(snapshot: CatalogSnapshot): CatalogSnapshot {
 	for (const product of snapshot.products) {
 		for (const variant of product.variants) Object.freeze(variant);
+		if (product.sizeChart) {
+			for (const measurement of product.sizeChart.measurements) {
+				Object.freeze(measurement.values);
+				Object.freeze(measurement);
+			}
+			Object.freeze(product.sizeChart.measurements);
+			Object.freeze(product.sizeChart.sizes);
+			Object.freeze(product.sizeChart);
+		}
 		Object.freeze(product.variants);
 		Object.freeze(product.images);
 		Object.freeze(product.designPlacements);
@@ -240,6 +306,16 @@ export function toPublicCatalogProduct(product: CatalogProduct): PublicCatalogPr
 		care: product.care,
 		fit: product.fit,
 		sizeGuideUrl: product.sizeGuideUrl,
+		sizeChart: product.sizeChart
+			? {
+					unit: product.sizeChart.unit,
+					sizes: [...product.sizeChart.sizes],
+					measurements: product.sizeChart.measurements.map((measurement) => ({
+						label: measurement.label,
+						values: [...measurement.values]
+					}))
+				}
+			: null,
 		variants: product.variants.map((variant) => ({
 			priceId: variant.priceId,
 			label: variant.label,

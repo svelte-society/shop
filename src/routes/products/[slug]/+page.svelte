@@ -6,6 +6,7 @@
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
+	let sizeGuide = $derived(data.product?.sizeChart ?? null);
 </script>
 
 <svelte:head>
@@ -39,32 +40,52 @@
 				<p class="eyebrow">Product details</p>
 				<h2 id="details-title">Made to be used.</h2>
 			</header>
-			<div class="details-grid">
-				<article>
-					<h3>Materials</h3>
-					<p>{data.product.materials}</p>
-				</article>
-				{#if data.product.fit}<article>
-						<h3>Fit</h3>
-						<p>{data.product.fit}</p>
-					</article>{/if}
-				<article>
-					<h3>Care</h3>
-					<p>{data.product.care}</p>
-				</article>
-				<article>
-					<h3>Delivery</h3>
-					<p>
-						€10 for one item. Two or more items ship free across the EU, except Slovenia, and to
-						Styria-supported destinations in Asia.
-					</p>
-					<a href={resolve('/shipping' as '/')}>Shipping details</a>
-				</article>
-				<article>
-					<h3>Returns</h3>
-					<p>Start a return by emailing merch@sveltesociety.dev. Returns require approval.</p>
-					<a href={resolve('/returns' as '/')}>Returns policy</a>
-				</article>
+			<div class="details-content">
+				<div class="details-grid">
+					<article>
+						<h3>Materials</h3>
+						<p>{data.product.materials}</p>
+					</article>
+					{#if data.product.fit}<article>
+							<h3>Fit</h3>
+							<p>{data.product.fit}</p>
+						</article>{/if}
+					<article>
+						<h3>Care</h3>
+						<p>{data.product.care}</p>
+					</article>
+				</div>
+
+				{#if sizeGuide}
+					<div class="size-guide">
+						<h3>Size guide</h3>
+						<p id="size-guide-help">
+							Garment measurements in {sizeGuide.unit}. Compare them with a similar item you already
+							own.
+						</p>
+						<div class="table-wrap">
+							<table
+								aria-label={`${data.product.name} size guide`}
+								aria-describedby="size-guide-help"
+							>
+								<thead>
+									<tr>
+										<th scope="col">Measurement</th>
+										{#each sizeGuide.sizes as size (size)}<th scope="col">{size}</th>{/each}
+									</tr>
+								</thead>
+								<tbody>
+									{#each sizeGuide.measurements as measurement (measurement.label)}
+										<tr>
+											<th scope="row">{measurement.label}</th>
+											{#each measurement.values as value, index (index)}<td>{value}</td>{/each}
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				{/if}
 			</div>
 		</section>
 	{/if}
@@ -151,20 +172,19 @@
 
 	.details-grid {
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 0;
-		border-top: 1px solid var(--color-border);
+		border: 1px solid var(--color-border);
 	}
 
 	.details-grid article {
 		min-width: 0;
 		padding: 1.5rem;
-		border-right: 1px solid var(--color-border);
-		border-bottom: 1px solid var(--color-border);
+		background: var(--color-white);
 	}
 
-	.details-grid article:nth-child(even) {
-		border-right: 0;
+	.details-grid article + article {
+		border-left: 1px solid var(--color-border);
 	}
 
 	.details-grid h3 {
@@ -173,19 +193,73 @@
 	}
 
 	.details-grid p {
-		margin-bottom: 0.75rem;
+		margin-bottom: 0;
 		color: var(--color-slate-700);
 		font-size: 0.92rem;
 		line-height: 1.6;
 		white-space: pre-line;
 	}
 
-	.details-grid a {
-		display: inline-flex;
-		min-height: 2.75rem;
-		align-items: center;
-		font-weight: 750;
-		text-underline-offset: 0.2rem;
+	.size-guide {
+		margin-top: 1.5rem;
+		padding: clamp(1.25rem, 3vw, 2rem);
+		border: 1px solid var(--color-border);
+		background: var(--color-white);
+	}
+
+	.size-guide h3 {
+		margin-bottom: 0.4rem;
+		font-size: 1.25rem;
+	}
+
+	.size-guide > p {
+		margin-bottom: 1.25rem;
+		color: var(--color-slate-700);
+		font-size: 0.92rem;
+		line-height: 1.6;
+	}
+
+	.table-wrap {
+		overflow-x: auto;
+		overscroll-behavior-inline: contain;
+	}
+
+	table {
+		width: 100%;
+		min-width: 28rem;
+		border-collapse: collapse;
+		font-variant-numeric: tabular-nums;
+	}
+
+	th,
+	td {
+		padding: 0.8rem 0.75rem;
+		border-bottom: 1px solid var(--color-border);
+		text-align: center;
+	}
+
+	thead th {
+		background: var(--color-svelte-50);
+		font-size: 0.8rem;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+
+	th:first-child {
+		text-align: left;
+	}
+
+	tbody th {
+		font-size: 0.9rem;
+	}
+
+	tbody td {
+		color: var(--color-slate-700);
+	}
+
+	tbody tr:last-child th,
+	tbody tr:last-child td {
+		border-bottom: 0;
 	}
 
 	@media (max-width: 48rem) {
@@ -209,9 +283,9 @@
 			grid-template-columns: 1fr;
 		}
 
-		.details-grid article,
-		.details-grid article:nth-child(even) {
-			border-right: 0;
+		.details-grid article + article {
+			border-top: 1px solid var(--color-border);
+			border-left: 0;
 		}
 	}
 </style>

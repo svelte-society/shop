@@ -87,6 +87,37 @@ describe('parseStripeCatalog', () => {
 		expect(Object.keys(snapshot.products[0].designPlacements)).toEqual(['back', 'front']);
 	});
 
+	it('parses an inline size chart from Product metadata', async () => {
+		const sizeChart = {
+			unit: 'cm',
+			sizes: ['S', 'M', 'L'],
+			measurements: [
+				{ label: 'Half chest', values: [49.5, 53.5, 56.5] },
+				{ label: 'Body length', values: [69, 73, 75] }
+			]
+		};
+		const product = stripeProduct({
+			metadata: { size_chart_json: JSON.stringify(sizeChart) }
+		});
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.diagnostics).toEqual([]);
+		expect(snapshot.products[0].sizeChart).toEqual(sizeChart);
+	});
+
+	it('excludes a Product with malformed inline size-chart metadata', async () => {
+		const product = stripeProduct({ metadata: { size_chart_json: '{"unit":"cm"}' } });
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({
+			providerId: product.id,
+			code: 'PRODUCT_SIZE_CHART_INVALID'
+		});
+	});
+
 	it('accepts a shippable physical Product with Stripe legacy type service', async () => {
 		const product = stripeProduct({ type: 'service', shippable: true });
 
