@@ -76,13 +76,29 @@ function isTimestamp(value: unknown): value is string {
 }
 
 function normalizeDesigns(value: unknown): Record<string, string> | null {
-	if (!isRecord(value)) return null;
-	const entries = Object.entries(value).sort(([left], [right]) =>
-		left < right ? -1 : left > right ? 1 : 0
-	);
+	let entries: Array<[string, string]>;
+	if (Array.isArray(value)) {
+		entries = [];
+		for (const design of value) {
+			if (!isRecord(design) || !isExactString(design.title, 100) || !isExactString(design.src)) {
+				return null;
+			}
+			entries.push([design.title, design.src]);
+		}
+	} else if (isRecord(value)) {
+		entries = Object.entries(value) as Array<[string, string]>;
+	} else {
+		return null;
+	}
+	entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 	if (
 		entries.length === 0 ||
-		entries.some(([position, url]) => !isExactString(position, 100) || !isExactString(url, 2_000))
+		entries.some(
+			([position, url], index) =>
+				!isExactString(position, 100) ||
+				!isExactString(url, 2_000) ||
+				(index > 0 && entries[index - 1][0] === position)
+		)
 	) {
 		return null;
 	}
@@ -111,7 +127,7 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 	}
 
 	const trackingNumber = optionalString(value.shipping.trackingNumber, 500);
-	const shippedAt = optionalString(value.shipping.shiped_at, 100);
+	const shippedAt = optionalString(value.shipping.shipped_at ?? value.shipping.shiped_at, 100);
 	if (trackingNumber === undefined || shippedAt === undefined) return null;
 	if (shippedAt !== null && !isTimestamp(shippedAt)) return null;
 
@@ -157,14 +173,21 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 }
 
 function normalizeOrderList(value: unknown): StyriaOrder[] | null {
-	if (!Array.isArray(value)) return null;
+	const candidates = isRecord(value) ? value.orders : value;
+	if (!Array.isArray(candidates)) return null;
 	const orders: StyriaOrder[] = [];
-	for (const candidate of value) {
-		const order = normalizeOrder(candidate);
+	for (const candidate of candidates) {
+		const order = normalizeOrder(
+			isRecord(candidate) && Object.hasOwn(candidate, 'order') ? candidate.order : candidate
+		);
 		if (order === null) return null;
 		orders.push(order);
 	}
 	return orders;
+}
+
+function normalizeOrderEnvelope(value: unknown): StyriaOrder | null {
+	return normalizeOrder(isRecord(value) && Object.hasOwn(value, 'order') ? value.order : value);
 }
 
 function httpError(status: number): StyriaError {
@@ -302,7 +325,7 @@ class HttpStyriaClient implements StyriaGateway {
 			},
 			signal
 		);
-		const order = normalizeOrder(response);
+		const order = normalizeOrderEnvelope(response);
 		if (order === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
 		return order;
 	}
@@ -314,7 +337,7 @@ class HttpStyriaClient implements StyriaGateway {
 			{ method: 'GET' },
 			signal
 		);
-		const order = normalizeOrder(response);
+		const order = normalizeOrderEnvelope(response);
 		if (order === null) throw new StyriaError('STYRIA_RESPONSE_INVALID');
 		return order;
 	}

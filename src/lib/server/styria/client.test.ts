@@ -14,6 +14,23 @@ function successJson(value: unknown): Response {
 	return Response.json(value);
 }
 
+function liveProviderOrderFixture(order = styriaOrderFixture()) {
+	return {
+		...order,
+		shipping: {
+			shippingMethod: order.shipping.shippingMethod,
+			trackingNumber: order.shipping.trackingNumber,
+			shipped_at: order.shipping.shiped_at
+		},
+		items: order.items.map((item) => ({
+			...item,
+			quantity: String(item.quantity),
+			retailPrice: item.retailPrice.toFixed(2),
+			designs: Object.entries(item.designs).map(([title, src]) => ({ title, src }))
+		}))
+	};
+}
+
 afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
@@ -93,6 +110,17 @@ describe('Styria list/search adapter', () => {
 		}
 	});
 
+	it('normalizes the live nested orders envelope and field shapes', async () => {
+		const expected = styriaOrderFixture({ external_id: 'cs_test_target' });
+		const fetch: typeof globalThis.fetch = async () =>
+			successJson({ orders: [{ order: liveProviderOrderFixture(expected) }] });
+		const client = createStyriaClient({ ...credentials, fetch });
+
+		await expect(
+			client.searchByExternalId('cs_test_target', new Date('2026-07-16T08:00:00.000Z'))
+		).resolves.toEqual([expected]);
+	});
+
 	it('uses deterministic encoded query ordering and signs exactly that query without Signature', async () => {
 		let requestedUrl: URL | null = null;
 		const fetch: typeof globalThis.fetch = async (input) => {
@@ -119,7 +147,7 @@ describe('Styria detail/create adapter', () => {
 		const fetch: typeof globalThis.fetch = async (input, init) => {
 			requestedUrl = new URL(String(input));
 			requestInit = init;
-			return successJson(expected);
+			return successJson({ order: liveProviderOrderFixture(expected) });
 		};
 		const client = createStyriaClient({ ...credentials, fetch });
 
@@ -140,7 +168,7 @@ describe('Styria detail/create adapter', () => {
 		const fetch: typeof globalThis.fetch = async (input, init) => {
 			requestedUrl = new URL(String(input));
 			requestInit = init;
-			return successJson(expected);
+			return successJson({ order: liveProviderOrderFixture(expected) });
 		};
 		const client = createStyriaClient({ ...credentials, fetch });
 		const exactBody = JSON.stringify(payload);
