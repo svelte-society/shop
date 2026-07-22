@@ -1,7 +1,16 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import DestinationPicker from '$lib/components/DestinationPicker.svelte';
+	import type { DestinationOption, PricingDestination } from '$lib/domain/pricing';
 	import { cart } from '$lib/stores/cart.svelte';
 
+	type Props = {
+		destination: PricingDestination;
+		destinations: readonly DestinationOption[];
+		returnTo: string;
+	};
+
+	let { destination, destinations, returnTo }: Props = $props();
 	let cartCount = $derived(cart.totalUnits);
 </script>
 
@@ -15,6 +24,7 @@
 		<nav aria-label="Primary navigation">
 			<a href={resolve('/#collection')}>Collection</a>
 			<a href="https://sveltesociety.dev/">Svelte Society</a>
+			<DestinationPicker {destination} {destinations} {returnTo} />
 			<a
 				class="cart-link"
 				href={resolve('/cart')}
@@ -122,7 +132,8 @@
 
 		nav {
 			width: 100%;
-			justify-content: space-between;
+			flex-wrap: wrap;
+			justify-content: center;
 		}
 
 		nav a {

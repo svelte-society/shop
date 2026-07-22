@@ -5,6 +5,21 @@ import Layout from './+layout.svelte';
 
 const children = createRawSnippet(() => ({ render: () => '<main>Storefront</main>' }));
 
+const pricingData = {
+	pricingDestination: {
+		countryCode: 'SE' as const,
+		displayName: 'Sweden',
+		region: 'eu' as const,
+		vatBasisPoints: 2500,
+		requiresImportChargeCopy: false
+	},
+	destinationOptions: [
+		{ countryCode: 'DE' as const, displayName: 'Germany', region: 'eu' as const },
+		{ countryCode: 'SE' as const, displayName: 'Sweden', region: 'eu' as const },
+		{ countryCode: 'JP' as const, displayName: 'Japan', region: 'asia' as const }
+	]
+};
+
 afterEach(() => {
 	document.head.querySelectorAll('script[data-website-id]').forEach((script) => script.remove());
 });
@@ -22,7 +37,8 @@ describe('root layout analytics', () => {
 					scriptUrl: 'https://analytics.sveltesociety.dev/script.js',
 					connectOrigin: 'https://analytics-api.sveltesociety.dev',
 					websiteId: 'society-storefront'
-				}
+				},
+				...pricingData
 			}
 		});
 
@@ -40,7 +56,8 @@ describe('root layout analytics', () => {
 				storefrontEnabled: true,
 				checkoutEnabled: true,
 				showOpeningSoon: false,
-				umami: null
+				umami: null,
+				...pricingData
 			}
 		});
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import '../app.css';
 	import OpeningSoon from '$lib/components/OpeningSoon.svelte';
 	import ShippingStrip from '$lib/components/ShippingStrip.svelte';
@@ -8,6 +9,7 @@
 	import type { LayoutProps } from './$types';
 
 	let { children, data }: LayoutProps = $props();
+	let returnTo = $derived(`${page.url.pathname}${page.url.search}`);
 </script>
 
 <svelte:head><link rel="icon" href="/brand/svelte-society.svg" /></svelte:head>
@@ -22,7 +24,11 @@
 
 <a class="skip-link" href="#main-content" tabindex="0">Skip to content</a>
 <ShippingStrip />
-<SiteHeader />
+<SiteHeader
+	destination={data.pricingDestination}
+	destinations={data.destinationOptions}
+	{returnTo}
+/>
 
 {#if data.showOpeningSoon}
 	<OpeningSoon />
