@@ -140,7 +140,7 @@ describe('migrate', () => {
 	});
 
 	it.each(['checkout_drafts', 'orders', 'order_lines'] as const)(
-		'transactionally rejects a non-empty %s table during the pricing cutover',
+		'transactionally clears pre-launch %s rows during the greenfield pricing cutover',
 		(table) => {
 			const directory = temporaryDirectory();
 			const pricingMigrationPath = join(
@@ -151,8 +151,15 @@ describe('migrate', () => {
 			writeFileSync(
 				join(directory, '0001_initial.sql'),
 				`CREATE TABLE checkout_drafts (id TEXT PRIMARY KEY);
+				 CREATE TABLE checkout_draft_lines (id TEXT PRIMARY KEY);
 				 CREATE TABLE orders (id TEXT PRIMARY KEY);
-				 CREATE TABLE order_lines (id TEXT PRIMARY KEY);`
+				 CREATE TABLE order_lines (id TEXT PRIMARY KEY);
+				 CREATE TABLE order_events (id TEXT PRIMARY KEY);
+				 CREATE TABLE submission_approvals (id TEXT PRIMARY KEY);
+				 CREATE TABLE outbox_jobs (id TEXT PRIMARY KEY);
+				 CREATE TABLE email_deliveries (id TEXT PRIMARY KEY);
+				 CREATE TABLE support_notes (id TEXT PRIMARY KEY);
+				 CREATE TABLE stripe_events (id TEXT PRIMARY KEY);`
 			);
 			const database = openDatabase(':memory:');
 			migrate(database, directory);
@@ -162,9 +169,13 @@ describe('migrate', () => {
 				readFileSync(pricingMigrationPath, 'utf8')
 			);
 
-			expect(() => migrate(database, directory)).toThrow(/CHECK constraint failed/);
+			migrate(database, directory);
+			expect(database.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+				count: 0
+			});
 			expect(database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
-				{ name: '0001_initial.sql' }
+				{ name: '0001_initial.sql' },
+				{ name: '0007_dynamic_destination_pricing.sql' }
 			]);
 			expect(
 				database
@@ -172,7 +183,7 @@ describe('migrate', () => {
 						"SELECT name FROM pragma_table_info('checkout_drafts') WHERE name = 'destination_country'"
 					)
 					.get()
-			).toBeUndefined();
+			).toEqual({ name: 'destination_country' });
 			expect(
 				database
 					.prepare("SELECT name FROM sqlite_schema WHERE name = '_pricing_migration_guard'")

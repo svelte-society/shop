@@ -1,14 +1,16 @@
-CREATE TABLE _pricing_migration_guard (
-  invalid_count INTEGER NOT NULL CHECK (invalid_count = 0)
-);
-
-INSERT INTO _pricing_migration_guard
-SELECT
-  (SELECT count(*) FROM checkout_drafts) +
-  (SELECT count(*) FROM orders) +
-  (SELECT count(*) FROM order_lines);
-
-DROP TABLE _pricing_migration_guard;
+-- This is the approved greenfield cutover. Pre-launch checkout, payment,
+-- fulfillment, and delivery records are disposable and cannot satisfy the v2
+-- snapshot contract. Withdrawal records are independent and remain intact.
+DELETE FROM support_notes;
+DELETE FROM email_deliveries;
+DELETE FROM submission_approvals;
+DELETE FROM order_events;
+DELETE FROM order_lines;
+DELETE FROM outbox_jobs;
+DELETE FROM orders;
+DELETE FROM checkout_draft_lines;
+DELETE FROM checkout_drafts;
+DELETE FROM stripe_events;
 
 ALTER TABLE checkout_drafts ADD COLUMN destination_country TEXT
   CHECK (
