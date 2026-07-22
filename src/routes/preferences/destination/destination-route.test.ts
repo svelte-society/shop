@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { _createDestinationPreferencePost } from './+server';
 
 const runtimeEnv = { STYRIA_SUPPORTED_COUNTRIES: 'SE,DE,JP' };
+
+afterEach(() => {
+	vi.doUnmock('$app/environment');
+	vi.resetModules();
+});
 
 function fixture(secure = false, environment: Record<string, string | undefined> = runtimeEnv) {
 	const sets: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
@@ -68,6 +73,30 @@ describe('POST /preferences/destination', () => {
 
 		expect(response.status).toBe(303);
 		expect(sets[0]?.options.secure).toBe(false);
+	});
+
+	it('defaults the cookie to secure outside SvelteKit development mode', async () => {
+		vi.resetModules();
+		vi.doMock('$app/environment', () => ({ dev: false }));
+		const { _createDestinationPreferencePost: createPost } = await import('./+server');
+		const sets: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
+		const handler = createPost(runtimeEnv);
+
+		const response = await handler({
+			request: new Request('https://shop.sveltesociety.dev/preferences/destination', {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: 'country=DE&returnTo=%2Fcart'
+			}),
+			cookies: {
+				set(name: string, value: string, options: Record<string, unknown>) {
+					sets.push({ name, value, options });
+				}
+			}
+		} as unknown as Parameters<typeof handler>[0]);
+
+		expect(response.status).toBe(303);
+		expect(sets[0]?.options.secure).toBe(true);
 	});
 
 	it.each([
