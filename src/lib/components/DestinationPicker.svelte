@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { invalidate } from '$app/navigation';
+	import { goto, invalidate } from '$app/navigation';
 	import type { DestinationOption, PricingDestination } from '$lib/domain/pricing';
 
 	type Props = {
@@ -14,21 +14,35 @@
 	let query = $state('');
 	let pending = $state(false);
 	let announcement = $state('');
+	let error = $state('');
+	let hydrated = $state(false);
 	let filtered = $derived(
 		destinations.filter((option) =>
 			option.displayName.toLowerCase().includes(query.trim().toLowerCase())
 		)
 	);
-	let europeanDestinations = $derived(filtered.filter((option) => option.region === 'eu'));
-	let asianDestinations = $derived(filtered.filter((option) => option.region === 'asia'));
+	let europeanDestinations = $derived(destinations.filter((option) => option.region === 'eu'));
+	let asianDestinations = $derived(destinations.filter((option) => option.region === 'asia'));
+	let filteredEuropeanDestinations = $derived(filtered.filter((option) => option.region === 'eu'));
+	let filteredAsianDestinations = $derived(filtered.filter((option) => option.region === 'asia'));
+
+	$effect(() => {
+		hydrated = true;
+	});
+
+	function matchesQuery(option: DestinationOption): boolean {
+		return filtered.includes(option);
+	}
 
 	function open(): void {
 		announcement = '';
+		error = '';
 		dialog.showModal();
 	}
 
 	function close(): void {
 		query = '';
+		error = '';
 		trigger.focus();
 	}
 
@@ -41,16 +55,31 @@
 		if (!selected) return;
 
 		pending = true;
+		error = '';
 		try {
 			const response = await fetch(form.action, {
 				method: 'POST',
 				body: new FormData(form),
 				redirect: 'follow'
 			});
-			if (!response.ok) return;
+			if (!response.ok) {
+				error = 'We couldn’t update your delivery country. Please try again.';
+				return;
+			}
+			try {
+				await invalidate('app:pricing-destination');
+			} catch {
+				try {
+					await goto(returnTo, { invalidateAll: true });
+				} catch {
+					globalThis.location.assign(returnTo);
+				}
+				return;
+			}
 			dialog.close();
-			await invalidate('app:pricing-destination');
 			announcement = `Prices updated for ${selected.displayName}.`;
+		} catch {
+			error = 'We couldn’t update your delivery country. Please try again.';
 		} finally {
 			pending = false;
 		}
@@ -58,6 +87,26 @@
 </script>
 
 <div class="destination-picker">
+	{#if !hydrated}
+		<form class="no-script-destination" method="POST" action="/preferences/destination">
+			<label>
+				<span>Delivery country</span>
+				<select name="country">
+					{#each destinations as option (option.countryCode)}
+						<option
+							value={option.countryCode}
+							selected={option.countryCode === destination.countryCode}
+						>
+							{option.displayName}
+						</option>
+					{/each}
+				</select>
+			</label>
+			<input type="hidden" name="returnTo" value={returnTo} />
+			<button type="submit">Update country</button>
+		</form>
+	{/if}
+
 	<button
 		bind:this={trigger}
 		class="destination-trigger"
@@ -86,42 +135,46 @@
 			<div class="destination-groups">
 				<fieldset>
 					<legend>EU countries</legend>
-					{#if europeanDestinations.length}
-						{#each europeanDestinations as option (option.countryCode)}
-							<label class="destination-option">
-								<input
-									type="radio"
-									name="country"
-									value={option.countryCode}
-									checked={option.countryCode === destination.countryCode}
-								/>
-								<span>{option.displayName}</span>
-							</label>
-						{/each}
-					{:else}
+					{#each europeanDestinations as option (option.countryCode)}
+						<label class:filtered-out={!matchesQuery(option)} class="destination-option">
+							<input
+								type="radio"
+								name="country"
+								value={option.countryCode}
+								checked={option.countryCode === destination.countryCode}
+								required
+							/>
+							<span>{option.displayName}</span>
+						</label>
+					{/each}
+					{#if !filteredEuropeanDestinations.length}
 						<p class="empty-result">No EU countries match your search.</p>
 					{/if}
 				</fieldset>
 
 				<fieldset>
 					<legend>Asia countries</legend>
-					{#if asianDestinations.length}
-						{#each asianDestinations as option (option.countryCode)}
-							<label class="destination-option">
-								<input
-									type="radio"
-									name="country"
-									value={option.countryCode}
-									checked={option.countryCode === destination.countryCode}
-								/>
-								<span>{option.displayName}</span>
-							</label>
-						{/each}
-					{:else}
+					{#each asianDestinations as option (option.countryCode)}
+						<label class:filtered-out={!matchesQuery(option)} class="destination-option">
+							<input
+								type="radio"
+								name="country"
+								value={option.countryCode}
+								checked={option.countryCode === destination.countryCode}
+								required
+							/>
+							<span>{option.displayName}</span>
+						</label>
+					{/each}
+					{#if !filteredAsianDestinations.length}
 						<p class="empty-result">No Asian countries match your search.</p>
 					{/if}
 				</fieldset>
 			</div>
+
+			{#if error}
+				<p class="form-error" role="alert">{error}</p>
+			{/if}
 
 			<input type="hidden" name="returnTo" value={returnTo} aria-label="Return to" />
 
@@ -137,7 +190,7 @@
 	</dialog>
 </div>
 
-<p class="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</p>
+<p class="visually-hidden" role="status" aria-atomic="true">{announcement}</p>
 
 <style>
 	.destination-picker {
@@ -146,7 +199,9 @@
 
 	.destination-trigger,
 	.destination-option,
-	.dialog-actions button {
+	.dialog-actions button,
+	.no-script-destination button,
+	.no-script-destination select {
 		min-height: 2.75rem;
 	}
 
@@ -282,6 +337,48 @@
 	.destination-option:has(input:checked) {
 		border-color: var(--color-ink);
 		background: var(--color-svelte-50);
+	}
+
+	.destination-option.filtered-out {
+		display: none;
+	}
+
+	.form-error {
+		margin: 0;
+		border-left: 0.25rem solid var(--color-svelte-text);
+		padding: 0.55rem 0.7rem;
+		background: var(--color-svelte-50);
+		color: var(--color-ink);
+		font-size: 0.88rem;
+		font-weight: 750;
+	}
+
+	.no-script-destination {
+		display: flex;
+		align-items: end;
+		justify-content: center;
+		gap: 0.5rem;
+		padding: 0.45rem 1rem;
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-svelte-50);
+	}
+
+	.no-script-destination label {
+		display: grid;
+		gap: 0.15rem;
+		font-size: 0.74rem;
+		font-weight: 800;
+	}
+
+	.no-script-destination select,
+	.no-script-destination button {
+		border: 1px solid var(--color-control-border);
+		border-radius: 0.4rem;
+		padding: 0.35rem 0.55rem;
+		background: var(--color-paper);
+		color: var(--color-ink);
+		font-size: 0.82rem;
+		font-weight: 750;
 	}
 
 	.destination-option input {
