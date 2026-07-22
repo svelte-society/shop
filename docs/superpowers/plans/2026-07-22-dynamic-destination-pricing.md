@@ -4,7 +4,7 @@
 
 **Goal:** Replace Swedish reference pricing with a visible delivery-country selector, destination-specific storefront VAT projection, and a Stripe Checkout v2 contract based on EUR 20 net merchandise and EUR 8 net paid shipping.
 
-**Architecture:** Stripe Price and Shipping Rate amounts remain the trusted net source. A pure domain module projects gross storefront amounts from a validated request-level destination; Stripe Automatic Tax and the complete Checkout address remain authoritative for payment. Checkout v2 freezes the selected country in SQLite, records explicit shipping tax and gross retail unit amounts, while retaining a version 1 normalization path for already-created Sessions.
+**Architecture:** Stripe Price and Shipping Rate amounts remain the trusted net source. A pure domain module projects gross storefront amounts from a validated request-level destination; Stripe Automatic Tax and the complete Checkout address remain authoritative for payment. Checkout v2 freezes the selected country in SQLite and records explicit shipping tax and gross retail unit amounts. The cutover is greenfield and v2-only; version 1 Sessions are rejected.
 
 **Tech Stack:** Node.js 24, pnpm 10, SvelteKit 2, Svelte 5 runes, TypeScript 6, Stripe SDK 22, SQLite/better-sqlite3, Vitest Browser Mode, Playwright, Docker/Coolify.
 
@@ -23,7 +23,7 @@
 - Country state uses the `shop_destination_v1` first-party cookie and exact route `/preferences/destination`.
 - Checkout v2 accepts exactly the selected delivery country.
 - Promotion codes and discounts remain disabled.
-- Preserve historical Stripe resources, v1 Sessions, orders, and provider identifiers.
+- Treat the rollout as a greenfield v2-only cutover: previous test Sessions and local commerce rows are unsupported, the disposable SQLite commerce data is reset after backup, and no v1 normalization path is retained.
 - Do not write API keys, bearer tokens, customer PII, raw provider payloads, or authorization headers to source, plans, commits, test output, or logs.
 - Keep the existing Svelte Society colour system and typography.
 - Every implementation task follows red-green-refactor, runs focused tests, and ends in a commit.
@@ -606,16 +606,16 @@ rtk git commit -m "feat: show destination-specific storefront prices"
 
 **Interfaces:**
 - Produces: `NewCheckoutDraft.destinationCountry`, `OrderAmounts.shippingTax`, `PaidOrderLineAmount`, and `OrderLine.retailUnitAmount`.
-- Preserves: v1 drafts may have a null database destination; every v2 draft must have a supported destination.
+- Enforces: every draft is contract version 2 and has a valid market destination.
 
 - [ ] **Step 1: Write failing migration and repository tests**
 
 Test that migration:
 
-- adds nullable `checkout_drafts.destination_country` and backfills it from existing orders;
-- adds non-null `orders.shipping_tax_amount` and backfills a historical SE row correctly;
-- adds non-null `order_lines.retail_unit_amount` and backfills it from `unit_amount`;
-- aborts on a historical row whose merchandise/shipping tax relationship is negative;
+- aborts transactionally when checkout drafts, orders, or order lines already exist;
+- adds `checkout_drafts.destination_country` plus insert/update guards that reject null or malformed new destinations;
+- adds non-null `orders.shipping_tax_amount`;
+- adds non-null `order_lines.retail_unit_amount`;
 - requires new v2 drafts to contain a valid market destination (the checkout service enforces the runtime Styria allowlist in Task 7);
 - round-trips explicit shipping tax and retail unit amounts.
 
@@ -625,39 +625,40 @@ Run: `rtk pnpm exec vitest run --project server src/lib/server/db/schema.test.ts
 
 Expected: FAIL because migration and fields do not exist.
 
-- [ ] **Step 3: Add the schema migration with guarded backfill**
+- [ ] **Step 3: Add the greenfield schema migration with an empty-store guard**
 
 Use this migration shape:
 
 ```sql
+CREATE TABLE _pricing_migration_guard (invalid_count INTEGER NOT NULL CHECK (invalid_count = 0));
+INSERT INTO _pricing_migration_guard
+SELECT
+  (SELECT count(*) FROM checkout_drafts) +
+  (SELECT count(*) FROM orders) +
+  (SELECT count(*) FROM order_lines);
+DROP TABLE _pricing_migration_guard;
+
 ALTER TABLE checkout_drafts ADD COLUMN destination_country TEXT
   CHECK (destination_country IS NULL OR (length(destination_country) = 2 AND destination_country = upper(destination_country)));
 
-UPDATE checkout_drafts
-SET destination_country = (
-  SELECT destination_country FROM orders WHERE orders.checkout_draft_id = checkout_drafts.id
-)
-WHERE EXISTS (SELECT 1 FROM orders WHERE orders.checkout_draft_id = checkout_drafts.id);
+CREATE TRIGGER checkout_drafts_destination_required_insert
+BEFORE INSERT ON checkout_drafts
+WHEN NEW.destination_country IS NULL
+BEGIN SELECT RAISE(ABORT, 'checkout destination required'); END;
+
+CREATE TRIGGER checkout_drafts_destination_required_update
+BEFORE UPDATE OF destination_country ON checkout_drafts
+WHEN NEW.destination_country IS NULL
+BEGIN SELECT RAISE(ABORT, 'checkout destination required'); END;
 
 ALTER TABLE orders ADD COLUMN shipping_tax_amount INTEGER NOT NULL DEFAULT 0
   CHECK (shipping_tax_amount >= 0);
 
-CREATE TABLE _pricing_migration_guard (invalid_count INTEGER NOT NULL CHECK (invalid_count = 0));
-INSERT INTO _pricing_migration_guard
-SELECT count(*) FROM orders
-WHERE total_amount - (subtotal_amount - discount_amount) - shipping_amount < 0
-   OR tax_amount - (total_amount - (subtotal_amount - discount_amount) - shipping_amount) < 0
-   OR tax_amount - (total_amount - (subtotal_amount - discount_amount) - shipping_amount) > shipping_amount;
-
-UPDATE orders
-SET shipping_tax_amount = tax_amount -
-  (total_amount - (subtotal_amount - discount_amount) - shipping_amount);
-DROP TABLE _pricing_migration_guard;
-
 ALTER TABLE order_lines ADD COLUMN retail_unit_amount INTEGER NOT NULL DEFAULT 0
   CHECK (retail_unit_amount >= 0);
-UPDATE order_lines SET retail_unit_amount = unit_amount;
 ```
+
+The nullable column declaration is an SQLite `ALTER TABLE` limitation; the insert/update triggers and repository validation make null invalid for all post-migration rows. The migration deliberately does not backfill old commerce data.
 
 - [ ] **Step 4: Extend domain and repositories**
 
@@ -674,12 +675,8 @@ export type NewCheckoutDraft = {
 	expiresAt: Date;
 	lines: NewCheckoutDraftLine[];
 };
-export type CheckoutDraft = Omit<
-	NewCheckoutDraft,
-	'lines' | 'destinationCountry'
-> & {
+export type CheckoutDraft = Omit<NewCheckoutDraft, 'lines'> & {
 	id: string;
-	destinationCountry: MarketDestination | null;
 	checkoutSessionId: string | null;
 	completedAt: Date | null;
 };
@@ -724,11 +721,11 @@ if (merchandiseTax < 0n || shippingTax > shipping || expectedTotal !== BigInt(to
 }
 ```
 
-Require a v2 draft destination, map v1 null rows without inventing a frozen country, and insert every new amount explicitly rather than relying on defaults. Reject a new v2 draft when its destination is not a valid market destination; Task 7 owns validation against the runtime Styria allowlist before draft creation.
+Require contract version 2 and a non-null valid market destination on every mapped and newly created draft. Insert every amount explicitly rather than relying on defaults. Task 7 owns validation against the runtime Styria allowlist before draft creation.
 
 - [ ] **Step 5: Update raw fixtures deliberately**
 
-For historical v1 fixtures, keep gross shipping and compute its included shipping tax. For v2 fixtures use destination country, gross customer shipping, explicit shipping tax, and gross retail unit amount. Do not mechanically replace every `1000` with `800`.
+Convert all active test fixtures to v2: destination country, gross customer shipping, explicit shipping tax, and gross retail unit amount. Delete v1-only fixtures rather than retaining compatibility branches. Do not mechanically replace every `1000` with `800`; make each fixture internally consistent.
 
 - [ ] **Step 6: Run database tests and verify green**
 
@@ -810,7 +807,7 @@ rtk git commit -m "feat: freeze destination in checkout v2"
 
 ---
 
-### Task 8: Versioned Stripe Paid-Checkout Normalization
+### Task 8: Stripe Paid-Checkout v2 Normalization
 
 **Files:**
 - Modify: `src/lib/server/stripe/gateway.ts`
@@ -822,17 +819,17 @@ rtk git commit -m "feat: freeze destination in checkout v2"
 
 **Interfaces:**
 - Produces: `PaidCheckoutSnapshot.contractVersion`, `amounts.shippingTax`, and line `retailUnitAmount`.
-- Preserves: complete v1 inclusive-shipping normalization for historical Sessions.
+- Rejects: every Session whose metadata contract version is not exactly 2.
 
-- [ ] **Step 1: Split fixtures and write the v2 matrix first**
+- [ ] **Step 1: Replace fixtures and write the v2 matrix first**
 
-Keep the existing v1 builder unchanged in meaning. Add `paidCheckoutV2Fixture()` that creates exclusive shipping with `amount_subtotal=800`, destination tax, `amount_total=subtotal+tax`, version 2 metadata, and full line tax totals. Add SE/DE/FI/HU/JP cases with expected totals from the approved spec, plus free shipping, reverse charge, destination mismatch, inclusive-v2 shipping rejection, line non-divisibility, hidden shipping tax, and cross-version draft mismatch.
+Replace the existing mixed-tax fixture builder with `paidCheckoutV2Fixture()` that creates exclusive shipping with `amount_subtotal=800`, destination tax, `amount_total=subtotal+tax`, version 2 metadata, and full line tax totals. Add SE/DE/FI/HU/JP cases with expected totals from the approved spec, plus free shipping, reverse charge, destination mismatch, version 1 metadata rejection, inclusive shipping rejection, line non-divisibility, and hidden shipping tax.
 
 - [ ] **Step 2: Run the paid-checkout suite and verify red**
 
 Run: `rtk pnpm exec vitest run --project server src/lib/server/stripe/paid-checkout.test.ts`
 
-Expected: FAIL because only the v1 mixed-tax contract exists.
+Expected: FAIL because the current mixed-tax contract does not implement the v2-only rules.
 
 - [ ] **Step 3: Expand the normalized snapshot**
 
@@ -840,7 +837,7 @@ Use:
 
 ```ts
 export type PaidCheckoutSnapshot = {
-	contractVersion: 1 | 2;
+	contractVersion: 2;
 	// existing provider fields
 	amounts: {
 		subtotal: number;
@@ -859,13 +856,11 @@ export type PaidCheckoutSnapshot = {
 };
 ```
 
-Parse metadata into `{ draftId, contractVersion, destinationCountry }` without assuming the current version. Dispatch to `normalizePaidCheckoutV1` or `normalizePaidCheckoutV2`.
+Parse metadata into `{ draftId, contractVersion, destinationCountry }` and reject unless `contractVersion === 2`. There is one normalization path only.
 
-- [ ] **Step 4: Preserve v1 and implement v2 exclusive reconciliation**
+- [ ] **Step 4: Implement v2 exclusive reconciliation**
 
-For v1, retain the current inclusive Shipping Rate checks, derive `shippingTax` from `shipping_cost.amount_tax`, and set historical `retailUnitAmount = unitAmount`.
-
-For v2, require:
+Require:
 
 ```ts
 rate.type === 'fixed_amount';
@@ -880,13 +875,13 @@ session.total_details.amount_shipping === shipping.amount_subtotal;
 
 Set persisted `shipping` to `shipping_cost.amount_total` and `shippingTax` to `shipping_cost.amount_tax`. With discounts zero, require `line.amount_total % line.quantity === 0` and set `retailUnitAmount = line.amount_total / line.quantity`.
 
-`comparePaidCheckout()` first requires draft version equality. V2 also requires paid destination equals `draft.destinationCountry`; v1 retains the historical allowlist comparison.
+`comparePaidCheckout()` requires both paid and draft contract version 2, then requires the paid destination to equal `draft.destinationCountry` and remain in the runtime allowlist.
 
 - [ ] **Step 5: Run paid-checkout and webhook integration tests**
 
 Run: `rtk pnpm exec vitest run --project server src/lib/server/stripe/paid-checkout.test.ts && rtk pnpm exec vitest run --config vitest.integration.config.ts tests/integration/checkout-webhook.spec.ts`
 
-Expected: PASS for retained v1 and new v2 cases.
+Expected: PASS for the v2 matrix and explicit version 1 rejection.
 
 - [ ] **Step 6: Commit**
 
@@ -966,7 +961,7 @@ amounts: {
 }
 ```
 
-Keep the compatibility field `unit_amount` as the net Stripe amount and add `retail_unit_amount` as the customer-facing gross amount. Update the tool description and tests to state that both values are integer cents; do not silently change the meaning of the existing field.
+Expose `net_unit_amount` as the net Stripe amount and `retail_unit_amount` as the customer-facing gross amount. Remove the ambiguous pre-launch `unit_amount` MCP field; this is a greenfield contract and no backwards-compatible alias is required. Update the tool description and tests to state that both values are integer cents.
 
 - [ ] **Step 5: Run focused tests and check**
 
@@ -1071,7 +1066,7 @@ rtk git commit -m "test: cover destination pricing journey"
 
 - [ ] **Step 1: Write failing runbook-contract tests**
 
-Assert documentation includes `unit_amount=2000`, exclusive merchandise, paid `fixed_amount.amount=800`, exclusive Shipping tax behavior, free EUR 0, checkout-off maintenance, v1 resource retention, stop-first deployment, persistent backup, default Price switch, and the SE/DE/FI/HU/Asia test matrix.
+Assert documentation includes `unit_amount=2000`, exclusive merchandise, paid `fixed_amount.amount=800`, exclusive Shipping tax behavior, free EUR 0, checkout-off maintenance, encrypted backup plus greenfield commerce-database reset, v2-only webhook handling, stop-first deployment, default Price switch, and the SE/DE/FI/HU/Asia test matrix.
 
 - [ ] **Step 2: Write the exact operator documentation**
 
@@ -1080,16 +1075,16 @@ Document this sequence without secrets:
 1. Take and verify the encrypted SQLite backup.
 2. Set `CHECKOUT_ENABLED=false` in Coolify and perform the existing stop-first redeploy.
 3. Require `/health/live` and `/health/ready` to return 200 and checkout creation to return `CHECKOUT_DISABLED`.
-4. In the Stripe sandbox, create one inactive EUR 20 one-time exclusive Price per active variant and copy exact `label`, `sort_order`, `sku`, and `styria_pn` metadata.
-5. Create EUR 8 fixed exclusive paid shipping with the Shipping tax code; create an exclusive EUR 0 rate if the existing free rate is not exclusive.
-6. Keep old Prices and Shipping Rates for historical Sessions.
+4. Reset the disposable pre-launch SQLite commerce database/volume while retaining the verified backup; do not carry test drafts, Sessions, orders, or fulfillment state into v2.
+5. In the Stripe sandbox, create one inactive EUR 20 one-time exclusive Price per active variant and copy exact `label`, `sort_order`, `sku`, and `styria_pn` metadata.
+6. Create EUR 8 fixed exclusive paid shipping with the Shipping tax code; create an exclusive EUR 0 rate if the existing free rate is not exclusive.
 7. Put replacement Shipping Rate IDs into the existing Coolify variables.
 8. Deploy code/migration stop-first while checkout remains disabled.
-9. Activate replacement Prices, update Product `default_price`, then deactivate old EUR 25 Prices.
+9. Activate replacement Prices, update Product `default_price`, then archive old EUR 25 Prices and superseded Shipping Rates. No v1 Session window is retained.
 10. Restart once to clear the 60-second fresh/15-minute stale catalog cache.
 11. Run acceptance, policy/accounting review, then re-enable checkout.
 
-Update Styria docs to say `retailPrice` is the immutable paid gross customer unit amount while `unit_amount` is net. `.env.example` comments describe the exact Shipping Rate contracts; no environment variable names change.
+Update Styria docs to say `retailPrice` is the immutable paid gross customer unit amount while MCP `net_unit_amount` is net. `.env.example` comments describe the exact Shipping Rate contracts; no environment variable names change.
 
 - [ ] **Step 3: Run documentation and package tests**
 
@@ -1142,7 +1137,7 @@ Expected: every command exits 0.
 
 - [ ] **Step 7: Perform the controlled Coolify switch**
 
-Disable checkout first, verify backup, update the two existing Shipping Rate environment values, deploy the tested commit stop-first, verify both health endpoints, activate new Prices/default Price, deactivate old EUR 25 Prices, restart once, and leave old Shipping Rates active until the v1 Session window has elapsed.
+Disable checkout first, verify backup, reset the disposable pre-launch SQLite commerce data, update the two existing Shipping Rate environment values, deploy the tested commit stop-first, verify both health endpoints, activate new Prices/default Price, archive old EUR 25 Prices and superseded Shipping Rates, then restart once. Version 1 Sessions are not accepted after the switch.
 
 - [ ] **Step 8: Run manual sandbox acceptance**
 
@@ -1176,5 +1171,5 @@ Record the reviewed deployed commit in `docs/operations/policy-review.md`, updat
 - [ ] Live `/health/live` and `/health/ready` return 200 after stop-first deployment.
 - [ ] Sandbox totals match the five-destination matrix.
 - [ ] Styria preview `retailPrice` matches the customer-facing paid gross unit amount.
-- [ ] Old Stripe resources remain available for v1 history.
+- [ ] Pre-launch commerce data was backed up then reset, and version 1 Stripe Sessions are rejected.
 - [ ] Checkout is re-enabled only after policy/accounting sign-off.

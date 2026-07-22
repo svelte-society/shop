@@ -57,7 +57,7 @@ Each active purchasable variant has one one-time EUR Price with:
 
 The active variants continue to carry the existing variant, SKU, Styria product number, design, mockup, thread-colour, and size metadata. A Stripe Price ID identifies a net EUR 20 unit, never a VAT-inclusive market price.
 
-Existing EUR 25 exclusive Prices are retained for historical order lookup but made inactive after the replacement Prices are ready.
+Existing EUR 25 exclusive Prices may be archived after the replacement Prices are ready. This is a greenfield cutover: old test Sessions and local orders are not part of the supported contract.
 
 ### Stripe shipping rates
 
@@ -278,16 +278,9 @@ merchandise_tax = tax_amount - shipping_tax_amount
 total_amount = subtotal_amount - discount_amount + merchandise_tax + shipping_amount
 ```
 
-`shipping_amount` keeps its existing customer-facing gross meaning. The new `shipping_tax_amount` removes the ambiguity that previously required inferring the tax contained in shipping. The database migration backfills it for historical orders with:
+`shipping_amount` keeps its customer-facing gross meaning. The new `shipping_tax_amount` removes any need to infer the tax contained in shipping. Because the application is greenfield, migration 0007 refuses to run when checkout drafts, orders, or order lines already exist. The controlled rollout backs up and resets the disposable pre-launch commerce database, then applies the v2 schema to an empty store. No historical amount backfill or mixed-tax compatibility path is supported.
 
-```text
-historical_merchandise_tax = total_amount - (subtotal_amount - discount_amount) - shipping_amount
-shipping_tax_amount = tax_amount - historical_merchandise_tax
-```
-
-The migration fails rather than guessing if a historical row does not reconcile or either derived value is negative.
-
-`hasValidInclusiveShippingAmounts` and equivalent mixed-tax naming are replaced by explicit merchandise/shipping tax invariants. Existing order totals are not rewritten.
+`hasValidInclusiveShippingAmounts` and equivalent mixed-tax naming are removed in favour of the explicit merchandise/shipping tax invariant.
 
 ### Customer-facing retail unit amount
 
@@ -301,7 +294,7 @@ retail_unit_amount = line.amount_total / line.quantity
 
 Because discounts are disabled and the selected EUR 20 net price produces whole-cent gross prices at every supported standard EU rate, the result is expected to be an integer. The adapter rejects a paid snapshot if a line total is not evenly divisible by quantity; it must not guess or round a provider invoice value.
 
-Add a non-null `retail_unit_amount` column to `order_lines`. It is populated from the verified paid Stripe line and remains immutable. The migration backfills existing rows from `unit_amount`, matching the value historically sent to Styria. Draft lines continue to store the trusted net unit amount.
+Add a non-null `retail_unit_amount` column to `order_lines`. It is populated from the verified paid Stripe line and remains immutable. There is no historical backfill. Draft lines continue to store the trusted net unit amount.
 
 The Styria payload sends:
 
@@ -337,9 +330,9 @@ Checkout displays and charges Stripe's authoritative total. The success page and
 
 The shop is still in controlled pre-launch testing, so the migration invalidates carts containing the old EUR 25 Price IDs. The cart removes unresolved old-price lines and shows `A product price changed. Please add the item again.` with a link to the collection. Old Price IDs are never silently remapped during Checkout.
 
-### Existing Checkout Sessions
+### Previous Checkout Sessions
 
-Sessions created under the previous contract may complete during the deployment window. Webhook handling dispatches normalization by the version stored in Session metadata and retains the version 1 validator for those historical Sessions. A version 2 draft is never compared with version 1 rules.
+The cutover is v2-only. Checkout is disabled before deployment, previous test Sessions are expired or abandoned, and webhook normalization accepts only contract version 2. Version 1 Sessions and local orders are deliberately unsupported.
 
 ## Policy and Content Changes
 
@@ -390,18 +383,17 @@ Terms and shipping policy prose should describe the pricing rule rather than enu
 Use a controlled checkout maintenance window:
 
 1. Disable creation of new Checkout Sessions.
-2. Create replacement EUR 20 exclusive Stripe Prices for every active variant, preserving required metadata.
-3. Create the EUR 8 exclusive paid Shipping Rate and verify the EUR 0 rate contract.
-4. Configure product and shipping tax codes in the Stripe sandbox.
-5. Deploy the destination-pricing code and database migration with checkout still disabled.
-6. Update Coolify to the replacement paid/free Shipping Rate IDs as required.
-7. Activate the new Prices and deactivate the old EUR 25 Prices.
-8. Restart the app to clear the catalog cache and verify catalog readiness.
-9. Test Sweden, Germany, Finland, Hungary, and at least one supported Asia destination in Stripe sandbox.
-10. Inspect the resulting local order and Styria preview payload, including `retailPrice`.
-11. Enable Checkout only after the test matrix passes.
-
-Old Prices and Shipping Rates remain in Stripe for history. They are not deleted.
+2. Take the required encrypted SQLite backup, then reset the disposable pre-launch commerce database so migration 0007 starts from an empty commerce store.
+3. Create replacement EUR 20 exclusive Stripe Prices for every active variant, preserving required metadata.
+4. Create the EUR 8 exclusive paid Shipping Rate and verify the EUR 0 rate contract.
+5. Configure product and shipping tax codes in the Stripe sandbox.
+6. Deploy the destination-pricing code and v2-only database migration with checkout still disabled.
+7. Update Coolify to the replacement paid/free Shipping Rate IDs as required.
+8. Activate the new Prices and archive the old EUR 25 Prices and superseded Shipping Rates.
+9. Restart the app to clear the catalog cache and verify catalog readiness.
+10. Test Sweden, Germany, Finland, Hungary, and at least one supported Asia destination in Stripe sandbox.
+11. Inspect the resulting local order and Styria preview payload, including `retailPrice`.
+12. Enable Checkout only after the test matrix passes.
 
 ## Testing Strategy
 
@@ -429,8 +421,8 @@ Old Prices and Shipping Rates remain in Stripe for history. They are not deleted
 - Paid and free shipping tax reconciliation.
 - Destination mismatch between draft and Stripe is rejected.
 - Reverse-charge or exempt Stripe outcomes remain internally consistent and do not use the storefront estimate as an accounting input.
-- Database migration preserves existing orders, backfills shipping tax and historical retail unit amounts, and stores non-null retail unit amounts for new orders.
-- Version 1 and version 2 Session handling is deterministic during the deployment window.
+- Database migration rejects non-empty pre-launch commerce data and stores explicit shipping tax and non-null retail unit amounts for every v2 order.
+- Version 1 Sessions are rejected; version 2 is the only supported Checkout contract.
 
 ### Browser tests
 
@@ -470,7 +462,7 @@ Also confirm that a two-tee order has free shipping, that Stripe's receipt shows
 - New orders persist a separate customer-facing retail unit amount.
 - Styria receives that retail unit amount on the parcel invoice payload.
 - Hard-coded Swedish-reference and fixed EUR 10 shipping copy is removed.
-- Existing order history remains readable.
+- Pre-launch test order history is intentionally discarded after backup; the launched schema is v2-only.
 - Required unit, integration, browser, and sandbox tests pass before checkout is re-enabled.
 
 ## Superseded Decisions
