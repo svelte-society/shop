@@ -6,6 +6,7 @@ import type {
 	OrderWithLinesAndEvents,
 	SupportNote
 } from '$lib/server/fulfillment/repository.server';
+import type { PreparationResult } from '$lib/server/fulfillment/prepare.server';
 import type { FulfillmentDetails } from '$lib/server/stripe/gateway';
 import { WITHDRAWAL_LEGAL_STATUS_COPY } from '$lib/server/withdrawals/messages.server';
 import { createMcpServer, type McpServices } from '../server';
@@ -179,7 +180,7 @@ function setup(options: { inspected?: OrderWithLinesAndEvents | null } = {}) {
 	};
 	const stripe = { retrieveFulfillmentDetails: vi.fn(async () => shippingFixture()) };
 	const preparation = {
-		prepare: vi.fn(async (orderId: string) => ({
+		prepare: vi.fn(async (orderId: string): Promise<PreparationResult> => ({
 			status: 'blocked' as const,
 			orderId,
 			approvalId: null,
@@ -1298,6 +1299,68 @@ describe('fulfillment MCP protocol', () => {
 		});
 		expect(fixture.services.reconciliation.reconcile).toHaveBeenCalledWith('order_2042');
 		expect(fixture.services.status.check).toHaveBeenCalledWith('order_2042');
+	});
+
+	it('mirrors item-specific mockups in a ready Styria preparation', async () => {
+		const fixture = setup();
+		fixture.services.preparation.prepare.mockResolvedValueOnce({
+			status: 'ready',
+			orderId: 'order_2042',
+			approvalId: 'approval-with-mockup',
+			expiresAt: '2026-07-17T10:10:00.000Z',
+			payloadHash: 'payload-hash-with-mockup',
+			payload: {
+				external_id: 'cs_test_2042',
+				brandName: 'Svelte Society',
+				comment: 'Approved Svelte Society fulfillment',
+				shipping_address: {
+					firstName: 'Ada',
+					lastName: 'Lovelace',
+					company: '',
+					address1: 'Currentgatan 9',
+					address2: '',
+					city: 'Stockholm',
+					county: '',
+					postcode: '111 22',
+					country: 'Sweden',
+					phone1: '+46701234567'
+				},
+				shipping: { shippingMethod: 'courier' },
+				items: [
+					{
+						pn: 'STTU169C0021M',
+						quantity: 1,
+						retailPrice: 25,
+						description: 'Design reference: 5362955.',
+						designs: {
+							'Embroidery Left Chest': 'https://cdn.example.test/designs/community-left-chest.png'
+						},
+						mockups: {
+							'Embroidery Left Chest': 'https://cdn.example.test/mockups/community-left-chest.png'
+						}
+					}
+				]
+			},
+			warnings: [],
+			blockers: []
+		});
+
+		const result = await callTool(fixture.server, 'prepare_styria_submission', {
+			order_id: 'order_2042'
+		});
+
+		expectMirrored(result);
+		expect(result.structuredContent).toMatchObject({
+			payload: {
+				items: [
+					{
+						mockups: {
+							'Embroidery Left Chest': 'https://cdn.example.test/mockups/community-left-chest.png'
+						}
+					}
+				]
+			}
+		});
 	});
 
 	it('returns only a stable code for a domain/provider failure', async () => {

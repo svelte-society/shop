@@ -45,7 +45,8 @@ const payloadSchema = v.strictObject({
 			quantity: v.number(),
 			retailPrice: v.number(),
 			description: v.string(),
-			designs: v.record(v.string(), v.string())
+			designs: v.record(v.string(), v.string()),
+			mockups: v.optional(v.record(v.string(), v.string()))
 		})
 	)
 });
