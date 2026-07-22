@@ -26,6 +26,8 @@ type PriceResult = {
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const DESIGN_KEY_PATTERN = /^design_url_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
+const MOCKUP_KEY_PATTERN = /^mockup_url_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
+const THREAD_COLORS_KEY_PATTERN = /^thread_colors_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
 
 function diagnostic(providerId: string, code: string): CatalogDiagnostic {
 	return { providerId, code };
@@ -68,6 +70,31 @@ function sizeChartMetadata(value: string | undefined): {
 			: { sizeChart: null, valid: false };
 	} catch {
 		return { sizeChart: null, valid: false };
+	}
+}
+
+function threadColorsMetadata(value: string): string[] | null {
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (
+			!Array.isArray(parsed) ||
+			parsed.length === 0 ||
+			parsed.length > 20 ||
+			!parsed.every(
+				(color) =>
+					typeof color === 'string' &&
+					color.length > 0 &&
+					color.length <= 100 &&
+					color === color.trim() &&
+					!/[\r\n]/.test(color)
+			) ||
+			new Set(parsed).size !== parsed.length
+		) {
+			return null;
+		}
+		return parsed;
+	} catch {
+		return null;
 	}
 }
 
@@ -137,6 +164,37 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 
 	if (designEntries.length === 0) add('PRODUCT_DESIGN_PLACEMENT_MISSING');
 	if (designEntries.some(([, url]) => url === null)) add('PRODUCT_DESIGN_PLACEMENT_INVALID');
+	const designPositions = new Set(designEntries.map(([position]) => position));
+
+	const mockupEntries = Object.entries(source.metadata)
+		.map(([key, value]) => {
+			const match = MOCKUP_KEY_PATTERN.exec(key);
+			return match
+				? ([styriaDesignPositionForMetadataSlug(match[1]), httpsUrl(value)] as const)
+				: null;
+		})
+		.filter((entry): entry is readonly [string, string | null] => entry !== null)
+		.sort(([left], [right]) => compareStrings(left, right));
+	if (mockupEntries.some(([position, url]) => url === null || !designPositions.has(position))) {
+		add('PRODUCT_MOCKUP_PLACEMENT_INVALID');
+	}
+
+	const threadColorEntries = Object.entries(source.metadata)
+		.map(([key, value]) => {
+			const match = THREAD_COLORS_KEY_PATTERN.exec(key);
+			return match
+				? ([styriaDesignPositionForMetadataSlug(match[1]), threadColorsMetadata(value)] as const)
+				: null;
+		})
+		.filter((entry): entry is readonly [string, string[] | null] => entry !== null)
+		.sort(([left], [right]) => compareStrings(left, right));
+	if (
+		threadColorEntries.some(
+			([position, colors]) => colors === null || !designPositions.has(position)
+		)
+	) {
+		add('PRODUCT_THREAD_COLORS_INVALID');
+	}
 
 	const sizeGuideValue = nonEmpty(source.metadata.size_guide_url);
 	const sizeGuideUrl = sizeGuideValue ? httpsUrl(sizeGuideValue) : null;
@@ -176,7 +234,15 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 			designReference,
 			designPlacements: Object.fromEntries(
 				designEntries.map(([position, url]) => [position, url as string])
-			)
+			),
+			productionDetails: {
+				mockupPlacements: Object.fromEntries(
+					mockupEntries.map(([position, url]) => [position, url as string])
+				),
+				threadColors: Object.fromEntries(
+					threadColorEntries.map(([position, colors]) => [position, colors as string[]])
+				)
+			}
 		},
 		diagnostics
 	};

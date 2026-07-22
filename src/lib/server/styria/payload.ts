@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ALLOWED_DESTINATIONS, isMarketDestination } from '$lib/domain/destinations';
 import type { OrderWithLines } from '$lib/domain/orders';
+import { emptyProductionDetails, normalizeProductionDetails } from '$lib/domain/production';
 import { isStyriaDesignPosition } from './design-positions';
 import type { StyriaOrderPayload } from './types';
 
@@ -59,6 +60,23 @@ export function styriaCountryName(code: string): string {
 	const name = COUNTRY_NAMES.of(code);
 	if (typeof name !== 'string' || name.length === 0) fail('STYRIA_COUNTRY_UNSUPPORTED');
 	return name;
+}
+
+export function buildStyriaLineDescription(
+	designReference: string,
+	threadColors: Record<string, string[]>
+): string {
+	const threadNotes = Object.entries(threadColors)
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.map(([position, colors]) => `${position}: ${colors.join(', ')}`);
+	const description = [
+		`Design reference: ${designReference}`,
+		threadNotes.length > 0 ? `Thread colours — ${threadNotes.join('; ')}` : null
+	]
+		.filter((entry): entry is string => entry !== null)
+		.join('. ');
+	if (!isExactString(description, 500)) fail('STYRIA_ORDER_SNAPSHOT_INVALID');
+	return description;
 }
 
 export function buildStyriaPayload(input: {
@@ -139,12 +157,31 @@ export function buildStyriaPayload(input: {
 			fail('STYRIA_ORDER_SNAPSHOT_INVALID');
 		}
 
+		const productionDetails = normalizeProductionDetails(
+			line.productionDetails ?? emptyProductionDetails()
+		);
+		if (!productionDetails) fail('STYRIA_ORDER_SNAPSHOT_INVALID');
+		const designPositions = new Set(designEntries.map(([position]) => position));
+		const mockupEntries = Object.entries(productionDetails.mockupPlacements);
+		const threadColorEntries = Object.entries(productionDetails.threadColors);
+		if (
+			mockupEntries.some(([position]) => !designPositions.has(position)) ||
+			threadColorEntries.some(([position]) => !designPositions.has(position))
+		) {
+			fail('STYRIA_ORDER_SNAPSHOT_INVALID');
+		}
+		const description = buildStyriaLineDescription(
+			line.designReference,
+			productionDetails.threadColors
+		);
+
 		return {
 			pn: line.styriaProductNumber,
 			quantity: line.quantity,
 			retailPrice: line.unitAmount / 100,
-			description: `Design reference: ${line.designReference}`,
-			designs: Object.fromEntries(designEntries)
+			description,
+			designs: Object.fromEntries(designEntries),
+			...(mockupEntries.length > 0 ? { mockups: Object.fromEntries(mockupEntries) } : {})
 		};
 	});
 

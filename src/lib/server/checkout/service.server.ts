@@ -92,6 +92,15 @@ function snapshotLine(item: ResolvedCartLine): NewCheckoutDraftLine {
 		styriaProductNumber: item.variant.styriaProductNumber,
 		designReference: item.product.designReference,
 		designPlacements: { ...item.product.designPlacements },
+		productionDetails: {
+			mockupPlacements: { ...item.product.productionDetails.mockupPlacements },
+			threadColors: Object.fromEntries(
+				Object.entries(item.product.productionDetails.threadColors).map(([position, colors]) => [
+					position,
+					[...colors]
+				])
+			)
+		},
 		quantity: item.line.quantity,
 		unitAmount: item.variant.unitAmountCents,
 		currency: 'eur'

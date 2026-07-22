@@ -5,6 +5,7 @@ import type {
 	FulfillmentRepository,
 	OrderWithLinesAndEvents
 } from '$lib/server/fulfillment/repository.server';
+import { emptyProductionDetails } from '$lib/domain/production';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import {
 	caughtToolError,
@@ -65,6 +66,10 @@ const outputSchema = v.strictObject({
 				styria_product_number: v.string(),
 				design_reference: v.string(),
 				design_placements: v.record(v.string(), v.string()),
+				production_details: v.strictObject({
+					mockup_placements: v.record(v.string(), v.string()),
+					thread_colors: v.record(v.string(), v.array(v.string()))
+				}),
 				quantity: v.number(),
 				unit_amount: v.number(),
 				currency: v.literal('eur')
@@ -123,18 +128,30 @@ function localSummary(order: OrderWithLinesAndEvents) {
 			updated_at: order.updatedAt.toISOString(),
 			last_error_code: order.lastErrorCode
 		},
-		lines: order.lines.map((line) => ({
-			line_index: line.lineIndex,
-			product_name: line.productName,
-			variant_label: line.variantLabel,
-			sku: line.sku,
-			styria_product_number: line.styriaProductNumber,
-			design_reference: line.designReference,
-			design_placements: { ...line.designPlacements },
-			quantity: line.quantity,
-			unit_amount: line.unitAmount,
-			currency: line.currency
-		})),
+		lines: order.lines.map((line) => {
+			const productionDetails = line.productionDetails ?? emptyProductionDetails();
+			return {
+				line_index: line.lineIndex,
+				product_name: line.productName,
+				variant_label: line.variantLabel,
+				sku: line.sku,
+				styria_product_number: line.styriaProductNumber,
+				design_reference: line.designReference,
+				design_placements: { ...line.designPlacements },
+				production_details: {
+					mockup_placements: { ...productionDetails.mockupPlacements },
+					thread_colors: Object.fromEntries(
+						Object.entries(productionDetails.threadColors).map(([position, colors]) => [
+							position,
+							[...colors]
+						])
+					)
+				},
+				quantity: line.quantity,
+				unit_amount: line.unitAmount,
+				currency: line.currency
+			};
+		}),
 		support: order.supportNotes.map((note) => ({
 			outcome: note.outcome,
 			note: note.note,

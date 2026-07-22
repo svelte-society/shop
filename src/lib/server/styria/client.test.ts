@@ -26,7 +26,8 @@ function liveProviderOrderFixture(order = styriaOrderFixture()) {
 			...item,
 			quantity: String(item.quantity),
 			retailPrice: item.retailPrice.toFixed(2),
-			designs: Object.entries(item.designs).map(([title, src]) => ({ title, src }))
+			designs: Object.entries(item.designs).map(([title, src]) => ({ title, src })),
+			mockups: Object.entries(item.mockups ?? {}).map(([title, src]) => ({ title, src }))
 		}))
 	};
 }
@@ -140,6 +141,19 @@ describe('Styria list/search adapter', () => {
 });
 
 describe('Styria detail/create adapter', () => {
+	it('normalizes the returned placement mockup list', async () => {
+		const expected = styriaOrderFixture();
+		expected.items[0].mockups = {
+			'Embroidery Left Chest': 'https://cdn.example.test/mockups/community-left-chest.png'
+		};
+		const fetch: typeof globalThis.fetch = async () =>
+			successJson({ order: liveProviderOrderFixture(expected) });
+
+		await expect(createStyriaClient({ ...credentials, fetch }).get(expected.id)).resolves.toEqual(
+			expected
+		);
+	});
+
 	it('gets one validated order with deterministic AppId and Signature parameters', async () => {
 		const expected = styriaOrderFixture({ id: '2048' });
 		let requestedUrl: URL | null = null;

@@ -74,7 +74,8 @@ const expectedItems: StyriaOrderPayload['items'] = [
 		designs: {
 			back: 'https://cdn.example.test/designs/community-back.svg',
 			front: 'https://cdn.example.test/designs/community-front.svg'
-		}
+		},
+		mockups: {}
 	}
 ];
 

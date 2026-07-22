@@ -8,6 +8,11 @@ import type {
 	NewCheckoutDraftLine
 } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
+import {
+	canonicalProductionDetails,
+	emptyProductionDetails,
+	productionDetailsFromJson
+} from '$lib/domain/production';
 import type { ShopDatabase } from './types';
 
 export interface CheckoutDraftRepository {
@@ -39,6 +44,7 @@ type DraftLineRow = {
 	styria_product_number: unknown;
 	design_reference: unknown;
 	design_json: unknown;
+	production_json: unknown;
 	quantity: unknown;
 	unit_amount: unknown;
 	currency: unknown;
@@ -114,7 +120,7 @@ function designFromJson(value: unknown, invalidCode: string): DesignPlacements {
 	}
 }
 
-function validateLine(line: NewCheckoutDraftLine): string {
+function validateLine(line: NewCheckoutDraftLine): { design: string; production: string } {
 	if (
 		!line ||
 		!isNonEmptyString(line.stripeProductId) ||
@@ -132,13 +138,16 @@ function validateLine(line: NewCheckoutDraftLine): string {
 	) {
 		fail('CHECKOUT_DRAFT_INVALID');
 	}
-	return canonicalDesignJson(line.designPlacements, 'CHECKOUT_DRAFT_INVALID');
+	const design = canonicalDesignJson(line.designPlacements, 'CHECKOUT_DRAFT_INVALID');
+	const production = canonicalProductionDetails(line.productionDetails ?? emptyProductionDetails());
+	if (production === null) fail('CHECKOUT_DRAFT_INVALID');
+	return { design, production };
 }
 
 function validateNewDraft(input: NewCheckoutDraft): {
 	createdAt: string;
 	expiresAt: string;
-	designs: string[];
+	lines: Array<{ design: string; production: string }>;
 } {
 	if (
 		!input ||
@@ -156,7 +165,7 @@ function validateNewDraft(input: NewCheckoutDraft): {
 		fail('CHECKOUT_DRAFT_INVALID');
 	}
 
-	const designs = input.lines.map(validateLine);
+	const lines = input.lines.map(validateLine);
 	const totalUnitCount = input.lines.reduce((total, line) => total + line.quantity, 0);
 	const expectedShippingMode = totalUnitCount === 1 ? 'paid' : 'free';
 	if (
@@ -170,7 +179,7 @@ function validateNewDraft(input: NewCheckoutDraft): {
 	const createdAt = isoTimestamp(input.createdAt, 'CHECKOUT_DRAFT_INVALID');
 	const expiresAt = isoTimestamp(input.expiresAt, 'CHECKOUT_DRAFT_INVALID');
 	if (expiresAt <= createdAt) fail('CHECKOUT_DRAFT_INVALID');
-	return { createdAt, expiresAt, designs };
+	return { createdAt, expiresAt, lines };
 }
 
 function mapLine(row: DraftLineRow, expectedIndex: number): CheckoutDraftLine {
@@ -202,6 +211,8 @@ function mapLine(row: DraftLineRow, expectedIndex: number): CheckoutDraftLine {
 		styriaProductNumber: row.styria_product_number,
 		designReference: row.design_reference,
 		designPlacements: designFromJson(row.design_json, 'CHECKOUT_DRAFT_ROW_INVALID'),
+		productionDetails:
+			productionDetailsFromJson(row.production_json) ?? fail('CHECKOUT_DRAFT_ROW_INVALID'),
 		quantity: row.quantity as number,
 		unitAmount: row.unit_amount,
 		currency: 'eur'
@@ -268,8 +279,8 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 			INSERT INTO checkout_draft_lines (
 				draft_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				production_json, quantity, unit_amount, currency
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`);
 		const create = this.database.transaction(() => {
 			insertDraft.run(
@@ -292,7 +303,8 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 					line.sku,
 					line.styriaProductNumber,
 					line.designReference,
-					validated.designs[index],
+					validated.lines[index].design,
+					validated.lines[index].production,
 					line.quantity,
 					line.unitAmount,
 					line.currency

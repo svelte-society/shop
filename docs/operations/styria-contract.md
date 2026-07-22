@@ -34,14 +34,14 @@ The writable order data relevant to this adapter is:
 - `comment`.
 - `shipping_address`: `firstName`, `lastName`, `company`, `address1`, optional `address2`, `city`, `county`, `postcode`, full country name in `country`, and `phone1`. The broader property example also shows optional `phone2`, `phone3`, and `vatNumber`; this adapter does not send them.
 - `shipping.shippingMethod`: the public values are `regular`, `recorded`, `courier`, and `collection`; the approved project payload uses `courier`.
-- `items[]`: `pn`, `quantity`, `retailPrice`, `description`, and placement-to-URL `designs`. The public schema also describes optional `title`, item `brandName`, `label`, and `mockup(s)`; this adapter does not send them.
+- `items[]`: `pn`, `quantity`, `retailPrice`, `description`, placement-to-URL `designs`, and optional placement-to-URL `mockups`. Product metadata uses the same exact Styria placement for the artwork, mockup, and confirmed thread-colour list. The immutable checkout snapshot preserves those values; the adapter sends the mockup and adds the confirmed thread-colour names and hex values to the item description. The public schema also describes optional `title`, item `brandName`, and `label`; this adapter does not send them.
 
 ## Public documentation and account-specific differences
 
 The public page contains two internal inconsistencies: `brand` in the property table versus `brandName` in the create example, and omission of the otherwise writable `external_id` from that example. The approved project contract assumes `brandName` plus `external_id`; this is not a verified account-specific fact and remains pending the account smoke. The public documentation does not materially contradict that planned create shape.
 
-Account-authenticated behavior could not be compared during this task because non-production credentials were unavailable. The required signed list/detail smoke was therefore not run; no create request was attempted.
+The signed sandbox smoke subsequently confirmed that account responses return `designs` and `mockups` as arrays of `{ title, src }` records. The adapter accepts those response arrays and normalizes them to placement-to-URL records. Empty mockup arrays remain valid for legacy orders.
 
 ## Non-production signed smoke record
 
-Not run on 2026-07-16: credentials unavailable. Pending checks are a signed `GET /api/orders.php` list request and a signed `GET /api/order.php` detail request. When run, record only timestamp, endpoint, HTTP status, and stable result code here; never record returned order data.
+Signed list, detail, create, and unpaid-order deletion requests have now been exercised against the account sandbox. Do not record credentials, customer details, or raw returned order data here.

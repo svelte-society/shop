@@ -99,6 +99,31 @@ describe('buildStyriaPayload', () => {
 		});
 	});
 
+	it('sends the placement mockup and confirmed thread colours with each item', () => {
+		const order = orderFixture();
+		order.lines[0].designPlacements = {
+			'Embroidery Left Chest': 'https://cdn.example.test/designs/community-embroidery.png'
+		};
+		Object.assign(order.lines[0], {
+			productionDetails: {
+				mockupPlacements: {
+					'Embroidery Left Chest': 'https://cdn.example.test/mockups/community-left-chest.png'
+				},
+				threadColors: {
+					'Embroidery Left Chest': ['Orange (#FC4C02)', 'White (#FFFFFF)']
+				}
+			}
+		});
+
+		expect(build({ order }).items[0]).toMatchObject({
+			mockups: {
+				'Embroidery Left Chest': 'https://cdn.example.test/mockups/community-left-chest.png'
+			},
+			description:
+				'Design reference: society-community-v1. Thread colours — Embroidery Left Chest: Orange (#FC4C02), White (#FFFFFF)'
+		});
+	});
+
 	it('builds the exact EU courier payload from immutable checkout snapshots', () => {
 		expect(build()).toEqual({
 			external_id: 'cs_test_checkout_123',

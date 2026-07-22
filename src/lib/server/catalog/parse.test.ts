@@ -125,6 +125,37 @@ describe('parseStripeCatalog', () => {
 		});
 	});
 
+	it('parses placement-specific mockups and confirmed thread colours from Product metadata', async () => {
+		const artworkUrl = 'https://cdn.example.com/designs/community-embroidery.png';
+		const mockupUrl = 'https://cdn.example.com/mockups/community-left-chest.png';
+		const product = withoutMetadata(
+			stripeProduct({
+				metadata: {
+					design_url_embroidery_left_chest: artworkUrl,
+					mockup_url_embroidery_left_chest: mockupUrl,
+					thread_colors_embroidery_left_chest: JSON.stringify([
+						'Orange (#FC4C02)',
+						'White (#FFFFFF)'
+					])
+				}
+			}),
+			'design_url_front'
+		);
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.diagnostics).toEqual([]);
+		expect(snapshot.products[0]).toMatchObject({
+			designPlacements: { 'Embroidery Left Chest': artworkUrl },
+			productionDetails: {
+				mockupPlacements: { 'Embroidery Left Chest': mockupUrl },
+				threadColors: {
+					'Embroidery Left Chest': ['Orange (#FC4C02)', 'White (#FFFFFF)']
+				}
+			}
+		});
+	});
+
 	it('excludes a Product with malformed inline size-chart metadata', async () => {
 		const product = stripeProduct({ metadata: { size_chart_json: '{"unit":"cm"}' } });
 

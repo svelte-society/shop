@@ -34,6 +34,7 @@ const product: CatalogProduct = {
 		back: 'https://cdn.example.com/designs/back.svg',
 		front: 'https://cdn.example.com/designs/front.svg'
 	},
+	productionDetails: { mockupPlacements: {}, threadColors: {} },
 	variants: []
 };
 
@@ -264,6 +265,7 @@ describe('createCheckoutService', () => {
 							back: 'https://cdn.example.com/designs/back.svg',
 							front: 'https://cdn.example.com/designs/front.svg'
 						},
+						productionDetails: { mockupPlacements: {}, threadColors: {} },
 						quantity: 1,
 						unitAmount: 2_000,
 						currency: 'eur'

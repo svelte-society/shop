@@ -1,10 +1,15 @@
 import type { FulfillmentStatus, OrderWithLines } from '$lib/domain/orders';
+import { emptyProductionDetails, normalizeProductionDetails } from '$lib/domain/production';
 import type {
 	FulfillmentRepository,
 	OrderWithLinesAndEvents
 } from '$lib/server/fulfillment/repository.server';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
-import { canonicalJson, styriaCountryName } from '$lib/server/styria/payload';
+import {
+	buildStyriaLineDescription,
+	canonicalJson,
+	styriaCountryName
+} from '$lib/server/styria/payload';
 import type { StyriaOrder } from '$lib/server/styria/types';
 
 const AMBIGUOUS_ERROR_CODE = 'STYRIA_CREATE_AMBIGUOUS';
@@ -111,6 +116,7 @@ function itemSummary(item: StyriaOrder['items'][number]): string {
 	return canonicalJson({
 		description: item.description,
 		designPositions: Object.keys(item.designs).sort(),
+		mockupPositions: Object.keys(item.mockups ?? {}).sort(),
 		pn: item.pn,
 		quantity: item.quantity,
 		retailPrice: item.retailPrice
@@ -119,15 +125,23 @@ function itemSummary(item: StyriaOrder['items'][number]): string {
 
 function expectedLineSummary(order: OrderWithLines): string[] {
 	return order.lines
-		.map((line) =>
-			itemSummary({
+		.map((line) => {
+			const productionDetails = normalizeProductionDetails(
+				line.productionDetails ?? emptyProductionDetails()
+			);
+			if (!productionDetails) throw new Error('production details invalid');
+			return itemSummary({
 				pn: line.styriaProductNumber,
 				quantity: line.quantity,
 				retailPrice: line.unitAmount / 100,
-				description: `Design reference: ${line.designReference}`,
-				designs: line.designPlacements
-			})
-		)
+				description: buildStyriaLineDescription(
+					line.designReference,
+					productionDetails.threadColors
+				),
+				designs: line.designPlacements,
+				mockups: productionDetails.mockupPlacements
+			});
+		})
 		.sort();
 }
 

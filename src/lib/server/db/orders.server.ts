@@ -11,6 +11,7 @@ import type {
 	StripeEventInput
 } from '$lib/domain/orders';
 import { isStableErrorCode, RepositoryError } from '$lib/domain/orders';
+import { productionDetailsFromJson } from '$lib/domain/production';
 import { SqliteOrderEventRepository } from '$lib/server/audit/order-events.server';
 import { SqliteCheckoutDraftRepository } from './checkout-drafts.server';
 import { SqliteOutboxRepository } from './outbox.server';
@@ -62,6 +63,7 @@ type OrderLineRow = {
 	styria_product_number: unknown;
 	design_reference: unknown;
 	design_json: unknown;
+	production_json: unknown;
 	quantity: unknown;
 	unit_amount: unknown;
 	currency: unknown;
@@ -306,6 +308,8 @@ function mapOrderLine(
 		styriaProductNumber: row.styria_product_number,
 		designReference: row.design_reference,
 		designPlacements: designFromJson(row.design_json),
+		productionDetails:
+			productionDetailsFromJson(row.production_json) ?? fail('ORDER_LINE_ROW_INVALID'),
 		quantity: row.quantity as number,
 		unitAmount: row.unit_amount,
 		currency: 'eur'
@@ -344,6 +348,7 @@ function lineMatchesDraft(orderLine: OrderLine, draftLine: CheckoutDraftLine): b
 		orderLine.styriaProductNumber === draftLine.styriaProductNumber &&
 		orderLine.designReference === draftLine.designReference &&
 		JSON.stringify(orderLine.designPlacements) === JSON.stringify(draftLine.designPlacements) &&
+		JSON.stringify(orderLine.productionDetails) === JSON.stringify(draftLine.productionDetails) &&
 		orderLine.quantity === draftLine.quantity &&
 		orderLine.unitAmount === draftLine.unitAmount &&
 		orderLine.currency === draftLine.currency
@@ -553,11 +558,11 @@ export class SqlitePaidOrderUnitOfWork implements PaidOrderUnitOfWork {
 			INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
+				production_json, quantity, unit_amount, currency
 			)
 			SELECT ?, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
+				production_json, quantity, unit_amount, currency
 			FROM checkout_draft_lines WHERE draft_id = ? ORDER BY line_index
 		`);
 		const findAlert = this.database.prepare(`

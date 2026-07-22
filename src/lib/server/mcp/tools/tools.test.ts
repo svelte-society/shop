@@ -89,6 +89,10 @@ function orderFixture(overrides: Partial<OrderWithLinesAndEvents> = {}): OrderWi
 				styriaProductNumber: 'STYRIA-TEE-M',
 				designReference: 'community-v1',
 				designPlacements: { front: 'https://cdn.example.test/community-front.svg' },
+				productionDetails: {
+					mockupPlacements: { front: 'https://cdn.example.test/community-front-mockup.png' },
+					threadColors: { front: ['Orange (#FC4C02)'] }
+				},
 				quantity: 2,
 				unitAmount: 2_799,
 				currency: 'eur'
@@ -1221,7 +1225,18 @@ describe('fulfillment MCP protocol', () => {
 				amounts: { subtotal: 5_598, discount: 0, shipping: 0, tax: 1_400, total: 6_998 }
 			},
 			fulfillment: { status: 'pending_review' },
-			lines: [{ product_name: 'Community Tee', quantity: 2 }],
+			lines: [
+				{
+					product_name: 'Community Tee',
+					quantity: 2,
+					production_details: {
+						mockup_placements: {
+							front: 'https://cdn.example.test/community-front-mockup.png'
+						},
+						thread_colors: { front: ['Orange (#FC4C02)'] }
+					}
+				}
+			],
 			support: [
 				{
 					outcome: 'return_approved',

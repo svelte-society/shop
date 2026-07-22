@@ -104,6 +104,12 @@ function draftInput(overrides: Partial<NewCheckoutDraft> = {}): NewCheckoutDraft
 					front: 'https://cdn.example.com/designs/front.svg',
 					back: 'https://cdn.example.com/designs/back.svg'
 				},
+				productionDetails: {
+					mockupPlacements: {
+						front: 'https://cdn.example.com/mockups/front.png'
+					},
+					threadColors: { front: ['Orange (#FC4C02)', 'White (#FFFFFF)'] }
+				},
 				quantity: 2,
 				unitAmount: 2_000,
 				currency: 'eur'
@@ -177,6 +183,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 		const created = drafts.create(input);
 		input.lines[0].productName = 'Changed after create';
 		input.lines[0].designPlacements.front = 'https://malicious.example/changed.svg';
+		input.lines[0].productionDetails!.threadColors.front[0] = 'Changed';
 
 		const found = drafts.findById(created.id);
 		expect(found).toEqual(expect.objectContaining(created));
@@ -187,9 +194,22 @@ describe('SqliteCheckoutDraftRepository', () => {
 				designPlacements: {
 					back: 'https://cdn.example.com/designs/back.svg',
 					front: 'https://cdn.example.com/designs/front.svg'
+				},
+				productionDetails: {
+					mockupPlacements: { front: 'https://cdn.example.com/mockups/front.png' },
+					threadColors: { front: ['Orange (#FC4C02)', 'White (#FFFFFF)'] }
 				}
 			})
 		]);
+		expect(
+			(
+				database
+					.prepare('SELECT production_json FROM checkout_draft_lines WHERE draft_id = ?')
+					.get(created.id) as { production_json: string }
+			).production_json
+		).toBe(
+			'{"mockupPlacements":{"front":"https://cdn.example.com/mockups/front.png"},"threadColors":{"front":["Orange (#FC4C02)","White (#FFFFFF)"]}}'
+		);
 		expect(
 			(
 				database

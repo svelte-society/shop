@@ -21,6 +21,7 @@ export type StyriaOrderPayload = {
 		retailPrice: number;
 		description: string;
 		designs: Record<string, string>;
+		mockups?: Record<string, string>;
 	}>;
 };
 
@@ -44,5 +45,6 @@ export type StyriaOrder = {
 		retailPrice: number;
 		description: string;
 		designs: Record<string, string>;
+		mockups?: Record<string, string>;
 	}>;
 };

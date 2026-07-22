@@ -100,8 +100,9 @@ function isTimestamp(value: unknown): value is string {
 	return isExactString(value, 100) && Number.isFinite(new Date(value).getTime());
 }
 
-function normalizeDesigns(value: unknown): Record<string, string> | null {
+function normalizeAssets(value: unknown, allowEmpty: boolean): Record<string, string> | null {
 	let entries: Array<[string, string]>;
+	if ((value === undefined || value === null) && allowEmpty) return {};
 	if (Array.isArray(value)) {
 		entries = [];
 		for (const design of value) {
@@ -117,7 +118,7 @@ function normalizeDesigns(value: unknown): Record<string, string> | null {
 	}
 	entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 	if (
-		entries.length === 0 ||
+		(!allowEmpty && entries.length === 0) ||
 		entries.some(
 			([position, url], index) =>
 				!isExactString(position, 100) ||
@@ -128,6 +129,14 @@ function normalizeDesigns(value: unknown): Record<string, string> | null {
 		return null;
 	}
 	return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function normalizeDesigns(value: unknown): Record<string, string> | null {
+	return normalizeAssets(value, false);
+}
+
+function normalizeMockups(value: unknown): Record<string, string> | null {
+	return normalizeAssets(value, true);
 }
 
 function normalizeOrder(value: unknown): StyriaOrder | null {
@@ -163,12 +172,14 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 		const retailPrice = normalizedMoney(item.retailPrice);
 		const description = normalizedDescription(item.description);
 		const designs = normalizeDesigns(item.designs);
+		const mockups = normalizeMockups(item.mockups);
 		if (
 			!isExactString(item.pn, 200) ||
 			quantity === null ||
 			retailPrice === null ||
 			description === null ||
-			designs === null
+			designs === null ||
+			mockups === null
 		) {
 			return null;
 		}
@@ -177,7 +188,8 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 			quantity,
 			retailPrice,
 			description,
-			designs
+			designs,
+			mockups
 		});
 	}
 

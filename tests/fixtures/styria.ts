@@ -27,7 +27,8 @@ export function styriaPayloadFixture(): StyriaOrderPayload {
 				designs: {
 					back: 'https://cdn.example.test/designs/community-back.svg',
 					front: 'https://cdn.example.test/designs/community-front.svg'
-				}
+				},
+				mockups: {}
 			}
 		]
 	};
@@ -55,7 +56,8 @@ export function styriaOrderFixture(overrides: Partial<StyriaOrder> = {}): Styria
 				designs: {
 					back: 'https://cdn.example.test/designs/community-back.svg',
 					front: 'https://cdn.example.test/designs/community-front.svg'
-				}
+				},
+				mockups: {}
 			}
 		],
 		...overrides

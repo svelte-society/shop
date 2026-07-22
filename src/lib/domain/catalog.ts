@@ -1,3 +1,5 @@
+import type { ProductionDetails } from './production';
+
 export type CatalogCategory = 'apparel' | 'accessory';
 
 export type CatalogDiagnostic = {
@@ -38,6 +40,7 @@ export type CatalogProduct = {
 	sizeChart: ProductSizeChart | null;
 	designReference: string;
 	designPlacements: Record<string, string>;
+	productionDetails: ProductionDetails;
 	variants: CatalogVariant[];
 };
 
@@ -55,7 +58,7 @@ export type PublicCatalogVariant = Omit<
 
 export type PublicCatalogProduct = Omit<
 	CatalogProduct,
-	'providerId' | 'designReference' | 'designPlacements' | 'variants'
+	'providerId' | 'designReference' | 'designPlacements' | 'productionDetails' | 'variants'
 > & {
 	variants: PublicCatalogVariant[];
 };
@@ -179,6 +182,7 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 			'sizeChart',
 			'designReference',
 			'designPlacements',
+			'productionDetails',
 			'variants'
 		]) ||
 		!isNonEmptyString(input.providerId) ||
@@ -200,6 +204,14 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 		!isRecord(input.designPlacements) ||
 		Object.keys(input.designPlacements).length === 0 ||
 		!Object.values(input.designPlacements).every(isHttpsUrl) ||
+		!isRecord(input.productionDetails) ||
+		!hasExactKeys(input.productionDetails, ['mockupPlacements', 'threadColors']) ||
+		!isRecord(input.productionDetails.mockupPlacements) ||
+		!Object.values(input.productionDetails.mockupPlacements).every(isHttpsUrl) ||
+		!isRecord(input.productionDetails.threadColors) ||
+		!Object.values(input.productionDetails.threadColors).every(
+			(colors) => Array.isArray(colors) && colors.length > 0 && colors.every(isNonEmptyString)
+		) ||
 		!Array.isArray(input.variants) ||
 		input.variants.length === 0 ||
 		!input.variants.every(isCatalogVariant)
@@ -254,6 +266,15 @@ export function cloneCatalogSnapshot(
 					}
 				: null,
 			designPlacements: { ...product.designPlacements },
+			productionDetails: {
+				mockupPlacements: { ...product.productionDetails.mockupPlacements },
+				threadColors: Object.fromEntries(
+					Object.entries(product.productionDetails.threadColors).map(([position, colors]) => [
+						position,
+						[...colors]
+					])
+				)
+			},
 			variants: product.variants.map((variant) => ({ ...variant }))
 		})),
 		diagnostics: snapshot.diagnostics.map((entry) => ({ ...entry })),
@@ -277,6 +298,11 @@ export function freezeCatalogSnapshot(snapshot: CatalogSnapshot): CatalogSnapsho
 		Object.freeze(product.variants);
 		Object.freeze(product.images);
 		Object.freeze(product.designPlacements);
+		Object.freeze(product.productionDetails.mockupPlacements);
+		for (const colors of Object.values(product.productionDetails.threadColors))
+			Object.freeze(colors);
+		Object.freeze(product.productionDetails.threadColors);
+		Object.freeze(product.productionDetails);
 		Object.freeze(product);
 	}
 

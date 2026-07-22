@@ -1,3 +1,5 @@
+import type { ProductionDetails } from './production';
+
 export type PaymentStatus = 'paid' | 'partially_refunded' | 'refunded';
 
 export type FulfillmentStatus =
@@ -23,6 +25,7 @@ export type NewCheckoutDraftLine = {
 	styriaProductNumber: string;
 	designReference: string;
 	designPlacements: DesignPlacements;
+	productionDetails?: ProductionDetails;
 	quantity: number;
 	unitAmount: number;
 	currency: 'eur';

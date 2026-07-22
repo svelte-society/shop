@@ -51,7 +51,8 @@ const expectedColumns = {
 		column('design_json', 'TEXT', 1),
 		column('quantity', 'INTEGER', 1),
 		column('unit_amount', 'INTEGER', 1),
-		column('currency', 'TEXT', 1)
+		column('currency', 'TEXT', 1),
+		column('production_json', 'TEXT', 1, '\'{"mockupPlacements":{},"threadColors":{}}\'')
 	],
 	orders: [
 		column('id', 'TEXT', 0, null, 1),
@@ -100,7 +101,8 @@ const expectedColumns = {
 		column('design_json', 'TEXT', 1),
 		column('quantity', 'INTEGER', 1),
 		column('unit_amount', 'INTEGER', 1),
-		column('currency', 'TEXT', 1)
+		column('currency', 'TEXT', 1),
+		column('production_json', 'TEXT', 1, '\'{"mockupPlacements":{},"threadColors":{}}\'')
 	],
 	order_events: [
 		column('id', 'INTEGER', 0, null, 1),
