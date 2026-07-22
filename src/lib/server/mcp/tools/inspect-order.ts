@@ -38,6 +38,7 @@ const outputSchema = v.strictObject({
 				subtotal: v.number(),
 				discount: v.number(),
 				shipping: v.number(),
+				shipping_tax: v.number(),
 				tax: v.number(),
 				total: v.number()
 			})
@@ -72,6 +73,7 @@ const outputSchema = v.strictObject({
 				}),
 				quantity: v.number(),
 				unit_amount: v.number(),
+				retail_unit_amount: v.number(),
 				currency: v.literal('eur')
 			})
 		)
@@ -115,7 +117,14 @@ function localSummary(order: OrderWithLinesAndEvents) {
 		payment: {
 			status: order.paymentStatus,
 			currency: order.currency,
-			amounts: { ...order.amounts }
+			amounts: {
+				subtotal: order.amounts.subtotal,
+				discount: order.amounts.discount,
+				shipping: order.amounts.shipping,
+				shipping_tax: order.amounts.shippingTax,
+				tax: order.amounts.tax,
+				total: order.amounts.total
+			}
 		},
 		destination_country: order.destinationCountry,
 		fulfillment: {
@@ -149,6 +158,7 @@ function localSummary(order: OrderWithLinesAndEvents) {
 				},
 				quantity: line.quantity,
 				unit_amount: line.unitAmount,
+				retail_unit_amount: line.retailUnitAmount,
 				currency: line.currency
 			};
 		}),

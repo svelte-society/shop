@@ -165,8 +165,8 @@ function seedOrder(database: ShopDatabase, overrides: Partial<OrderSeed> = {}): 
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at
-			) VALUES (?, ?, 1, 'eur', 2, 'free', ?, ?, ?)`
+				shipping_mode, created_at, expires_at, completed_at, destination_country
+			) VALUES (?, ?, 2, 'eur', 2, 'free', ?, ?, ?, 'SE')`
 		)
 		.run(
 			`draft_${suffix}`,
@@ -180,10 +180,10 @@ function seedOrder(database: ShopDatabase, overrides: Partial<OrderSeed> = {}): 
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				styria_order_id, styria_status, tracking_number, submitted_at, shipped_at,
 				updated_at, last_error_code
-			) VALUES (?, ?, ?, ?, ?, 'eur', 4000, 0, 0, 1000, 5000, 'SE', ?, ?, ?, ?, ?,
+			) VALUES (?, ?, ?, ?, ?, 'eur', 4000, 0, 0, 0, 1000, 5000, 'SE', ?, ?, ?, ?, ?,
 				?, ?, ?, ?)`
 		)
 		.run(
@@ -207,10 +207,10 @@ function seedOrder(database: ShopDatabase, overrides: Partial<OrderSeed> = {}): 
 			`INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
+				quantity, unit_amount, currency, retail_unit_amount
 			) VALUES (?, 0, ?, ?, 'Community Tee', 'M', 'SS-TEE-M', 'STYRIA-TEE-M',
 				'society-community-v1', '{"front":"https://cdn.example.com/front.svg"}',
-				2, 2000, 'eur')`
+				2, 2000, 'eur', 2500)`
 		)
 		.run(seed.id, `prod_${suffix}`, `price_${suffix}`);
 	return seed;

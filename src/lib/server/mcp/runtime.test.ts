@@ -44,10 +44,10 @@ function seedPendingOrder(database: ShopDatabase): void {
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at
-			) VALUES ('draft_runtime', 'cs_runtime', 1, 'eur', 1, 'paid',
+				shipping_mode, created_at, expires_at, completed_at, destination_country
+			) VALUES ('draft_runtime', 'cs_runtime', 2, 'eur', 1, 'paid',
 				'2026-07-17T08:00:00.000Z', '2026-07-17T09:00:00.000Z',
-				'2026-07-17T08:30:00.000Z')`
+				'2026-07-17T08:30:00.000Z', 'SE')`
 		)
 		.run();
 	database
@@ -55,11 +55,11 @@ function seedPendingOrder(database: ShopDatabase): void {
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				styria_order_id, styria_status, tracking_number, submitted_at, shipped_at,
 				updated_at, last_error_code
 			) VALUES ('order_runtime', 'cs_runtime', 'pi_runtime', 'cus_runtime', 'draft_runtime',
-				'eur', 2799, 0, 1000, 950, 4749, 'SE', 'paid', 'pending_review',
+				'eur', 2799, 0, 1000, 0, 950, 4749, 'SE', 'paid', 'pending_review',
 				'styria-secret-runtime', 'provider-secret-runtime', 'tracking-secret-runtime',
 				NULL, NULL, '2026-07-16T08:30:00.000Z', NULL)`
 		)
@@ -69,10 +69,10 @@ function seedPendingOrder(database: ShopDatabase): void {
 			`INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
+				quantity, unit_amount, currency, retail_unit_amount
 			) VALUES ('order_runtime', 0, 'prod_runtime', 'price_runtime', 'Community Tee',
 				'M', 'SS-TEE-M', 'STYRIA-TEE-M', 'community-v1',
-				'{"front":"https://cdn.example.test/front.svg"}', 1, 2799, 'eur')`
+				'{"front":"https://cdn.example.test/front.svg"}', 1, 2799, 'eur', 3749)`
 		)
 		.run();
 }

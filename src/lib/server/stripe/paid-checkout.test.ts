@@ -76,7 +76,8 @@ function checkoutDraft(
 		id: options.id ?? 'draft-paid-123',
 		checkoutSessionId:
 			options.checkoutSessionId === undefined ? 'cs_test_paid' : options.checkoutSessionId,
-		contractVersion: 1,
+		contractVersion: 2,
+		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount,
 		shippingMode: options.shippingMode ?? (totalUnitCount === 1 ? 'paid' : 'free'),
@@ -145,6 +146,7 @@ describe('Stripe paid Checkout normalization', () => {
 		const { snapshot, client } = await normalizedSnapshot();
 
 		expect(snapshot).toEqual({
+			contractVersion: 2,
 			checkoutSessionId: 'cs_test_paid',
 			paymentIntentId: 'pi_test_paid',
 			customerId: 'cus_test_paid',
@@ -156,10 +158,18 @@ describe('Stripe paid Checkout normalization', () => {
 				subtotal: 2_000,
 				discount: 0,
 				shipping: 1_000,
+				shippingTax: 200,
 				tax: 700,
 				total: 3_500
 			},
-			lines: [{ priceId: 'price_tee_medium', quantity: 1, unitAmount: 2_000 }]
+			lines: [
+				{
+					priceId: 'price_tee_medium',
+					quantity: 1,
+					unitAmount: 2_000,
+					retailUnitAmount: 2_500
+				}
+			]
 		});
 		expect(JSON.stringify(snapshot)).not.toMatch(
 			/Fixture Customer|fixture\.customer@example\.test|Provider Fixture Street|\+4670/
@@ -209,7 +219,7 @@ describe('Stripe paid Checkout normalization', () => {
 			)
 		).resolves.toMatchObject({
 			destinationCountry: 'US',
-			amounts: { subtotal: 2_000, shipping: 1_000, tax: 0, total: 3_000 }
+			amounts: { subtotal: 2_000, shipping: 800, tax: 0, total: 2_800 }
 		});
 	});
 
@@ -224,7 +234,7 @@ describe('Stripe paid Checkout normalization', () => {
 			)
 		).resolves.toMatchObject({
 			destinationCountry: 'US',
-			amounts: { shipping: 1_000, tax: 0, total: 3_000 }
+			amounts: { shipping: 800, tax: 0, total: 2_800 }
 		});
 	});
 
@@ -248,7 +258,7 @@ describe('Stripe paid Checkout normalization', () => {
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
 			)
-		).resolves.toMatchObject({ amounts: { tax: 0, total: 3_000 } });
+		).resolves.toMatchObject({ amounts: { tax: 0, total: 2_800 } });
 	});
 
 	it.each([
@@ -336,15 +346,15 @@ describe('Stripe paid Checkout normalization', () => {
 
 	it('retrieves every line-item page in provider order', async () => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingAmount: 0,
+			shippingSubtotal: 0,
 			shippingTaxAmount: 0,
 			lines: [
 				{
 					id: 'li_accessory',
 					priceId: 'price_accessory',
 					quantity: 1,
-					unitAmount: 1_000,
-					taxAmount: 250
+					unitAmount: 2_000,
+					taxAmount: 500
 				},
 				{
 					id: 'li_tee',
@@ -361,8 +371,18 @@ describe('Stripe paid Checkout normalization', () => {
 		const { snapshot, client } = await normalizedSnapshot(fixture);
 
 		expect(snapshot.lines).toEqual([
-			{ priceId: 'price_accessory', quantity: 1, unitAmount: 1_000 },
-			{ priceId: 'price_tee_medium', quantity: 2, unitAmount: 2_000 }
+			{
+				priceId: 'price_accessory',
+				quantity: 1,
+				unitAmount: 2_000,
+				retailUnitAmount: 2_500
+			},
+			{
+				priceId: 'price_tee_medium',
+				quantity: 2,
+				unitAmount: 2_000,
+				retailUnitAmount: 2_500
+			}
 		]);
 		expect(client.lineItemsCalls).toEqual([
 			{
@@ -674,7 +694,7 @@ describe('Stripe paid Checkout normalization', () => {
 		);
 	});
 
-	it('normalizes inclusive shipping tax inside the charged EUR 10 gross', async () => {
+	it('normalizes exclusive shipping tax into the charged gross shipping snapshot', async () => {
 		const fixture = paidCheckoutProviderFixture();
 
 		await expect(
@@ -684,6 +704,49 @@ describe('Stripe paid Checkout normalization', () => {
 		).resolves.toMatchObject({
 			amounts: { shipping: 1_000, tax: 700, total: 3_500 }
 		});
+	});
+
+	it.each([
+		['SE', 500, 200, 2_500, 1_000, 3_500],
+		['DE', 380, 152, 2_380, 952, 3_332],
+		['FI', 510, 204, 2_510, 1_004, 3_514],
+		['HU', 540, 216, 2_540, 1_016, 3_556],
+		['JP', 0, 0, 2_000, 800, 2_800]
+	] as const)(
+		'normalizes the v2 exclusive %s pricing matrix',
+		async (country, merchandiseTax, shippingTax, retailUnitAmount, shipping, total) => {
+			const fixture = paidCheckoutProviderFixture({ country });
+			const snapshot = await createStripeOrderGateway(new ContractStripeClient(fixture), [
+				country
+			]).retrievePaidCheckout(fixture.session.id);
+
+			expect(snapshot).toMatchObject({
+				contractVersion: 2,
+				destinationCountry: country,
+				amounts: {
+					subtotal: 2_000,
+					discount: 0,
+					shipping,
+					shippingTax,
+					tax: merchandiseTax + shippingTax,
+					total
+				},
+				lines: [{ retailUnitAmount }]
+			});
+		}
+	);
+
+	it('rejects version 1 metadata without a compatibility path', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		if (!fixture.session.metadata) throw new Error();
+		fixture.session.metadata.checkout_contract_version = '1';
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_DRAFT_INVALID'
+		);
 	});
 
 	it.each([
@@ -702,11 +765,11 @@ describe('Stripe paid Checkout normalization', () => {
 			}
 		],
 		[
-			'exclusive ShippingRate',
+			'inclusive ShippingRate',
 			(fixture: PaidCheckoutProviderFixture) => {
 				const rate = fixture.session.shipping_cost?.shipping_rate;
 				if (!rate || typeof rate === 'string') throw new Error();
-				rate.tax_behavior = 'exclusive';
+				rate.tax_behavior = 'inclusive';
 			}
 		],
 		[
@@ -717,15 +780,15 @@ describe('Stripe paid Checkout normalization', () => {
 			}
 		],
 		[
-			'exclusive shipping tax rate',
+			'inclusive shipping tax rate',
 			(fixture: PaidCheckoutProviderFixture) => {
 				const tax = fixture.session.shipping_cost?.taxes?.[0];
 				if (!tax) throw new Error();
-				tax.rate.inclusive = false;
+				tax.rate.inclusive = true;
 			}
 		],
 		[
-			'mixed inclusive and exclusive shipping tax rates',
+			'mixed exclusive and inclusive shipping tax rates',
 			(fixture: PaidCheckoutProviderFixture) => {
 				const taxes = fixture.session.shipping_cost?.taxes;
 				if (!taxes?.[0]) throw new Error();
@@ -733,7 +796,7 @@ describe('Stripe paid Checkout normalization', () => {
 				taxes.push({
 					...structuredClone(taxes[0]),
 					amount: 100,
-					rate: { ...taxes[0].rate, id: 'txr_shipping_exclusive', inclusive: false }
+					rate: { ...taxes[0].rate, id: 'txr_shipping_inclusive', inclusive: true }
 				});
 			}
 		],
@@ -745,7 +808,7 @@ describe('Stripe paid Checkout normalization', () => {
 				tax.amount -= 1;
 			}
 		]
-	])('rejects %s for tax-inclusive paid shipping', async (_label, mutate) => {
+	])('rejects %s for v2 exclusive shipping', async (_label, mutate) => {
 		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture);
 
@@ -961,7 +1024,7 @@ describe('Stripe paid Checkout normalization', () => {
 });
 
 describe('paid Checkout comparison', () => {
-	it('accepts an end-to-end normalized EU checkout with tax-inclusive paid shipping', async () => {
+	it('accepts an end-to-end normalized EU checkout with exclusive paid shipping', async () => {
 		const { snapshot } = await normalizedSnapshot();
 
 		expect(() => comparePaidCheckout(checkoutDraft(), snapshot)).not.toThrow();
@@ -969,15 +1032,15 @@ describe('paid Checkout comparison', () => {
 
 	it('accepts reordered exact lines and a destination-specific final tax', async () => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingAmount: 0,
+			shippingSubtotal: 0,
 			shippingTaxAmount: 0,
 			lines: [
 				{
 					id: 'li_accessory',
 					priceId: 'price_accessory',
 					quantity: 1,
-					unitAmount: 1_000,
-					taxAmount: 100
+					unitAmount: 2_000,
+					taxAmount: 200
 				},
 				{
 					id: 'li_tee',
@@ -993,7 +1056,7 @@ describe('paid Checkout comparison', () => {
 			shippingMode: 'free',
 			lines: [
 				{ priceId: 'price_tee_medium', quantity: 1, unitAmount: 2_000 },
-				{ priceId: 'price_accessory', quantity: 1, unitAmount: 1_000 }
+				{ priceId: 'price_accessory', quantity: 1, unitAmount: 2_000 }
 			]
 		});
 
@@ -1016,7 +1079,7 @@ describe('paid Checkout comparison', () => {
 
 	it('retains duplicate provider lines instead of overwriting them during comparison', async () => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingAmount: 0,
+			shippingSubtotal: 0,
 			shippingTaxAmount: 0,
 			lines: [
 				{
@@ -1030,8 +1093,18 @@ describe('paid Checkout comparison', () => {
 		});
 		const { snapshot } = await normalizedSnapshot(fixture);
 		snapshot.lines = [
-			{ priceId: 'price_tee_medium', quantity: 1, unitAmount: 2_000 },
-			{ priceId: 'price_tee_medium', quantity: 1, unitAmount: 2_000 }
+			{
+				priceId: 'price_tee_medium',
+				quantity: 1,
+				unitAmount: 2_000,
+				retailUnitAmount: 2_500
+			},
+			{
+				priceId: 'price_tee_medium',
+				quantity: 1,
+				unitAmount: 2_000,
+				retailUnitAmount: 2_500
+			}
 		];
 
 		expectComparisonCode(
@@ -1059,7 +1132,7 @@ describe('paid Checkout comparison', () => {
 	it('rejects a draft from a different checkout contract version', async () => {
 		const { snapshot } = await normalizedSnapshot();
 		const draft = checkoutDraft();
-		draft.contractVersion = 2;
+		draft.contractVersion = 1;
 
 		expectComparisonCode(
 			() => comparePaidCheckout(draft, snapshot),
@@ -1101,7 +1174,7 @@ describe('paid Checkout comparison', () => {
 		['free draft with paid provider shipping', 'free' as const, 1_000]
 	])('rejects %s', async (_label, shippingMode, shipping) => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingAmount: shippingMode === 'free' ? 0 : 1_000,
+			shippingSubtotal: shippingMode === 'free' ? 0 : 800,
 			shippingTaxAmount: shippingMode === 'free' ? 0 : 200,
 			lines:
 				shippingMode === 'free'
@@ -1152,11 +1225,24 @@ describe('paid Checkout comparison', () => {
 		);
 	});
 
-	it('accepts a one-cent tax redistribution that the public snapshot cannot disambiguate', async () => {
+	it('rejects a retail unit amount that does not reconcile to merchandise tax', async () => {
+		const { snapshot } = await normalizedSnapshot();
+		snapshot.lines[0].retailUnitAmount -= 1;
+
+		expectComparisonCode(
+			() => comparePaidCheckout(checkoutDraft(), snapshot),
+			'PAID_CHECKOUT_LINES_MISMATCH'
+		);
+	});
+
+	it('rejects a one-cent total mutation against the explicit tax invariant', async () => {
 		const { snapshot } = await normalizedSnapshot();
 		snapshot.amounts.total += 1;
 
-		expect(() => comparePaidCheckout(checkoutDraft(), snapshot)).not.toThrow();
+		expectComparisonCode(
+			() => comparePaidCheckout(checkoutDraft(), snapshot),
+			'PAID_CHECKOUT_TOTALS_MISMATCH'
+		);
 	});
 
 	it.each([

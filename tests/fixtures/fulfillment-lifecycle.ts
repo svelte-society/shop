@@ -82,7 +82,8 @@ export function recordPaidOrder(database: ShopDatabase, suffix: string) {
 	const customerId = `cus_test_lifecycle_${suffix}`;
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 1,
+		contractVersion: 2,
+		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
@@ -101,7 +102,7 @@ export function recordPaidOrder(database: ShopDatabase, suffix: string) {
 					front: 'https://cdn.example.test/designs/community-front.svg'
 				},
 				quantity: 1,
-				unitAmount: 2_799,
+				unitAmount: 2_000,
 				currency: 'eur'
 			}
 		]
@@ -119,14 +120,23 @@ export function recordPaidOrder(database: ShopDatabase, suffix: string) {
 			checkoutDraftId: draft.id,
 			currency: 'eur',
 			amounts: {
-				subtotal: 2_799,
+				subtotal: 2_000,
 				discount: 0,
 				shipping: 1_000,
-				tax: 950,
-				total: 4_749
+				shippingTax: 200,
+				tax: 700,
+				total: 3_500
 			},
 			destinationCountry: 'SE',
-			updatedAt: PAID_AT
+			updatedAt: PAID_AT,
+			lines: [
+				{
+					stripePriceId: `price_lifecycle_${suffix}`,
+					quantity: 1,
+					unitAmount: 2_000,
+					retailUnitAmount: 2_500
+				}
+			]
 		},
 		{ eventId, eventType, processedAt: PAID_AT }
 	);

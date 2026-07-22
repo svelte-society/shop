@@ -15,6 +15,7 @@ const PRIVATE_ENV = {
 } as const;
 
 const PAID_CHECKOUT: PaidCheckoutSnapshot = {
+	contractVersion: 2,
 	checkoutSessionId: 'cs_test_verified',
 	paymentIntentId: 'pi_test_verified',
 	customerId: 'cus_test_verified',
@@ -22,8 +23,22 @@ const PAID_CHECKOUT: PaidCheckoutSnapshot = {
 	currency: 'eur',
 	paymentStatus: 'paid',
 	destinationCountry: 'SE',
-	amounts: { subtotal: 2_000, discount: 0, shipping: 1_000, tax: 700, total: 3_500 },
-	lines: [{ priceId: 'price_accessory_one', quantity: 1, unitAmount: 2_000 }]
+	amounts: {
+		subtotal: 2_000,
+		discount: 0,
+		shipping: 1_000,
+		shippingTax: 200,
+		tax: 700,
+		total: 3_500
+	},
+	lines: [
+		{
+			priceId: 'price_accessory_one',
+			quantity: 1,
+			unitAmount: 2_000,
+			retailUnitAmount: 2_500
+		}
+	]
 };
 
 function loadWith(gateway: StripeOrderGateway) {

@@ -73,28 +73,29 @@ function prepareDatabase(databasePath) {
 			.prepare(
 				`INSERT INTO checkout_drafts (
 					id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-					shipping_mode, created_at, expires_at, completed_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+					shipping_mode, created_at, expires_at, completed_at, destination_country
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.run(
 				'draft_process_shutdown',
 				'cs_process_shutdown',
-				1,
+				2,
 				'eur',
 				1,
 				'paid',
 				'2026-07-17T00:00:00.000Z',
 				'2026-07-18T00:00:00.000Z',
-				'2026-07-17T00:00:00.000Z'
+				'2026-07-17T00:00:00.000Z',
+				'SE'
 			);
 		database
 			.prepare(
 				`INSERT INTO orders (
 					id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 					checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-					tax_amount, total_amount, destination_country, payment_status,
+					shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status,
 					fulfillment_status, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.run(
 				'ord_process_shutdown',
@@ -106,6 +107,7 @@ function prepareDatabase(databasePath) {
 				2500,
 				0,
 				500,
+				0,
 				625,
 				3625,
 				'SE',
@@ -118,8 +120,8 @@ function prepareDatabase(databasePath) {
 				`INSERT INTO order_lines (
 					order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 					variant_label, sku, styria_product_number, design_reference, design_json,
-					quantity, unit_amount, currency
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+					quantity, unit_amount, currency, retail_unit_amount
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.run(
 				'ord_process_shutdown',
@@ -134,7 +136,8 @@ function prepareDatabase(databasePath) {
 				'{}',
 				1,
 				2500,
-				'eur'
+				'eur',
+				3125
 			);
 		database
 			.prepare(

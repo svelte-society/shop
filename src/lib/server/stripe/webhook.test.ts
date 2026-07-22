@@ -81,7 +81,8 @@ function refundEvent(id = 'evt_refund'): Stripe.Event {
 
 function draftInput(): NewCheckoutDraft {
 	return {
-		contractVersion: 1,
+		contractVersion: 2,
+		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
@@ -107,6 +108,7 @@ function draftInput(): NewCheckoutDraft {
 
 function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 	return {
+		contractVersion: 2,
 		checkoutSessionId: 'cs_paid',
 		paymentIntentId: 'pi_paid',
 		customerId: 'cus_paid',
@@ -118,10 +120,18 @@ function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 			subtotal: 2_000,
 			discount: 0,
 			shipping: 1_000,
+			shippingTax: 200,
 			tax: 700,
 			total: 3_500
 		},
-		lines: [{ priceId: 'price_tee_medium', quantity: 1, unitAmount: 2_000 }]
+		lines: [
+			{
+				priceId: 'price_tee_medium',
+				quantity: 1,
+				unitAmount: 2_000,
+				retailUnitAmount: 2_500
+			}
+		]
 	};
 }
 
@@ -411,8 +421,21 @@ describe('Stripe webhook service', () => {
 				checkoutDraftId: draftId,
 				paymentStatus: 'paid',
 				fulfillmentStatus: 'pending_review',
-				amounts: { subtotal: 2_000, discount: 0, shipping: 1_000, tax: 700, total: 3_500 },
-				lines: [expect.objectContaining({ stripePriceId: 'price_tee_medium', quantity: 1 })]
+				amounts: {
+					subtotal: 2_000,
+					discount: 0,
+					shipping: 1_000,
+					shippingTax: 200,
+					tax: 700,
+					total: 3_500
+				},
+				lines: [
+					expect.objectContaining({
+						stripePriceId: 'price_tee_medium',
+						quantity: 1,
+						retailUnitAmount: 2_500
+					})
+				]
 			})
 		);
 		expect(database.prepare('SELECT processing_status FROM stripe_events').get()).toEqual({

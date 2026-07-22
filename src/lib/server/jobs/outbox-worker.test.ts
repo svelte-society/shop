@@ -57,8 +57,8 @@ function insertOrder(
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at
-			) VALUES (?, ?, 1, 'eur', ?, 'free', ?, ?, ?)`
+				shipping_mode, created_at, expires_at, completed_at, destination_country
+			) VALUES (?, ?, 2, 'eur', ?, 'free', ?, ?, ?, ?)`
 		)
 		.run(
 			draftId,
@@ -66,16 +66,17 @@ function insertOrder(
 			quantities.reduce((sum, quantity) => sum + quantity, 0),
 			now.toISOString(),
 			new Date(now.getTime() + 60_000).toISOString(),
-			now.toISOString()
+			now.toISOString(),
+			destinationCountry
 		);
 	database
 		.prepare(
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				tracking_number, shipped_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, ?, ?, 'paid', ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, 0, ?, ?, 'paid', ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
@@ -95,8 +96,8 @@ function insertOrder(
 		`INSERT INTO order_lines (
 			order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 			variant_label, sku, styria_product_number, design_reference, design_json,
-			quantity, unit_amount, currency
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'eur')`
+			quantity, unit_amount, currency, retail_unit_amount
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'eur', ?)`
 	);
 	quantities.forEach((quantity, index) => {
 		insertLine.run(
@@ -111,6 +112,7 @@ function insertOrder(
 			`design_${input.id}_${index}`,
 			'{}',
 			quantity,
+			1000,
 			1000
 		);
 	});

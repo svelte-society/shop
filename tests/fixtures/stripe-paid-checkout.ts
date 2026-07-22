@@ -68,7 +68,10 @@ export type StripeFixturePaymentIntent = Omit<
 	latest_charge: StripeFixtureCharge | string | null;
 };
 
-type StripeFixturePrice = Pick<Stripe.Price, 'id' | 'object' | 'currency' | 'unit_amount'>;
+type StripeFixturePrice = Pick<
+	Stripe.Price,
+	'id' | 'object' | 'currency' | 'unit_amount' | 'tax_behavior' | 'type' | 'recurring'
+>;
 
 export type StripeFixtureLineItem = Omit<
 	Pick<
@@ -191,7 +194,7 @@ export type PaidCheckoutFixtureOptions = {
 	customerId?: string;
 	draftId?: string;
 	country?: string;
-	shippingAmount?: number;
+	shippingSubtotal?: number;
 	shippingTaxAmount?: number;
 	lines?: PaidCheckoutFixtureLine[];
 	taxExempt?: 'none' | 'exempt' | 'reverse';
@@ -225,7 +228,10 @@ export function stripeLineItem(
 			id: line.priceId,
 			object: 'price',
 			currency,
-			unit_amount: line.unitAmount
+			unit_amount: line.unitAmount,
+			tax_behavior: 'exclusive',
+			type: 'one_time',
+			recurring: null
 		},
 		quantity: line.quantity
 	};
@@ -277,16 +283,17 @@ export function paidCheckoutProviderFixture(
 	const customerId = options.customerId ?? 'cus_test_paid';
 	const draftId = options.draftId ?? 'draft-paid-123';
 	const country = options.country ?? 'SE';
-	const shippingAmount = options.shippingAmount ?? 1_000;
+	const taxBasisPoints = { SE: 2_500, DE: 1_900, FI: 2_550, HU: 2_700 }[country] ?? 0;
+	const shippingSubtotal = options.shippingSubtotal ?? 800;
 	const shippingTaxAmount =
-		options.shippingTaxAmount ?? (country === 'US' || shippingAmount === 0 ? 0 : 200);
+		options.shippingTaxAmount ?? Math.round((shippingSubtotal * taxBasisPoints) / 10_000);
 	const lines = options.lines ?? [
 		{
 			id: 'li_tee_medium',
 			priceId: 'price_tee_medium',
 			quantity: 1,
 			unitAmount: 2_000,
-			taxAmount: country === 'US' ? 0 : 500
+			taxAmount: Math.round((2_000 * taxBasisPoints) / 10_000)
 		}
 	];
 	const taxExempt = options.taxExempt ?? 'none';
@@ -297,12 +304,14 @@ export function paidCheckoutProviderFixture(
 	const amountDiscount = providerLines.reduce((total, line) => total + line.amount_discount, 0);
 	const amountTax =
 		providerLines.reduce((total, line) => total + line.amount_tax, 0) + shippingTaxAmount;
+	const shippingTotal = shippingSubtotal + shippingTaxAmount;
 	const amountTotal =
-		providerLines.reduce((total, line) => total + line.amount_total, 0) + shippingAmount;
+		providerLines.reduce((total, line) => total + line.amount_total, 0) + shippingTotal;
 	const metadata = {
 		product_type: 'merch',
-		checkout_contract_version: '1',
-		checkout_draft_id: draftId
+		checkout_contract_version: '2',
+		checkout_draft_id: draftId,
+		destination_country: country
 	};
 	const charge: StripeFixtureCharge = {
 		id: 'ch_test_paid',
@@ -381,14 +390,14 @@ export function paidCheckoutProviderFixture(
 			payment_intent: paymentIntent,
 			payment_status: 'paid',
 			shipping_cost: {
-				amount_subtotal: shippingAmount,
+				amount_subtotal: shippingSubtotal,
 				amount_tax: shippingTaxAmount,
-				amount_total: shippingAmount,
+				amount_total: shippingTotal,
 				shipping_rate: {
-					id: shippingAmount === 0 ? 'shr_free' : 'shr_paid_10_eur',
+					id: shippingSubtotal === 0 ? 'shr_free' : 'shr_paid_8_eur',
 					object: 'shipping_rate',
-					fixed_amount: { amount: shippingAmount, currency: 'eur' },
-					tax_behavior: 'inclusive',
+					fixed_amount: { amount: shippingSubtotal, currency: 'eur' },
+					tax_behavior: 'exclusive',
 					type: 'fixed_amount'
 				},
 				taxes:
@@ -400,17 +409,17 @@ export function paidCheckoutProviderFixture(
 									rate: {
 										id: 'txr_shipping_inclusive',
 										object: 'tax_rate',
-										inclusive: true
+										inclusive: false
 									},
 									taxability_reason: 'standard_rated',
-									taxable_amount: shippingAmount - shippingTaxAmount
+									taxable_amount: shippingSubtotal
 								}
 							]
 			},
 			status: 'complete',
 			total_details: {
 				amount_discount: amountDiscount,
-				amount_shipping: shippingAmount,
+				amount_shipping: shippingSubtotal,
 				amount_tax: amountTax
 			}
 		},

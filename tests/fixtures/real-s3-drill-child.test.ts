@@ -88,7 +88,7 @@ it('runs production backup and restore clients against the parent HTTPS fixture'
 			count: 3
 		});
 		expect(restored.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 6
+			count: 7
 		});
 		const readiness = await checkRuntimeReadiness({
 			database: restored,

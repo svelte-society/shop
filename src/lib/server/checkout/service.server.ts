@@ -1,5 +1,6 @@
 import { parseCart, selectShippingMode, totalUnits, type CartLine } from '$lib/domain/cart';
 import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
+import type { MarketDestination } from '$lib/domain/destinations';
 import type { NewCheckoutDraftLine } from '$lib/domain/orders';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import type { CheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
@@ -12,6 +13,7 @@ const CHECKOUT_DRAFT_TTL_MS = 24 * 60 * 60 * 1_000;
 
 export type CheckoutErrorCode =
 	| 'CHECKOUT_REQUEST_INVALID'
+	| 'CHECKOUT_DESTINATION_INVALID'
 	| 'CHECKOUT_VARIANT_UNAVAILABLE'
 	| 'CHECKOUT_CATALOG_UNAVAILABLE'
 	| 'CHECKOUT_DRAFT_FAILED'
@@ -29,7 +31,7 @@ export class CheckoutError extends Error {
 }
 
 export interface CheckoutService {
-	start(input: unknown): Promise<{ redirectUrl: string }>;
+	start(input: unknown, destinationCountry: MarketDestination): Promise<{ redirectUrl: string }>;
 }
 
 type ResolvedCartLine = {
@@ -45,7 +47,7 @@ export type CheckoutServiceOptions = {
 	paidShippingRateId: string;
 	freeShippingRateId: string;
 	productionOrigin: URL;
-	allowedCountries: readonly string[];
+	allowedCountries: readonly MarketDestination[];
 	clock?: () => Date;
 	alerts?: AlertService;
 };
@@ -120,7 +122,13 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 	}
 
 	return {
-		async start(input: unknown): Promise<{ redirectUrl: string }> {
+		async start(
+			input: unknown,
+			destinationCountry: MarketDestination
+		): Promise<{ redirectUrl: string }> {
+			if (!options.allowedCountries.includes(destinationCountry)) {
+				throw new CheckoutError('CHECKOUT_DESTINATION_INVALID');
+			}
 			const lines = parseCheckoutCart(input);
 			const observedAt = clock();
 			let resolved: ResolvedCartLine[];
@@ -143,6 +151,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 			try {
 				draft = options.drafts.create({
 					contractVersion: CHECKOUT_CONTRACT_VERSION,
+					destinationCountry,
 					currency: 'eur',
 					totalUnitCount: totalUnits(lines),
 					shippingMode,
@@ -159,13 +168,13 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 			try {
 				session = await options.stripe.createSession({
 					draftId: draft.id,
+					destinationCountry,
 					lines: resolved.map((item) => ({
 						priceId: item.variant.priceId,
 						quantity: item.line.quantity
 					})),
 					shippingRateId:
 						shippingMode === 'paid' ? options.paidShippingRateId : options.freeShippingRateId,
-					allowedCountries: options.allowedCountries,
 					successUrl: `${options.productionOrigin.origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
 					cancelUrl: `${options.productionOrigin.origin}/checkout/cancel`
 				});

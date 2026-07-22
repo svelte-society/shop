@@ -22,8 +22,9 @@ function insertOrder(input: {
 	database
 		.prepare(
 			`INSERT INTO checkout_drafts (
-				id, contract_version, currency, total_unit_count, shipping_mode, created_at, expires_at
-			) VALUES (?, 1, 'eur', 1, 'paid', ?, ?)`
+				id, contract_version, currency, total_unit_count, shipping_mode, created_at, expires_at,
+				destination_country
+			) VALUES (?, 2, 'eur', 1, 'paid', ?, ?, 'SE')`
 		)
 		.run(draftId, input.updatedAt, '2026-08-17T00:00:00.000Z');
 	database
@@ -31,9 +32,9 @@ function insertOrder(input: {
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				tracking_number, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', 1000, 0, 500, 250, 1750, 'SE', 'paid', ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', 1000, 0, 500, 0, 250, 1750, 'SE', 'paid', ?, ?, ?)`
 		)
 		.run(
 			input.id,

@@ -253,7 +253,13 @@ export function createStripeWebhookService(
 						currency: paid.currency,
 						amounts: paid.amounts,
 						destinationCountry: paid.destinationCountry,
-						updatedAt: processedAt
+						updatedAt: processedAt,
+						lines: paid.lines.map(({ priceId, quantity, unitAmount, retailUnitAmount }) => ({
+							stripePriceId: priceId,
+							quantity,
+							unitAmount,
+							retailUnitAmount
+						}))
 					},
 					eventInput(event, processedAt)
 				);

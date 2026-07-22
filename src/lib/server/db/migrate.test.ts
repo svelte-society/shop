@@ -139,6 +139,48 @@ describe('migrate', () => {
 		expect(database.prepare('SELECT name FROM _migrations').all()).toEqual([]);
 	});
 
+	it.each(['checkout_drafts', 'orders', 'order_lines'] as const)(
+		'transactionally rejects a non-empty %s table during the pricing cutover',
+		(table) => {
+			const directory = temporaryDirectory();
+			const pricingMigrationPath = join(
+				initialMigrationsDirectory,
+				'0007_dynamic_destination_pricing.sql'
+			);
+			expect(existsSync(pricingMigrationPath)).toBe(true);
+			writeFileSync(
+				join(directory, '0001_initial.sql'),
+				`CREATE TABLE checkout_drafts (id TEXT PRIMARY KEY);
+				 CREATE TABLE orders (id TEXT PRIMARY KEY);
+				 CREATE TABLE order_lines (id TEXT PRIMARY KEY);`
+			);
+			const database = openDatabase(':memory:');
+			migrate(database, directory);
+			database.prepare(`INSERT INTO ${table} (id) VALUES (?)`).run(`${table}_existing`);
+			writeFileSync(
+				join(directory, '0007_dynamic_destination_pricing.sql'),
+				readFileSync(pricingMigrationPath, 'utf8')
+			);
+
+			expect(() => migrate(database, directory)).toThrow(/CHECK constraint failed/);
+			expect(database.prepare('SELECT name FROM _migrations ORDER BY name').all()).toEqual([
+				{ name: '0001_initial.sql' }
+			]);
+			expect(
+				database
+					.prepare(
+						"SELECT name FROM pragma_table_info('checkout_drafts') WHERE name = 'destination_country'"
+					)
+					.get()
+			).toBeUndefined();
+			expect(
+				database
+					.prepare("SELECT name FROM sqlite_schema WHERE name = '_pricing_migration_guard'")
+					.get()
+			).toBeUndefined();
+		}
+	);
+
 	it('creates the exact initial schema with enforced foreign keys', () => {
 		const database = openDatabase(':memory:');
 

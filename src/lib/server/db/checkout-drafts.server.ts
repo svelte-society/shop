@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isMarketDestination } from '$lib/domain/destinations';
 import type {
 	CheckoutDraft,
 	CheckoutDraftLine,
@@ -32,6 +33,7 @@ type DraftRow = {
 	created_at: unknown;
 	expires_at: unknown;
 	completed_at: unknown;
+	destination_country: unknown;
 };
 
 type DraftLineRow = {
@@ -152,7 +154,8 @@ function validateNewDraft(input: NewCheckoutDraft): {
 	if (
 		!input ||
 		!Number.isSafeInteger(input.contractVersion) ||
-		input.contractVersion < 1 ||
+		input.contractVersion !== 2 ||
+		!isMarketDestination(input.destinationCountry) ||
 		input.currency !== 'eur' ||
 		!Number.isSafeInteger(input.totalUnitCount) ||
 		input.totalUnitCount < 1 ||
@@ -225,7 +228,9 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		(row.stripe_checkout_session_id !== null &&
 			!isNonEmptyString(row.stripe_checkout_session_id)) ||
 		!Number.isSafeInteger(row.contract_version) ||
-		(row.contract_version as number) < 1 ||
+		row.contract_version !== 2 ||
+		!isNonEmptyString(row.destination_country) ||
+		!isMarketDestination(row.destination_country) ||
 		row.currency !== 'eur' ||
 		!Number.isSafeInteger(row.total_unit_count) ||
 		(row.total_unit_count as number) < 1 ||
@@ -253,6 +258,7 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		id: row.id,
 		checkoutSessionId: row.stripe_checkout_session_id as string | null,
 		contractVersion: row.contract_version as number,
+		destinationCountry: row.destination_country,
 		currency: 'eur',
 		totalUnitCount: row.total_unit_count as number,
 		shippingMode: row.shipping_mode,
@@ -272,8 +278,9 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 		const insertDraft = this.database.prepare(`
 			INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency,
-				total_unit_count, shipping_mode, created_at, expires_at, completed_at
-			) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL)
+				total_unit_count, shipping_mode, created_at, expires_at, completed_at,
+				destination_country
+			) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)
 		`);
 		const insertLine = this.database.prepare(`
 			INSERT INTO checkout_draft_lines (
@@ -290,7 +297,8 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 				input.totalUnitCount,
 				input.shippingMode,
 				validated.createdAt,
-				validated.expiresAt
+				validated.expiresAt,
+				input.destinationCountry
 			);
 			for (const [index, line] of input.lines.entries()) {
 				insertLine.run(
@@ -325,6 +333,7 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 			id: created.id,
 			checkoutSessionId: created.checkoutSessionId,
 			contractVersion: created.contractVersion,
+			destinationCountry: created.destinationCountry,
 			currency: created.currency,
 			totalUnitCount: created.totalUnitCount,
 			shippingMode: created.shippingMode,

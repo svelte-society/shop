@@ -15,7 +15,7 @@ const LINE_ITEM_ID_PATTERN = /^li_[A-Za-z0-9_]+$/;
 const PRICE_ID_PATTERN = /^price_[A-Za-z0-9_]+$/;
 const SHIPPING_RATE_ID_PATTERN = /^shr_[A-Za-z0-9_]+$/;
 const TAX_RATE_ID_PATTERN = /^txr_[A-Za-z0-9_]+$/;
-const PAID_SHIPPING_AMOUNT = 1_000;
+const PAID_SHIPPING_AMOUNT = 800;
 const LINE_PAGE_LIMIT = 100;
 const MAX_CHECKOUT_LINES = 20;
 const MAX_CHECKOUT_UNITS = 20;
@@ -145,18 +145,27 @@ function requireCurrency(value: unknown): void {
 	if (value !== 'eur') fail('STRIPE_PAID_CHECKOUT_CURRENCY_INVALID');
 }
 
-function validateMetadata(value: unknown, expectedDraftId?: string): string {
+type CheckoutMetadata = {
+	draftId: string;
+	contractVersion: 2;
+	destinationCountry: string;
+};
+
+function validateMetadata(value: unknown, expected?: CheckoutMetadata): CheckoutMetadata {
 	if (!isRecord(value)) fail('STRIPE_PAID_CHECKOUT_DRAFT_INVALID');
 	const draftId = value.checkout_draft_id;
+	const destinationCountry = value.destination_country;
 	if (
 		!isExactNonEmptyString(draftId) ||
+		!isExactNonEmptyString(destinationCountry) ||
 		value.product_type !== 'merch' ||
 		value.checkout_contract_version !== String(CHECKOUT_CONTRACT_VERSION) ||
-		(expectedDraftId !== undefined && draftId !== expectedDraftId)
+		(expected !== undefined &&
+			(draftId !== expected.draftId || destinationCountry !== expected.destinationCountry))
 	) {
 		fail('STRIPE_PAID_CHECKOUT_DRAFT_INVALID');
 	}
-	return draftId;
+	return { draftId, contractVersion: 2, destinationCountry };
 }
 
 type NormalizedAddress = {
@@ -376,6 +385,7 @@ type NormalizedLineDetails = {
 	priceId: string;
 	quantity: number;
 	unitAmount: number;
+	retailUnitAmount: number;
 	discount: number;
 	subtotal: number;
 	tax: number;
@@ -396,7 +406,10 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 		!isRecord(value.price) ||
 		value.price.object !== 'price' ||
 		!isProviderId(value.price.id, PRICE_ID_PATTERN) ||
-		!isSafeNonNegativeInteger(value.price.unit_amount)
+		value.price.unit_amount !== 2_000 ||
+		value.price.tax_behavior !== 'exclusive' ||
+		value.price.type !== 'one_time' ||
+		value.price.recurring !== null
 	) {
 		fail('STRIPE_PAID_CHECKOUT_LINES_INVALID');
 	}
@@ -414,9 +427,13 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 		'STRIPE_PAID_CHECKOUT_LINES_INVALID'
 	);
 	if (
+		value.amount_discount !== 0 ||
 		value.amount_total !==
-		safeSum([amountAfterDiscount, value.amount_tax], 'STRIPE_PAID_CHECKOUT_LINES_INVALID')
+			safeSum([amountAfterDiscount, value.amount_tax], 'STRIPE_PAID_CHECKOUT_LINES_INVALID')
 	) {
+		fail('STRIPE_PAID_CHECKOUT_LINES_INVALID');
+	}
+	if (value.amount_total % value.quantity !== 0) {
 		fail('STRIPE_PAID_CHECKOUT_LINES_INVALID');
 	}
 
@@ -425,6 +442,7 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 		priceId: value.price.id,
 		quantity: value.quantity,
 		unitAmount: value.price.unit_amount,
+		retailUnitAmount: value.amount_total / value.quantity,
 		discount: value.amount_discount,
 		subtotal: value.amount_subtotal,
 		tax: value.amount_tax,
@@ -478,7 +496,7 @@ async function retrieveLines(
 
 function validatePaymentIntent(
 	value: unknown,
-	expected: { customerId: string; draftId: string; total: number }
+	expected: { customerId: string; metadata: CheckoutMetadata; total: number }
 ): { paymentIntentId: string; charge: UnknownRecord } {
 	if (
 		!isRecord(value) ||
@@ -497,12 +515,10 @@ function validatePaymentIntent(
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TOTALS_INVALID');
 	}
-	if (
-		referenceId(value.customer, CUSTOMER_ID_PATTERN) !== expected.customerId ||
-		validateMetadata(value.metadata, expected.draftId) !== expected.draftId
-	) {
+	if (referenceId(value.customer, CUSTOMER_ID_PATTERN) !== expected.customerId) {
 		fail('STRIPE_PAID_CHECKOUT_PAYMENT_INTENT_INVALID');
 	}
+	validateMetadata(value.metadata, expected.metadata);
 
 	const charge = value.latest_charge;
 	if (
@@ -529,16 +545,16 @@ function validatePaymentIntent(
 	return { paymentIntentId: value.id, charge };
 }
 
-function validateInclusiveShipping(value: UnknownRecord): void {
+function validateExclusiveShipping(value: UnknownRecord, expectedSubtotal: 0 | 800): void {
 	const rate = value.shipping_rate;
 	if (
 		!isRecord(rate) ||
 		rate.object !== 'shipping_rate' ||
 		!isProviderId(rate.id, SHIPPING_RATE_ID_PATTERN) ||
 		rate.type !== 'fixed_amount' ||
-		rate.tax_behavior !== 'inclusive' ||
+		rate.tax_behavior !== 'exclusive' ||
 		!isRecord(rate.fixed_amount) ||
-		!isSafeNonNegativeInteger(rate.fixed_amount.amount) ||
+		rate.fixed_amount.amount !== expectedSubtotal ||
 		rate.fixed_amount.currency !== 'eur'
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
@@ -553,7 +569,7 @@ function validateInclusiveShipping(value: UnknownRecord): void {
 				!isRecord(tax.rate) ||
 				tax.rate.object !== 'tax_rate' ||
 				!isProviderId(tax.rate.id, TAX_RATE_ID_PATTERN) ||
-				tax.rate.inclusive !== true
+				tax.rate.inclusive !== false
 			) {
 				fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 			}
@@ -563,8 +579,12 @@ function validateInclusiveShipping(value: UnknownRecord): void {
 	);
 	if (
 		shippingTax !== value.amount_tax ||
-		(value.amount_tax as number) > (value.amount_total as number) ||
-		rate.fixed_amount.amount !== value.amount_total
+		value.amount_subtotal !== expectedSubtotal ||
+		value.amount_total !==
+			safeSum(
+				[value.amount_subtotal as number, value.amount_tax as number],
+				'STRIPE_PAID_CHECKOUT_TAX_INVALID'
+			)
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
@@ -589,9 +609,12 @@ function normalizePaidCheckout(
 	if (session.payment_status !== 'paid') fail('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
 	requireCurrency(session.currency);
 
-	const draftId = validateMetadata(session.metadata);
-	if (session.client_reference_id !== draftId) fail('STRIPE_PAID_CHECKOUT_DRAFT_INVALID');
+	const metadata = validateMetadata(session.metadata);
+	if (session.client_reference_id !== metadata.draftId) fail('STRIPE_PAID_CHECKOUT_DRAFT_INVALID');
 	const { customerId, destinationCountry } = validateCustomer(session, allowedDestinations);
+	if (destinationCountry !== metadata.destinationCountry) {
+		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
+	}
 
 	if (
 		!isRecord(session.automatic_tax) ||
@@ -618,11 +641,13 @@ function normalizePaidCheckout(
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
-	validateInclusiveShipping(session.shipping_cost);
+	const unitCount = safeSum(
+		lines.map((line) => line.quantity),
+		'STRIPE_PAID_CHECKOUT_LINES_INVALID'
+	);
+	validateExclusiveShipping(session.shipping_cost, unitCount === 1 ? 800 : 0);
 
-	// Stripe 2026-06-24.dahlia inclusive-shipping reconciliation:
-	// merchandise line total = subtotal - discount + tax; shipping tax is contained in shipping gross;
-	// Session total = merchandise line totals + shipping gross, without adding shipping tax twice.
+	// Stripe 2026-06-24.dahlia all-exclusive reconciliation.
 	const lineSubtotal = safeSum(
 		lines.map((line) => line.subtotal),
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -654,7 +679,7 @@ function normalizePaidCheckout(
 				session.total_details.amount_discount,
 				'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 			),
-			lineTax,
+			providerTax,
 			session.total_details.amount_shipping
 		],
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -666,7 +691,6 @@ function normalizePaidCheckout(
 		lineSubtotal !== session.amount_subtotal ||
 		lineDiscount !== session.total_details.amount_discount ||
 		session.shipping_cost.amount_subtotal !== session.total_details.amount_shipping ||
-		session.shipping_cost.amount_total !== session.total_details.amount_shipping ||
 		providerTotal !== session.amount_total ||
 		sessionTotal !== session.amount_total
 	) {
@@ -675,14 +699,15 @@ function normalizePaidCheckout(
 
 	const { paymentIntentId } = validatePaymentIntent(session.payment_intent, {
 		customerId,
-		draftId,
+		metadata,
 		total: session.amount_total
 	});
 	return {
+		contractVersion: 2,
 		checkoutSessionId: session.id,
 		paymentIntentId,
 		customerId,
-		draftId,
+		draftId: metadata.draftId,
 		currency: 'eur',
 		paymentStatus: 'paid',
 		destinationCountry,
@@ -690,13 +715,15 @@ function normalizePaidCheckout(
 			subtotal: session.amount_subtotal,
 			discount: session.total_details.amount_discount,
 			shipping: session.shipping_cost.amount_total,
+			shippingTax: session.shipping_cost.amount_tax,
 			tax: session.total_details.amount_tax,
 			total: session.amount_total
 		},
-		lines: lines.map(({ priceId, quantity, unitAmount }) => ({
+		lines: lines.map(({ priceId, quantity, unitAmount, retailUnitAmount }) => ({
 			priceId,
 			quantity,
-			unitAmount
+			unitAmount,
+			retailUnitAmount
 		}))
 	};
 }
@@ -791,7 +818,11 @@ function compareText(left: string, right: string): number {
 
 function canonicalLines(lines: ComparableLine[]): ComparableLine[] {
 	return lines
-		.map((line) => ({ ...line }))
+		.map((line) => ({
+			priceId: line.priceId,
+			quantity: line.quantity,
+			unitAmount: line.unitAmount
+		}))
 		.sort(
 			(left, right) =>
 				compareText(left.priceId, right.priceId) ||
@@ -812,17 +843,14 @@ function isComparableLine(value: unknown): value is ComparableLine {
 
 function hasValidPaidAmountBounds(amounts: PaidCheckoutSnapshot['amounts']): boolean {
 	if (!Object.values(amounts).every(isSafeNonNegativeInteger)) return false;
-	const netSubtotal = amounts.subtotal - amounts.discount;
-	if (!Number.isSafeInteger(netSubtotal) || netSubtotal < 0) return false;
-	const beforeMerchandiseTax = netSubtotal + amounts.shipping;
-	if (!Number.isSafeInteger(beforeMerchandiseTax)) return false;
-	const merchandiseTax = amounts.total - beforeMerchandiseTax;
-	if (!Number.isSafeInteger(merchandiseTax) || merchandiseTax < 0) return false;
-	const inclusiveShippingTax = amounts.tax - merchandiseTax;
+	const merchandiseTax = BigInt(amounts.tax) - BigInt(amounts.shippingTax);
+	const expectedTotal =
+		BigInt(amounts.subtotal) - BigInt(amounts.discount) + merchandiseTax + BigInt(amounts.shipping);
 	return (
-		Number.isSafeInteger(inclusiveShippingTax) &&
-		inclusiveShippingTax >= 0 &&
-		inclusiveShippingTax <= amounts.shipping
+		amounts.discount <= amounts.subtotal &&
+		merchandiseTax >= 0n &&
+		amounts.shippingTax <= amounts.shipping &&
+		expectedTotal === BigInt(amounts.total)
 	);
 }
 
@@ -836,7 +864,8 @@ export function comparePaidCheckout(
 		!draft ||
 		!paid ||
 		draft.id !== paid.draftId ||
-		draft.contractVersion !== CHECKOUT_CONTRACT_VERSION
+		draft.contractVersion !== CHECKOUT_CONTRACT_VERSION ||
+		paid.contractVersion !== CHECKOUT_CONTRACT_VERSION
 	) {
 		comparisonFail('PAID_CHECKOUT_DRAFT_MISMATCH');
 	}
@@ -859,7 +888,9 @@ export function comparePaidCheckout(
 	if (
 		!Array.isArray(paid.lines) ||
 		!draftLines.every(isComparableLine) ||
-		!paid.lines.every(isComparableLine) ||
+		!paid.lines.every(
+			(line) => isComparableLine(line) && isSafeNonNegativeInteger(line.retailUnitAmount)
+		) ||
 		JSON.stringify(canonicalLines(draftLines)) !== JSON.stringify(canonicalLines(paid.lines))
 	) {
 		comparisonFail('PAID_CHECKOUT_LINES_MISMATCH');
@@ -869,8 +900,12 @@ export function comparePaidCheckout(
 	if (!Number.isSafeInteger(paidUnitCount) || paidUnitCount !== draft.totalUnitCount) {
 		comparisonFail('PAID_CHECKOUT_UNIT_COUNT_MISMATCH');
 	}
-	const expectedShipping = draft.shippingMode === 'paid' ? PAID_SHIPPING_AMOUNT : 0;
-	if (paid.amounts.shipping !== expectedShipping) {
+	const netShipping = paid.amounts.shipping - paid.amounts.shippingTax;
+	if (
+		!Number.isSafeInteger(netShipping) ||
+		netShipping < 0 ||
+		netShipping !== (draft.shippingMode === 'paid' ? PAID_SHIPPING_AMOUNT : 0)
+	) {
 		comparisonFail('PAID_CHECKOUT_SHIPPING_MISMATCH');
 	}
 
@@ -885,8 +920,21 @@ export function comparePaidCheckout(
 		comparisonFail('PAID_CHECKOUT_SUBTOTAL_MISMATCH');
 	}
 	if (paid.amounts.discount !== 0) comparisonFail('PAID_CHECKOUT_DISCOUNT_MISMATCH');
+	const retailTotal = paid.lines.reduce(
+		(total, line) => total + BigInt(line.retailUnitAmount) * BigInt(line.quantity),
+		0n
+	);
+	const merchandiseTax = BigInt(paid.amounts.tax) - BigInt(paid.amounts.shippingTax);
+	if (
+		paid.lines.some((line) => line.retailUnitAmount < line.unitAmount) ||
+		merchandiseTax < 0n ||
+		retailTotal !== BigInt(paid.amounts.subtotal) + merchandiseTax
+	) {
+		comparisonFail('PAID_CHECKOUT_LINES_MISMATCH');
+	}
 	if (
 		paid.paymentStatus !== 'paid' ||
+		paid.destinationCountry !== draft.destinationCountry ||
 		!allowedDestinations.has(paid.destinationCountry) ||
 		!isProviderId(paid.paymentIntentId, PAYMENT_INTENT_ID_PATTERN) ||
 		!isProviderId(paid.customerId, CUSTOMER_ID_PATTERN) ||

@@ -23,11 +23,12 @@ export type StripeCheckoutClient = {
 	};
 };
 
-function checkoutMetadata(draftId: string): Record<string, string> {
+function checkoutMetadata(draftId: string, destinationCountry: string): Record<string, string> {
 	return {
 		product_type: 'merch',
 		checkout_contract_version: String(CHECKOUT_CONTRACT_VERSION),
-		checkout_draft_id: draftId
+		checkout_draft_id: draftId,
+		destination_country: destinationCountry
 	};
 }
 
@@ -54,7 +55,7 @@ function isStripeCheckoutUrl(value: unknown): value is string {
 export function createStripeCheckoutGateway(client: StripeCheckoutClient): StripeCheckoutGateway {
 	return {
 		async createSession(input: CreateCheckoutInput) {
-			const metadata = checkoutMetadata(input.draftId);
+			const metadata = checkoutMetadata(input.draftId, input.destinationCountry);
 			const session = await client.checkout.sessions.create(
 				{
 					mode: 'payment',
@@ -72,7 +73,7 @@ export function createStripeCheckoutGateway(client: StripeCheckoutClient): Strip
 					shipping_options: [{ shipping_rate: input.shippingRateId }],
 					shipping_address_collection: {
 						allowed_countries: [
-							...input.allowedCountries
+							input.destinationCountry
 						] as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[]
 					},
 					success_url: input.successUrl,

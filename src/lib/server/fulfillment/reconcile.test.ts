@@ -17,7 +17,14 @@ function orderFixture(status: FulfillmentStatus = 'review_required'): OrderWithL
 		customerId: 'cus_test_reconcile',
 		checkoutDraftId: 'draft_reconcile',
 		currency: 'eur',
-		amounts: { subtotal: 5_598, discount: 0, shipping: 0, tax: 1_400, total: 6_998 },
+		amounts: {
+			subtotal: 5_598,
+			discount: 0,
+			shipping: 0,
+			shippingTax: 0,
+			tax: 1_400,
+			total: 6_998
+		},
 		destinationCountry: 'SE',
 		paymentStatus: 'paid',
 		fulfillmentStatus: status,
@@ -45,6 +52,7 @@ function orderFixture(status: FulfillmentStatus = 'review_required'): OrderWithL
 				},
 				quantity: 2,
 				unitAmount: 2_799,
+				retailUnitAmount: 3_499,
 				currency: 'eur'
 			}
 		]

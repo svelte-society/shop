@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type Stripe from 'stripe';
 import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
 import type { CheckoutDraft, CheckoutDraftWithLines, NewCheckoutDraft } from '$lib/domain/orders';
-import { ALLOWED_DESTINATIONS } from '$lib/domain/destinations';
+import { ALLOWED_DESTINATIONS, type MarketDestination } from '$lib/domain/destinations';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import type { CheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import {
@@ -83,6 +83,7 @@ class RecordingDraftRepository implements CheckoutDraftRepository {
 			id: 'draft_123',
 			checkoutSessionId: null,
 			contractVersion: input.contractVersion,
+			destinationCountry: input.destinationCountry,
 			currency: input.currency,
 			totalUnitCount: input.totalUnitCount,
 			shippingMode: input.shippingMode,
@@ -139,7 +140,7 @@ function serviceFixture(
 		drafts?: RecordingDraftRepository;
 		stripe?: RecordingStripeGateway;
 		alerts?: AlertService;
-		allowedCountries?: readonly string[];
+		allowedCountries?: readonly MarketDestination[];
 	} = {}
 ) {
 	const resolveInputs: Array<Array<{ priceId: string; quantity: number }>> = [];
@@ -172,13 +173,12 @@ async function expectCheckoutCode(promise: Promise<unknown>, code: string): Prom
 }
 
 describe('createCheckoutService', () => {
-	it('passes exactly the injected Styria-supported destinations to Stripe', async () => {
+	it('freezes the request-resolved destination in the draft and Stripe request', async () => {
 		const { service, stripe } = serviceFixture({ allowedCountries: ['SE', 'JP', 'TW'] });
 
-		await service.start([{ priceId: medium.priceId, quantity: 1 }]);
+		await service.start([{ priceId: medium.priceId, quantity: 1 }], 'JP');
 
-		expect(stripe.creations[0]?.allowedCountries).toEqual(['SE', 'JP', 'TW']);
-		expect(stripe.creations[0]?.allowedCountries).not.toContain('US');
+		expect(stripe.creations[0]?.destinationCountry).toBe('JP');
 	});
 
 	it.each([
@@ -190,7 +190,7 @@ describe('createCheckoutService', () => {
 	])('rejects %s before catalog, draft, or provider work', async (_label, input) => {
 		const { service, resolveInputs, drafts, stripe } = serviceFixture();
 
-		await expectCheckoutCode(service.start(input), 'CHECKOUT_REQUEST_INVALID');
+		await expectCheckoutCode(service.start(input, 'SE'), 'CHECKOUT_REQUEST_INVALID');
 
 		expect(resolveInputs).toEqual([]);
 		expect(drafts.creates).toEqual([]);
@@ -203,7 +203,7 @@ describe('createCheckoutService', () => {
 		});
 
 		await expectCheckoutCode(
-			service.start([{ priceId: 'price_retired', quantity: 1 }]),
+			service.start([{ priceId: 'price_retired', quantity: 1 }], 'SE'),
 			'CHECKOUT_VARIANT_UNAVAILABLE'
 		);
 
@@ -219,7 +219,7 @@ describe('createCheckoutService', () => {
 		});
 
 		await expectCheckoutCode(
-			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			service.start([{ priceId: medium.priceId, quantity: 1 }], 'SE'),
 			'CHECKOUT_CATALOG_UNAVAILABLE'
 		);
 		expect(alerts.enqueueAlert).toHaveBeenCalledWith('CHECKOUT_UNAVAILABLE', 'catalog', NOW);
@@ -238,7 +238,7 @@ describe('createCheckoutService', () => {
 			stripe
 		});
 
-		await expect(service.start([{ priceId: medium.priceId, quantity: 1 }])).resolves.toEqual({
+		await expect(service.start([{ priceId: medium.priceId, quantity: 1 }], 'DE')).resolves.toEqual({
 			redirectUrl: 'https://checkout.stripe.com/c/pay/cs_test_123'
 		});
 
@@ -246,6 +246,7 @@ describe('createCheckoutService', () => {
 		expect(drafts.creates).toEqual([
 			{
 				contractVersion: CHECKOUT_CONTRACT_VERSION,
+				destinationCountry: 'DE',
 				currency: 'eur',
 				totalUnitCount: 1,
 				shippingMode: 'paid',
@@ -285,10 +286,13 @@ describe('createCheckoutService', () => {
 			resolved: [resolvedLine(medium, 1), resolvedLine(large, 1)]
 		});
 
-		await service.start([
-			{ priceId: medium.priceId, quantity: 1 },
-			{ priceId: large.priceId, quantity: 1 }
-		]);
+		await service.start(
+			[
+				{ priceId: medium.priceId, quantity: 1 },
+				{ priceId: large.priceId, quantity: 1 }
+			],
+			'SE'
+		);
 
 		expect(drafts.creates[0]).toMatchObject({ totalUnitCount: 2, shippingMode: 'free' });
 		expect(stripe.creations[0]).toMatchObject({
@@ -305,10 +309,13 @@ describe('createCheckoutService', () => {
 			resolved: [resolvedLine(medium, 2)]
 		});
 
-		await service.start([
-			{ priceId: medium.priceId, quantity: 1 },
-			{ priceId: medium.priceId, quantity: 1 }
-		]);
+		await service.start(
+			[
+				{ priceId: medium.priceId, quantity: 1 },
+				{ priceId: medium.priceId, quantity: 1 }
+			],
+			'SE'
+		);
 
 		expect(resolveInputs).toEqual([[{ priceId: medium.priceId, quantity: 2 }]]);
 		expect(stripe.creations[0]).toMatchObject({
@@ -320,13 +327,13 @@ describe('createCheckoutService', () => {
 	it('uses the exact approved countries and canonical success/cancel URLs', async () => {
 		const { service, stripe } = serviceFixture();
 
-		await service.start([{ priceId: medium.priceId, quantity: 1 }]);
+		await service.start([{ priceId: medium.priceId, quantity: 1 }], 'JP');
 
 		expect(stripe.creations[0]).toEqual({
 			draftId: 'draft_123',
+			destinationCountry: 'JP',
 			lines: [{ priceId: medium.priceId, quantity: 1 }],
 			shippingRateId: 'shr_paid_10_eur',
-			allowedCountries: ALLOWED_DESTINATIONS,
 			successUrl:
 				'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
 			cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
@@ -340,7 +347,7 @@ describe('createCheckoutService', () => {
 		const { service, drafts } = serviceFixture({ stripe, alerts });
 
 		await expectCheckoutCode(
-			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			service.start([{ priceId: medium.priceId, quantity: 1 }], 'SE'),
 			'CHECKOUT_PROVIDER_UNAVAILABLE'
 		);
 
@@ -361,9 +368,12 @@ describe('createCheckoutService', () => {
 			alerts
 		});
 
-		await expectCheckoutCode(service.start({ private: 'payload' }), 'CHECKOUT_REQUEST_INVALID');
 		await expectCheckoutCode(
-			service.start([{ priceId: 'retired_price', quantity: 1 }]),
+			service.start({ private: 'payload' }, 'SE'),
+			'CHECKOUT_REQUEST_INVALID'
+		);
+		await expectCheckoutCode(
+			service.start([{ priceId: 'retired_price', quantity: 1 }], 'SE'),
 			'CHECKOUT_VARIANT_UNAVAILABLE'
 		);
 		expect(alerts.enqueueAlert).not.toHaveBeenCalled();
@@ -402,7 +412,7 @@ describe('createCheckoutService', () => {
 		});
 
 		await expectCheckoutCode(
-			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			service.start([{ priceId: medium.priceId, quantity: 1 }], 'SE'),
 			'CHECKOUT_PROVIDER_UNAVAILABLE'
 		);
 
@@ -417,7 +427,7 @@ describe('createCheckoutService', () => {
 		const { service } = serviceFixture({ drafts, stripe });
 
 		await expectCheckoutCode(
-			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			service.start([{ priceId: medium.priceId, quantity: 1 }], 'SE'),
 			'CHECKOUT_CORRELATION_FAILED'
 		);
 
@@ -432,7 +442,7 @@ describe('createCheckoutService', () => {
 		const { service } = serviceFixture({ drafts, stripe });
 
 		await expectCheckoutCode(
-			service.start([{ priceId: medium.priceId, quantity: 1 }]),
+			service.start([{ priceId: medium.priceId, quantity: 1 }], 'SE'),
 			'CHECKOUT_CORRELATION_FAILED'
 		);
 
@@ -479,12 +489,12 @@ describe('createStripeCheckoutGateway', () => {
 		await expect(
 			gateway.createSession({
 				draftId: 'draft_123',
+				destinationCountry: 'DE',
 				lines: [
 					{ priceId: medium.priceId, quantity: 1 },
 					{ priceId: large.priceId, quantity: 2 }
 				],
 				shippingRateId: 'shr_free',
-				allowedCountries: ALLOWED_DESTINATIONS,
 				successUrl:
 					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
 				cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
@@ -509,7 +519,7 @@ describe('createStripeCheckoutGateway', () => {
 				consent_collection: { terms_of_service: 'required' },
 				locale: 'auto',
 				shipping_options: [{ shipping_rate: 'shr_free' }],
-				shipping_address_collection: { allowed_countries: [...ALLOWED_DESTINATIONS] },
+				shipping_address_collection: { allowed_countries: ['DE'] },
 				success_url:
 					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
 				cancel_url: 'https://shop.sveltesociety.dev/checkout/cancel',
@@ -517,14 +527,16 @@ describe('createStripeCheckoutGateway', () => {
 				metadata: {
 					product_type: 'merch',
 					checkout_contract_version: String(CHECKOUT_CONTRACT_VERSION),
-					checkout_draft_id: 'draft_123'
+					checkout_draft_id: 'draft_123',
+					destination_country: 'DE'
 				},
 				payment_intent_data: {
 					description: 'Svelte Society merch',
 					metadata: {
 						product_type: 'merch',
 						checkout_contract_version: String(CHECKOUT_CONTRACT_VERSION),
-						checkout_draft_id: 'draft_123'
+						checkout_draft_id: 'draft_123',
+						destination_country: 'DE'
 					}
 				}
 			},
@@ -605,9 +617,9 @@ describe('createStripeCheckoutGateway', () => {
 		await expect(
 			createStripeCheckoutGateway(client).createSession({
 				draftId: 'draft_123',
+				destinationCountry: 'SE',
 				lines: [{ priceId: medium.priceId, quantity: 1 }],
 				shippingRateId: 'shr_paid_10_eur',
-				allowedCountries: ALLOWED_DESTINATIONS,
 				successUrl:
 					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
 				cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
@@ -638,9 +650,9 @@ describe('createStripeCheckoutGateway', () => {
 		await expect(
 			createStripeCheckoutGateway(client).createSession({
 				draftId: 'draft_123',
+				destinationCountry: 'SE',
 				lines: [{ priceId: medium.priceId, quantity: 1 }],
 				shippingRateId: 'shr_paid_10_eur',
-				allowedCountries: ALLOWED_DESTINATIONS,
 				successUrl:
 					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
 				cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'

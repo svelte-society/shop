@@ -102,14 +102,14 @@ export function createStripeClient(
 	const fixture = paidCheckoutProviderFixture({
 		sessionId: 'cs_test_browser_verified',
 		draftId: 'draft-test-browser-verified',
-		shippingAmount: 1_000,
+		shippingSubtotal: 800,
 		lines: [
 			{
 				id: 'li_browser_mug',
 				priceId: 'price_accessory_one',
 				quantity: 1,
-				unitAmount: 1_600,
-				taxAmount: 400
+				unitAmount: 2_000,
+				taxAmount: 500
 			}
 		]
 	});

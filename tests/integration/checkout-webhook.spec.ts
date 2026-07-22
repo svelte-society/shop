@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type Stripe from 'stripe';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { isMarketDestination, type MarketDestination } from '../../src/lib/domain/destinations';
 import { SqliteCheckoutDraftRepository } from '../../src/lib/server/db/checkout-drafts.server';
 import { closeDatabase, openDatabase } from '../../src/lib/server/db/connection.server';
 import { migrate } from '../../src/lib/server/db/migrate.server';
@@ -57,10 +58,15 @@ function refundEvent(eventId: string, paymentIntentId: string): Stripe.Event {
 	} as Stripe.Event;
 }
 
-function createDraft(quantity: number, sessionId = SESSION_ID) {
+function createDraft(
+	quantity: number,
+	sessionId = SESSION_ID,
+	destinationCountry: MarketDestination = 'SE'
+) {
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 1,
+		contractVersion: 2,
+		destinationCountry,
 		currency: 'eur',
 		totalUnitCount: quantity,
 		shippingMode: quantity === 1 ? 'paid' : 'free',
@@ -77,7 +83,7 @@ function createDraft(quantity: number, sessionId = SESSION_ID) {
 				designReference: 'society-mug-v1',
 				designPlacements: { wrap: 'https://cdn.example.com/designs/mug-wrap.svg' },
 				quantity,
-				unitAmount: 1_600,
+				unitAmount: 2_000,
 				currency: 'eur'
 			}
 		]
@@ -109,7 +115,9 @@ async function intakePaidOrder(
 	eventId: string,
 	options: PaidCheckoutFixtureOptions & { quantity: number; taxAmount: number }
 ) {
-	const draft = createDraft(options.quantity);
+	const destinationCountry = options.country ?? 'SE';
+	if (!isMarketDestination(destinationCountry)) throw new Error('TEST_DESTINATION_INVALID');
+	const draft = createDraft(options.quantity, SESSION_ID, destinationCountry);
 	const fixture = paidCheckoutProviderFixture({
 		...options,
 		sessionId: SESSION_ID,
@@ -119,7 +127,7 @@ async function intakePaidOrder(
 				id: 'li_mug',
 				priceId: 'price_accessory_one',
 				quantity: options.quantity,
-				unitAmount: 1_600,
+				unitAmount: 2_000,
 				taxAmount: options.taxAmount
 			}
 		]
@@ -142,8 +150,8 @@ describe('checkout to Stripe webhook intake', () => {
 		const { draft, order } = await intakePaidOrder('evt_test_eu_consumer', {
 			quantity: 1,
 			country: 'SE',
-			shippingAmount: 1_000,
-			taxAmount: 400
+			shippingSubtotal: 800,
+			taxAmount: 500
 		});
 		expect(order).toMatchObject({
 			checkoutSessionId: SESSION_ID,
@@ -152,7 +160,14 @@ describe('checkout to Stripe webhook intake', () => {
 			paymentStatus: 'paid',
 			fulfillmentStatus: 'pending_review',
 			destinationCountry: 'SE',
-			lines: [{ stripePriceId: 'price_accessory_one', quantity: 1, unitAmount: 1_600 }]
+			lines: [
+				{
+					stripePriceId: 'price_accessory_one',
+					quantity: 1,
+					unitAmount: 2_000,
+					retailUnitAmount: 2_500
+				}
+			]
 		});
 		expect(JSON.stringify(order)).not.toContain('fixture.customer@example.test');
 		expect(JSON.stringify(order)).not.toContain('Provider Fixture Street');
@@ -163,14 +178,14 @@ describe('checkout to Stripe webhook intake', () => {
 		const { order } = await intakePaidOrder('evt_test_asia_customer', {
 			quantity: 1,
 			country: 'JP',
-			shippingAmount: 1_000,
+			shippingSubtotal: 800,
 			shippingTaxAmount: 0,
 			taxAmount: 0
 		});
 
 		expect(order).toMatchObject({
 			destinationCountry: 'JP',
-			amounts: { shipping: 1_000, tax: 0, total: 2_600 },
+			amounts: { shipping: 800, shippingTax: 0, tax: 0, total: 2_800 },
 			paymentStatus: 'paid'
 		});
 	});
@@ -179,7 +194,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const { order } = await intakePaidOrder('evt_test_reverse_charge', {
 			quantity: 1,
 			country: 'SE',
-			shippingAmount: 1_000,
+			shippingSubtotal: 800,
 			shippingTaxAmount: 0,
 			taxExempt: 'reverse',
 			taxIds: [{ type: 'eu_vat', value: 'SE123456789001' }],
@@ -188,7 +203,7 @@ describe('checkout to Stripe webhook intake', () => {
 
 		expect(order).toMatchObject({
 			destinationCountry: 'SE',
-			amounts: { shipping: 1_000, tax: 0, total: 2_600 },
+			amounts: { shipping: 800, shippingTax: 0, tax: 0, total: 2_800 },
 			paymentStatus: 'paid'
 		});
 		expect(JSON.stringify(order)).not.toContain('SE123456789001');
@@ -198,8 +213,8 @@ describe('checkout to Stripe webhook intake', () => {
 		const { draft, order } = await intakePaidOrder('evt_test_one_unit_shipping', {
 			quantity: 1,
 			country: 'SE',
-			shippingAmount: 1_000,
-			taxAmount: 400
+			shippingSubtotal: 800,
+			taxAmount: 500
 		});
 
 		expect(draft.shippingMode).toBe('paid');
@@ -210,9 +225,9 @@ describe('checkout to Stripe webhook intake', () => {
 		const { draft, order } = await intakePaidOrder('evt_test_two_unit_shipping', {
 			quantity: 2,
 			country: 'SE',
-			shippingAmount: 0,
+			shippingSubtotal: 0,
 			shippingTaxAmount: 0,
-			taxAmount: 800
+			taxAmount: 1_000
 		});
 
 		expect(draft.shippingMode).toBe('free');
@@ -225,14 +240,14 @@ describe('checkout to Stripe webhook intake', () => {
 		const fixture = paidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
-			shippingAmount: 1_000,
+			shippingSubtotal: 800,
 			lines: [
 				{
 					id: 'li_mug',
 					priceId: 'price_accessory_one',
 					quantity: 1,
-					unitAmount: 1_600,
-					taxAmount: 400
+					unitAmount: 2_000,
+					taxAmount: 500
 				}
 			]
 		});
@@ -287,14 +302,14 @@ describe('checkout to Stripe webhook intake', () => {
 		const fixture = paidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
-			shippingAmount: 1_000,
+			shippingSubtotal: 800,
 			lines: [
 				{
 					id: 'li_mug',
 					priceId: 'price_accessory_one',
 					quantity: 1,
-					unitAmount: 1_600,
-					taxAmount: 400
+					unitAmount: 2_000,
+					taxAmount: 500
 				}
 			]
 		});
@@ -349,14 +364,14 @@ describe('checkout to Stripe webhook intake', () => {
 		const fixture = paidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
-			shippingAmount: 1_000,
+			shippingSubtotal: 800,
 			lines: [
 				{
 					id: 'li_mug',
 					priceId: 'price_accessory_one',
 					quantity: 1,
-					unitAmount: 1_600,
-					taxAmount: 400
+					unitAmount: 2_000,
+					taxAmount: 500
 				}
 			]
 		});

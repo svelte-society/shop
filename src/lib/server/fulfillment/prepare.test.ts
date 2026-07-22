@@ -36,7 +36,14 @@ function orderFixture(
 		customerId: 'cus_test_prepare',
 		checkoutDraftId: 'draft_prepare',
 		currency: 'eur',
-		amounts: { subtotal: 5_598, discount: 0, shipping: 0, tax: 1_400, total: 6_998 },
+		amounts: {
+			subtotal: 5_598,
+			discount: 0,
+			shipping: 0,
+			shippingTax: 0,
+			tax: 1_400,
+			total: 6_998
+		},
 		destinationCountry: overrides.destinationCountry ?? 'SE',
 		paymentStatus: overrides.paymentStatus ?? 'paid',
 		fulfillmentStatus: overrides.fulfillmentStatus ?? 'pending_review',
@@ -64,6 +71,7 @@ function orderFixture(
 				},
 				quantity: 2,
 				unitAmount: 2_799,
+				retailUnitAmount: 3_499,
 				currency: 'eur'
 			}
 		]
@@ -419,8 +427,8 @@ function seedRealOrder(database: ShopDatabase): void {
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at
-			) VALUES ('draft_prepare', 'cs_test_prepare', 1, 'eur', 2, 'free', ?, ?, ?)`
+				shipping_mode, created_at, expires_at, completed_at, destination_country
+			) VALUES ('draft_prepare', 'cs_test_prepare', 2, 'eur', 2, 'free', ?, ?, ?, 'SE')`
 		)
 		.run('2026-07-17T09:00:00.000Z', '2026-07-17T10:00:00.000Z', '2026-07-17T09:30:00.000Z');
 	database
@@ -428,11 +436,11 @@ function seedRealOrder(database: ShopDatabase): void {
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				updated_at
 			) VALUES (
 				'order_prepare', 'cs_test_prepare', 'pi_test_prepare', 'cus_test_prepare',
-				'draft_prepare', 'eur', 5598, 0, 0, 1400, 6998, 'SE', 'paid', 'pending_review', ?
+				'draft_prepare', 'eur', 5598, 0, 0, 0, 1400, 6998, 'SE', 'paid', 'pending_review', ?
 			)`
 		)
 		.run('2026-07-17T09:30:00.000Z');
@@ -441,12 +449,12 @@ function seedRealOrder(database: ShopDatabase): void {
 			`INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
+				quantity, unit_amount, currency, retail_unit_amount
 			) VALUES (
 				'order_prepare', 0, 'prod_community_tee', 'price_community_tee_m',
 				'Community Tee', 'M', 'SS-TEE-M', 'STYRIA-TEE-M', 'society-community-v1',
 				'{"back":"https://cdn.example.test/designs/community-back.svg","front":"https://cdn.example.test/designs/community-front.svg"}',
-				2, 2799, 'eur'
+				2, 2799, 'eur', 3499
 			)`
 		)
 		.run();

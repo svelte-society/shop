@@ -16,7 +16,14 @@ function orderFixture(): OrderWithLines {
 		customerId: 'cus_test_123',
 		checkoutDraftId: 'draft_123',
 		currency: 'eur',
-		amounts: { subtotal: 5_598, discount: 0, shipping: 1_000, tax: 1_649, total: 8_247 },
+		amounts: {
+			subtotal: 5_598,
+			discount: 0,
+			shipping: 1_000,
+			shippingTax: 250,
+			tax: 1_650,
+			total: 7_998
+		},
 		destinationCountry: 'SE',
 		paymentStatus: 'paid',
 		fulfillmentStatus: 'pending_review',
@@ -44,6 +51,7 @@ function orderFixture(): OrderWithLines {
 				},
 				quantity: 2,
 				unitAmount: 2_799,
+				retailUnitAmount: 3_499,
 				currency: 'eur'
 			}
 		]

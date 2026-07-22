@@ -1,6 +1,7 @@
 import { env } from '$env/dynamic/private';
 import { json } from '@sveltejs/kit';
 import { parsePrivateConfig, type PrivateConfig } from '$lib/config/private.server';
+import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 import { createCatalogGateway } from '$lib/server/catalog/runtime-gateway.server';
 import { createCatalogService } from '$lib/server/catalog/service.server';
 import {
@@ -12,6 +13,10 @@ import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.se
 import { checkReadiness } from '$lib/server/health/readiness.server';
 import { applicationLifecycle } from '$lib/server/app.server';
 import { requireStorefront } from '$lib/server/storefront/guard.server';
+import {
+	DESTINATION_COOKIE,
+	resolvePricingDestination
+} from '$lib/server/storefront/destination.server';
 import { createStripeCheckoutGateway } from '$lib/server/stripe/checkout.server';
 import { createStripeClient } from '$lib/server/stripe/client.server';
 import type { RequestHandler } from './$types';
@@ -83,7 +88,7 @@ export function _createCheckoutPost(
 ): RequestHandler {
 	let service: CheckoutService | undefined;
 
-	return async ({ request }) => {
+	return async ({ request, cookies }) => {
 		try {
 			try {
 				if (!(await readiness()).ready) {
@@ -134,7 +139,20 @@ export function _createCheckoutPost(
 			} catch {
 				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
 			}
-			const result = await service.start(input);
+			let destinationCountry;
+			try {
+				const allowedCountries = parseStyriaSupportedCountries(
+					runtimeEnv.STYRIA_SUPPORTED_COUNTRIES
+				);
+				destinationCountry = resolvePricingDestination({
+					cookieValue: cookies.get(DESTINATION_COOKIE),
+					cloudflareCountry: request.headers.get('cf-ipcountry'),
+					allowedCountries
+				}).countryCode;
+			} catch {
+				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
+			}
+			const result = await service.start(input, destinationCountry);
 			return json(result, { headers: { 'cache-control': 'no-store' } });
 		} catch (error) {
 			if (error instanceof CheckoutError) return checkoutProblem(error);

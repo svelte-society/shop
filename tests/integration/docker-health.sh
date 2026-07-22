@@ -628,28 +628,28 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 	const insert = database.transaction(() => {
 		database.prepare(`INSERT INTO checkout_drafts (
 			id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-			shipping_mode, created_at, expires_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-			"draft_docker_persist", "cs_docker_persist", 1, "eur", 1,
-			"paid", now, "2026-07-18T00:00:00.000Z", now
+			shipping_mode, created_at, expires_at, completed_at, destination_country
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+			"draft_docker_persist", "cs_docker_persist", 2, "eur", 1,
+			"paid", now, "2026-07-18T00:00:00.000Z", now, "SE"
 		);
 		database.prepare(`INSERT INTO orders (
 			id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 			checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-			tax_amount, total_amount, destination_country, payment_status,
+			shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status,
 			fulfillment_status, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
 			"ord_docker_persist", "cs_docker_persist", "pi_docker_persist", "cus_docker_persist",
-			"draft_docker_persist", "eur", 2500, 0, 500, 625, 3625, "SE", "paid",
+			"draft_docker_persist", "eur", 2500, 0, 500, 0, 625, 3625, "SE", "paid",
 			"pending_review", now
 		);
 		database.prepare(`INSERT INTO order_lines (
 			order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 			variant_label, sku, styria_product_number, design_reference, design_json,
-			quantity, unit_amount, currency
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+			quantity, unit_amount, currency, retail_unit_amount
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
 			"ord_docker_persist", 0, "prod_docker", "price_docker", "Svelte Society Tee",
-			"M", "TEE-M", "STYRIA-TEE", "design-docker", "{}", 1, 2500, "eur"
+			"M", "TEE-M", "STYRIA-TEE", "design-docker", "{}", 1, 2500, "eur", 3125
 		);
 	});
 	insert.immediate();

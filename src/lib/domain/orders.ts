@@ -1,4 +1,5 @@
 import type { ProductionDetails } from './production';
+import type { MarketDestination } from './destinations';
 
 export type PaymentStatus = 'paid' | 'partially_refunded' | 'refunded';
 
@@ -37,6 +38,7 @@ export type CheckoutDraftLine = NewCheckoutDraftLine & {
 
 export type NewCheckoutDraft = {
 	contractVersion: number;
+	destinationCountry: MarketDestination;
 	currency: 'eur';
 	totalUnitCount: number;
 	shippingMode: ShippingMode;
@@ -59,8 +61,16 @@ export type OrderAmounts = {
 	subtotal: number;
 	discount: number;
 	shipping: number;
+	shippingTax: number;
 	tax: number;
 	total: number;
+};
+
+export type PaidOrderLineAmount = {
+	stripePriceId: string;
+	quantity: number;
+	unitAmount: number;
+	retailUnitAmount: number;
 };
 
 export type PaidOrderInput = {
@@ -72,9 +82,10 @@ export type PaidOrderInput = {
 	amounts: OrderAmounts;
 	destinationCountry: string;
 	updatedAt: Date;
+	lines: PaidOrderLineAmount[];
 };
 
-export type Order = PaidOrderInput & {
+export type Order = Omit<PaidOrderInput, 'lines'> & {
 	id: string;
 	paymentStatus: PaymentStatus;
 	fulfillmentStatus: FulfillmentStatus;
@@ -88,6 +99,7 @@ export type Order = PaidOrderInput & {
 
 export type OrderLine = CheckoutDraftLine & {
 	orderId: string;
+	retailUnitAmount: number;
 };
 
 export type OrderWithLines = Order & {

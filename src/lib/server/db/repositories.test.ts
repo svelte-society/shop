@@ -85,7 +85,8 @@ function spawnClaimContender(
 
 function draftInput(overrides: Partial<NewCheckoutDraft> = {}): NewCheckoutDraft {
 	return {
-		contractVersion: 1,
+		contractVersion: 2,
+		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 2,
 		shippingMode: 'free',
@@ -130,11 +131,20 @@ function paidOrderInput(draftId: string, overrides: Partial<PaidOrderInput> = {}
 			subtotal: 4_000,
 			discount: 0,
 			shipping: 0,
+			shippingTax: 0,
 			tax: 1_000,
 			total: 5_000
 		},
 		destinationCountry: 'SE',
 		updatedAt: now,
+		lines: [
+			{
+				stripePriceId: 'price_tee_m',
+				quantity: 2,
+				unitAmount: 2_000,
+				retailUnitAmount: 2_500
+			}
+		],
 		...overrides
 	};
 }
@@ -219,6 +229,18 @@ describe('SqliteCheckoutDraftRepository', () => {
 		).toBe(
 			'{"back":"https://cdn.example.com/designs/back.svg","front":"https://cdn.example.com/designs/front.svg"}'
 		);
+	});
+
+	it('requires contract v2 and a valid market destination when creating or mapping drafts', () => {
+		expect(() => drafts.create(draftInput({ contractVersion: 1 }))).toThrowError(
+			'CHECKOUT_DRAFT_INVALID'
+		);
+		const draft = drafts.create(draftInput());
+		expect(draft).toMatchObject({ contractVersion: 2, destinationCountry: 'SE' });
+		database
+			.prepare('UPDATE checkout_drafts SET destination_country = ? WHERE id = ?')
+			.run('ZZ', draft.id);
+		expect(() => drafts.findById(draft.id)).toThrowError('CHECKOUT_DRAFT_ROW_INVALID');
 	});
 
 	it('rejects malformed design JSON, unsafe cents, inconsistent totals, and invalid timestamps', () => {
@@ -473,6 +495,14 @@ describe('SqliteOrderRepository', () => {
 		const input = paidOrderInput(draft.id);
 
 		const created = orders.createPaidOrder(input);
+		expect(created.amounts).toEqual({
+			subtotal: 4_000,
+			discount: 0,
+			shipping: 0,
+			shippingTax: 0,
+			tax: 1_000,
+			total: 5_000
+		});
 		expect(orders.createPaidOrder(input)).toEqual(created);
 		expect(orders.findByCheckoutSession('cs_paid')).toEqual({ ...created, lines: [] });
 		expect(() =>
@@ -481,7 +511,8 @@ describe('SqliteOrderRepository', () => {
 		expect(() =>
 			orders.createPaidOrder({
 				...input,
-				amounts: { ...input.amounts, tax: 500, total: 4_500 }
+				amounts: { ...input.amounts, tax: 500, total: 4_500 },
+				lines: [{ ...input.lines[0], retailUnitAmount: 2_250 }]
 			})
 		).toThrowError('ORDER_DATA_CONFLICT');
 	});
@@ -501,6 +532,24 @@ describe('SqliteOrderRepository', () => {
 			orders.createPaidOrder({
 				...input,
 				amounts: { ...input.amounts, total: 4_999 }
+			})
+		).toThrowError('PAID_ORDER_INVALID');
+		expect(() =>
+			orders.createPaidOrder({
+				...input,
+				amounts: { ...input.amounts, shipping: 100, shippingTax: 101, total: 5_100 }
+			})
+		).toThrowError('PAID_ORDER_INVALID');
+		expect(() =>
+			orders.createPaidOrder({
+				...input,
+				amounts: { ...input.amounts, shippingTax: 1_001 }
+			})
+		).toThrowError('PAID_ORDER_INVALID');
+		expect(() =>
+			orders.createPaidOrder({
+				...input,
+				lines: [{ ...input.lines[0], retailUnitAmount: input.lines[0].retailUnitAmount - 1 }]
 			})
 		).toThrowError('PAID_ORDER_INVALID');
 		expect(() => orders.createPaidOrder({ ...input, destinationCountry: 'SI' })).toThrowError(
@@ -573,7 +622,8 @@ describe('SqlitePaidOrderUnitOfWork', () => {
 					orderId: order.id,
 					stripePriceId: 'price_tee_m',
 					quantity: 2,
-					unitAmount: 2_000
+					unitAmount: 2_000,
+					retailUnitAmount: 2_500
 				})
 			]
 		});
@@ -624,6 +674,21 @@ describe('SqlitePaidOrderUnitOfWork', () => {
 			stripe_payment_intent_id: 'pi_paid',
 			completed_at: '2026-07-16T08:30:00.000Z'
 		});
+	});
+
+	it('rejects a completed-event replay when its persisted paid line snapshot diverges', () => {
+		const draft = drafts.create(draftInput());
+		drafts.attachSession(draft.id, 'cs_paid');
+		stripeEvents.begin('evt_paid', 'checkout.session.completed', now);
+		const unitOfWork = new SqlitePaidOrderUnitOfWork(database);
+		const input = paidOrderInput(draft.id);
+		const event = stripeEventInput();
+		const order = unitOfWork.commitPaidOrder(input, event);
+		database
+			.prepare('UPDATE order_lines SET retail_unit_amount = ? WHERE order_id = ?')
+			.run(2_499, order.id);
+
+		expect(() => unitOfWork.commitPaidOrder(input, event)).toThrowError('ORDER_LINE_CONFLICT');
 	});
 
 	it('audits each distinct paid event while converging existing order and outbox state', () => {

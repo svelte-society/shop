@@ -31,8 +31,8 @@ function insertOrder(
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at
-			) VALUES (?, ?, 1, 'eur', 1, 'paid', ?, ?, ?)`
+				shipping_mode, created_at, expires_at, completed_at, destination_country
+			) VALUES (?, ?, 2, 'eur', 1, 'paid', ?, ?, ?, 'SE')`
 		)
 		.run(
 			draftId,
@@ -46,10 +46,10 @@ function insertOrder(
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				styria_order_id, styria_status, tracking_number, submitted_at, shipped_at,
 				updated_at, last_error_code
-			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 750, 3750, 'SE', 'paid', ?, ?, ?, ?,
+			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 0, 750, 3750, 'SE', 'paid', ?, ?, ?, ?,
 				'2026-07-17T09:00:00.000Z', ?, '2026-07-17T10:00:00.000Z', NULL)`
 		)
 		.run(
@@ -69,9 +69,9 @@ function insertOrder(
 			`INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
+				quantity, unit_amount, currency, retail_unit_amount
 			) VALUES (?, 0, ?, ?, 'Community Tee', 'M', ?, ?, ?,
-				'{"front":"https://cdn.example.test/front.svg"}', 1, 2000, 'eur')`
+				'{"front":"https://cdn.example.test/front.svg"}', 1, 2000, 'eur', 2750)`
 		)
 		.run(
 			input.id,

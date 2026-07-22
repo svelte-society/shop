@@ -52,21 +52,21 @@ async function responseBody(response: Response): Promise<unknown> {
 function routeFixture(
 	options: {
 		env?: Record<string, string | undefined>;
-		start?: (input: unknown) => ReturnType<CheckoutService['start']>;
+		start?: CheckoutService['start'];
 		readiness?: () => Promise<{ ready: boolean }>;
 	} = {}
 ) {
-	const starts: unknown[] = [];
+	const starts: Array<{ input: unknown; destinationCountry: string }> = [];
 	let serviceFactories = 0;
 	const handler = _createCheckoutPost(
 		options.env ?? BASE_ENV,
 		() => {
 			serviceFactories += 1;
 			return {
-				async start(input) {
-					starts.push(structuredClone(input));
+				async start(input, destinationCountry) {
+					starts.push({ input: structuredClone(input), destinationCountry });
 					return options.start
-						? options.start(input)
+						? options.start(input, destinationCountry)
 						: { redirectUrl: 'https://checkout.stripe.com/c/pay/cs_test_route' };
 				}
 			};
@@ -83,11 +83,33 @@ function routeFixture(
 	};
 }
 
-async function invoke(handler: ReturnType<typeof _createCheckoutPost>, checkoutRequest: Request) {
-	return handler({ request: checkoutRequest } as Parameters<typeof handler>[0]);
+async function invoke(
+	handler: ReturnType<typeof _createCheckoutPost>,
+	checkoutRequest: Request,
+	cookieValue?: string
+) {
+	return handler({
+		request: checkoutRequest,
+		cookies: { get: () => cookieValue }
+	} as unknown as Parameters<typeof handler>[0]);
 }
 
 describe('POST /checkout', () => {
+	it('resolves the frozen destination from request state without trusting checkout JSON', async () => {
+		const fixture = routeFixture();
+		const checkoutRequest = request();
+		checkoutRequest.headers.set('cf-ipcountry', 'JP');
+
+		const response = await invoke(fixture.handler, checkoutRequest, 'TW');
+
+		expect(response.status).toBe(200);
+		expect(fixture.starts).toEqual([
+			{
+				input: [{ priceId: 'price_tee_m', quantity: 1 }],
+				destinationCountry: 'TW'
+			}
+		]);
+	});
 	it('preserves the opening-soon storefront guard when readiness is green', async () => {
 		const fixture = routeFixture({
 			env: {
@@ -378,7 +400,7 @@ describe('POST /checkout', () => {
 		await expect(responseBody(response)).resolves.toEqual({
 			redirectUrl: 'https://checkout.stripe.com/c/pay/cs_test_route'
 		});
-		expect(fixture.starts).toEqual([input]);
+		expect(fixture.starts).toEqual([{ input, destinationCountry: 'SE' }]);
 	});
 
 	it.each([

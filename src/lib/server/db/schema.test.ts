@@ -36,7 +36,8 @@ const expectedColumns = {
 		column('shipping_mode', 'TEXT', 1),
 		column('created_at', 'TEXT', 1),
 		column('expires_at', 'TEXT', 1),
-		column('completed_at', 'TEXT', 0)
+		column('completed_at', 'TEXT', 0),
+		column('destination_country', 'TEXT', 0)
 	],
 	checkout_draft_lines: [
 		column('draft_id', 'TEXT', 1, null, 1),
@@ -76,7 +77,8 @@ const expectedColumns = {
 		column('shipped_at', 'TEXT', 0),
 		column('updated_at', 'TEXT', 1),
 		column('last_error_code', 'TEXT', 0),
-		column('styria_last_checked_at', 'TEXT', 0)
+		column('styria_last_checked_at', 'TEXT', 0),
+		column('shipping_tax_amount', 'INTEGER', 1, '0')
 	],
 	stripe_events: [
 		column('stripe_event_id', 'TEXT', 0, null, 1),
@@ -102,7 +104,8 @@ const expectedColumns = {
 		column('quantity', 'INTEGER', 1),
 		column('unit_amount', 'INTEGER', 1),
 		column('currency', 'TEXT', 1),
-		column('production_json', 'TEXT', 1, '\'{"mockupPlacements":{},"threadColors":{}}\'')
+		column('production_json', 'TEXT', 1, '\'{"mockupPlacements":{},"threadColors":{}}\''),
+		column('retail_unit_amount', 'INTEGER', 1, '0')
 	],
 	order_events: [
 		column('id', 'INTEGER', 0, null, 1),
@@ -279,6 +282,7 @@ const expectedForeignKeys = {
 type DraftInput = {
 	id: string;
 	sessionId: string | null;
+	destinationCountry: string | null;
 	currency: string;
 	totalUnitCount: number;
 	shippingMode: string;
@@ -288,6 +292,7 @@ function insertDraft(database: ShopDatabase, overrides: Partial<DraftInput> = {}
 	const input: DraftInput = {
 		id: 'draft_default',
 		sessionId: 'cs_draft_default',
+		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
@@ -297,18 +302,19 @@ function insertDraft(database: ShopDatabase, overrides: Partial<DraftInput> = {}
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency,
-				total_unit_count, shipping_mode, created_at, expires_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+				total_unit_count, shipping_mode, created_at, expires_at, destination_country
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
 			input.sessionId,
-			1,
+			2,
 			input.currency,
 			input.totalUnitCount,
 			input.shippingMode,
 			'2026-07-16T00:00:00.000Z',
-			'2026-07-16T01:00:00.000Z'
+			'2026-07-16T01:00:00.000Z',
+			input.destinationCountry
 		);
 }
 
@@ -363,6 +369,7 @@ type OrderInput = {
 	paymentStatus: string;
 	fulfillmentStatus: string;
 	styriaOrderId: string | null;
+	shippingTax: number;
 };
 
 function insertOrder(database: ShopDatabase, overrides: Partial<OrderInput> = {}): void {
@@ -376,6 +383,7 @@ function insertOrder(database: ShopDatabase, overrides: Partial<OrderInput> = {}
 		paymentStatus: 'paid',
 		fulfillmentStatus: 'pending_review',
 		styriaOrderId: null,
+		shippingTax: 200,
 		...overrides
 	};
 	database
@@ -383,9 +391,9 @@ function insertOrder(database: ShopDatabase, overrides: Partial<OrderInput> = {}
 			`INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				styria_order_id, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
@@ -397,6 +405,7 @@ function insertOrder(database: ShopDatabase, overrides: Partial<OrderInput> = {}
 			2_000,
 			0,
 			1_000,
+			input.shippingTax,
 			500,
 			3_500,
 			'SE',
@@ -407,14 +416,19 @@ function insertOrder(database: ShopDatabase, overrides: Partial<OrderInput> = {}
 		);
 }
 
-function insertOrderLine(database: ShopDatabase, orderId: string, currency = 'eur'): void {
+function insertOrderLine(
+	database: ShopDatabase,
+	orderId: string,
+	currency = 'eur',
+	retailUnitAmount = 2_500
+): void {
 	database
 		.prepare(
 			`INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				quantity, unit_amount, currency
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				quantity, unit_amount, currency, retail_unit_amount
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			orderId,
@@ -429,7 +443,8 @@ function insertOrderLine(database: ShopDatabase, orderId: string, currency = 'eu
 			'{}',
 			1,
 			2_000,
-			currency
+			currency,
+			retailUnitAmount
 		);
 }
 
@@ -596,6 +611,25 @@ describe('initial schema CHECK constraints', () => {
 		).toThrow(/CHECK constraint failed/);
 	});
 
+	it('requires a valid uppercase market destination on every new or updated checkout draft', () => {
+		expect(() => insertDraft(database, { destinationCountry: null })).toThrow(
+			/checkout destination required/
+		);
+		expect(() => insertDraft(database, { destinationCountry: 'se' })).toThrow(
+			/CHECK constraint failed/
+		);
+		expect(() => insertDraft(database, { destinationCountry: 'SWE' })).toThrow(
+			/CHECK constraint failed/
+		);
+		insertDraft(database);
+		expect(() =>
+			database.prepare('UPDATE checkout_drafts SET destination_country = NULL').run()
+		).toThrow(/checkout destination required/);
+		expect(() =>
+			database.prepare("UPDATE checkout_drafts SET destination_country = 'se'").run()
+		).toThrow(/CHECK constraint failed/);
+	});
+
 	it('enforces draft-line quantity, unit amount, and currency on inserts and updates', () => {
 		insertDraft(database);
 		expect(() => insertDraftLine(database, { quantity: 0 })).toThrow(/CHECK constraint failed/);
@@ -640,6 +674,22 @@ describe('initial schema CHECK constraints', () => {
 			});
 		}
 		expect(() => database.prepare("UPDATE orders SET payment_status = 'unpaid'").run()).toThrow(
+			/CHECK constraint failed/
+		);
+	});
+
+	it('enforces non-negative explicit shipping tax and retail unit snapshots', () => {
+		insertDraft(database);
+		expect(() => insertOrder(database, { shippingTax: -1 })).toThrow(/CHECK constraint failed/);
+		insertOrder(database);
+		expect(() => insertOrderLine(database, 'order_default', 'eur', -1)).toThrow(
+			/CHECK constraint failed/
+		);
+		insertOrderLine(database, 'order_default');
+		expect(() => database.prepare('UPDATE orders SET shipping_tax_amount = -1').run()).toThrow(
+			/CHECK constraint failed/
+		);
+		expect(() => database.prepare('UPDATE order_lines SET retail_unit_amount = -1').run()).toThrow(
 			/CHECK constraint failed/
 		);
 	});

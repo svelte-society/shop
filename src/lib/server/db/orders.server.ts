@@ -7,6 +7,7 @@ import type {
 	OrderLine,
 	OrderWithLines,
 	PaidOrderInput,
+	PaidOrderLineAmount,
 	PaymentStatus,
 	StripeEventInput
 } from '$lib/domain/orders';
@@ -38,6 +39,7 @@ type OrderRow = {
 	subtotal_amount: unknown;
 	discount_amount: unknown;
 	shipping_amount: unknown;
+	shipping_tax_amount: unknown;
 	tax_amount: unknown;
 	total_amount: unknown;
 	destination_country: unknown;
@@ -66,6 +68,7 @@ type OrderLineRow = {
 	production_json: unknown;
 	quantity: unknown;
 	unit_amount: unknown;
+	retail_unit_amount: unknown;
 	currency: unknown;
 };
 
@@ -163,11 +166,12 @@ function designFromJson(value: unknown): Record<string, string> {
 }
 
 function validateAmounts(input: PaidOrderInput): void {
-	const { subtotal, discount, shipping, tax, total } = input.amounts;
+	const { subtotal, discount, shipping, shippingTax, tax, total } = input.amounts;
 	if (
 		!isCents(subtotal) ||
 		!isCents(discount) ||
 		!isCents(shipping) ||
+		!isCents(shippingTax) ||
 		!isCents(tax) ||
 		!isCents(total) ||
 		discount > subtotal
@@ -175,27 +179,52 @@ function validateAmounts(input: PaidOrderInput): void {
 		fail('PAID_ORDER_INVALID');
 	}
 
-	if (!hasValidInclusiveShippingAmounts({ subtotal, discount, shipping, tax, total })) {
+	const merchandiseTax = BigInt(tax) - BigInt(shippingTax);
+	const expectedTotal = BigInt(subtotal) - BigInt(discount) + merchandiseTax + BigInt(shipping);
+	if (merchandiseTax < 0n || shippingTax > shipping || expectedTotal !== BigInt(total)) {
 		fail('PAID_ORDER_INVALID');
 	}
 }
 
-function hasValidInclusiveShippingAmounts(amounts: {
-	subtotal: number;
-	discount: number;
-	shipping: number;
-	tax: number;
-	total: number;
-}): boolean {
-	const netSubtotal = BigInt(amounts.subtotal) - BigInt(amounts.discount);
-	const beforeMerchandiseTax = netSubtotal + BigInt(amounts.shipping);
-	const merchandiseTax = BigInt(amounts.total) - beforeMerchandiseTax;
-	const inclusiveShippingTax = BigInt(amounts.tax) - merchandiseTax;
-	return (
-		merchandiseTax >= 0n &&
-		inclusiveShippingTax >= 0n &&
-		inclusiveShippingTax <= BigInt(amounts.shipping)
+function validatePaidOrderLines(input: PaidOrderInput): void {
+	const { lines, amounts } = input;
+	if (
+		!Array.isArray(lines) ||
+		lines.length < 1 ||
+		lines.length > 10 ||
+		lines.some(
+			(line) =>
+				!line ||
+				!isNonEmptyString(line.stripePriceId) ||
+				!Number.isSafeInteger(line.quantity) ||
+				line.quantity < 1 ||
+				line.quantity > 20 ||
+				!isCents(line.unitAmount) ||
+				!isCents(line.retailUnitAmount) ||
+				line.retailUnitAmount < line.unitAmount
+		) ||
+		new Set(lines.map((line) => line.stripePriceId)).size !== lines.length ||
+		lines.reduce((total, line) => total + line.quantity, 0) > 20 ||
+		amounts.discount !== 0
+	) {
+		fail('PAID_ORDER_INVALID');
+	}
+
+	const lineSubtotal = lines.reduce(
+		(total, line) => total + BigInt(line.unitAmount) * BigInt(line.quantity),
+		0n
 	);
+	const lineRetailTotal = lines.reduce(
+		(total, line) => total + BigInt(line.retailUnitAmount) * BigInt(line.quantity),
+		0n
+	);
+	const merchandiseTax = BigInt(amounts.tax) - BigInt(amounts.shippingTax);
+	if (
+		lineSubtotal !== BigInt(amounts.subtotal) ||
+		lineRetailTotal !== BigInt(amounts.subtotal) + merchandiseTax
+	) {
+		fail('PAID_ORDER_INVALID');
+	}
 }
 
 function validatePaidOrder(input: PaidOrderInput): string {
@@ -212,6 +241,7 @@ function validatePaidOrder(input: PaidOrderInput): string {
 		fail('PAID_ORDER_INVALID');
 	}
 	validateAmounts(input);
+	validatePaidOrderLines(input);
 	return isoTimestamp(input.updatedAt, 'PAID_ORDER_INVALID');
 }
 
@@ -226,6 +256,7 @@ function mapOrder(row: OrderRow): Order {
 		!isCents(row.subtotal_amount) ||
 		!isCents(row.discount_amount) ||
 		!isCents(row.shipping_amount) ||
+		!isCents(row.shipping_tax_amount) ||
 		!isCents(row.tax_amount) ||
 		!isCents(row.total_amount) ||
 		!isNonEmptyString(row.destination_country) ||
@@ -245,10 +276,19 @@ function mapOrder(row: OrderRow): Order {
 		subtotal: row.subtotal_amount,
 		discount: row.discount_amount,
 		shipping: row.shipping_amount,
+		shippingTax: row.shipping_tax_amount,
 		tax: row.tax_amount,
 		total: row.total_amount
 	};
-	if (amounts.discount > amounts.subtotal || !hasValidInclusiveShippingAmounts(amounts)) {
+	const merchandiseTax = BigInt(amounts.tax) - BigInt(amounts.shippingTax);
+	const expectedTotal =
+		BigInt(amounts.subtotal) - BigInt(amounts.discount) + merchandiseTax + BigInt(amounts.shipping);
+	if (
+		amounts.discount > amounts.subtotal ||
+		merchandiseTax < 0n ||
+		amounts.shippingTax > amounts.shipping ||
+		expectedTotal !== BigInt(amounts.total)
+	) {
 		fail('ORDER_ROW_INVALID');
 	}
 
@@ -292,6 +332,7 @@ function mapOrderLine(
 		(row.quantity as number) < 1 ||
 		(row.quantity as number) > 20 ||
 		!isCents(row.unit_amount) ||
+		!isCents(row.retail_unit_amount) ||
 		row.currency !== 'eur'
 	) {
 		fail('ORDER_LINE_ROW_INVALID');
@@ -312,6 +353,7 @@ function mapOrderLine(
 			productionDetailsFromJson(row.production_json) ?? fail('ORDER_LINE_ROW_INVALID'),
 		quantity: row.quantity as number,
 		unitAmount: row.unit_amount,
+		retailUnitAmount: row.retail_unit_amount,
 		currency: 'eur'
 	};
 }
@@ -324,6 +366,7 @@ function commercialDataMatches(order: Order, input: PaidOrderInput): boolean {
 		order.amounts.subtotal === input.amounts.subtotal &&
 		order.amounts.discount === input.amounts.discount &&
 		order.amounts.shipping === input.amounts.shipping &&
+		order.amounts.shippingTax === input.amounts.shippingTax &&
 		order.amounts.tax === input.amounts.tax &&
 		order.amounts.total === input.amounts.total
 	);
@@ -337,7 +380,11 @@ function providerIdentityMatches(order: Order, input: PaidOrderInput): boolean {
 	);
 }
 
-function lineMatchesDraft(orderLine: OrderLine, draftLine: CheckoutDraftLine): boolean {
+function lineMatchesDraft(
+	orderLine: OrderLine,
+	draftLine: CheckoutDraftLine,
+	paidLine: PaidOrderLineAmount
+): boolean {
 	return (
 		orderLine.lineIndex === draftLine.lineIndex &&
 		orderLine.stripeProductId === draftLine.stripeProductId &&
@@ -350,8 +397,28 @@ function lineMatchesDraft(orderLine: OrderLine, draftLine: CheckoutDraftLine): b
 		JSON.stringify(orderLine.designPlacements) === JSON.stringify(draftLine.designPlacements) &&
 		JSON.stringify(orderLine.productionDetails) === JSON.stringify(draftLine.productionDetails) &&
 		orderLine.quantity === draftLine.quantity &&
-		orderLine.unitAmount === draftLine.unitAmount &&
+		paidLine.stripePriceId === draftLine.stripePriceId &&
+		paidLine.quantity === draftLine.quantity &&
+		paidLine.unitAmount === draftLine.unitAmount &&
+		orderLine.unitAmount === paidLine.unitAmount &&
+		orderLine.retailUnitAmount === paidLine.retailUnitAmount &&
 		orderLine.currency === draftLine.currency
+	);
+}
+
+function paidLinesMatchDraft(
+	orderLines: OrderLine[],
+	draftLines: CheckoutDraftLine[],
+	paidLines: PaidOrderLineAmount[]
+): boolean {
+	const paidLinesByPrice = new Map(paidLines.map((line) => [line.stripePriceId, line]));
+	return (
+		orderLines.length === draftLines.length &&
+		paidLinesByPrice.size === draftLines.length &&
+		orderLines.every((line, index) => {
+			const paidLine = paidLinesByPrice.get(draftLines[index].stripePriceId);
+			return paidLine !== undefined && lineMatchesDraft(line, draftLines[index], paidLine);
+		})
 	);
 }
 
@@ -373,10 +440,11 @@ export class SqliteOrderRepository implements OrderRepository {
 			INSERT INTO orders (
 				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
-				tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
+				shipping_tax_amount, tax_amount, total_amount, destination_country,
+				payment_status, fulfillment_status,
 				styria_order_id, styria_status, tracking_number, submitted_at, shipped_at,
 				updated_at, last_error_code
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', 'pending_review',
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', 'pending_review',
 				NULL, NULL, NULL, NULL, NULL, ?, NULL)
 		`);
 		const create = this.database.transaction((): Order => {
@@ -414,6 +482,7 @@ export class SqliteOrderRepository implements OrderRepository {
 				input.amounts.subtotal,
 				input.amounts.discount,
 				input.amounts.shipping,
+				input.amounts.shippingTax,
 				input.amounts.tax,
 				input.amounts.total,
 				input.destinationCountry,
@@ -554,16 +623,16 @@ export class SqlitePaidOrderUnitOfWork implements PaidOrderUnitOfWork {
 		const findOrderLines = this.database.prepare(
 			'SELECT * FROM order_lines WHERE order_id = ? ORDER BY line_index'
 		);
-		const copyDraftLines = this.database.prepare(`
+		const copyDraftLine = this.database.prepare(`
 			INSERT INTO order_lines (
 				order_id, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				production_json, quantity, unit_amount, currency
+				production_json, quantity, unit_amount, currency, retail_unit_amount
 			)
 			SELECT ?, line_index, stripe_product_id, stripe_price_id, product_name,
 				variant_label, sku, styria_product_number, design_reference, design_json,
-				production_json, quantity, unit_amount, currency
-			FROM checkout_draft_lines WHERE draft_id = ? ORDER BY line_index
+				production_json, quantity, ?, currency, ?
+			FROM checkout_draft_lines WHERE draft_id = ? AND line_index = ?
 		`);
 		const findAlert = this.database.prepare(`
 			SELECT kind, order_id FROM outbox_jobs WHERE idempotency_key = ?
@@ -582,7 +651,13 @@ export class SqlitePaidOrderUnitOfWork implements PaidOrderUnitOfWork {
 				}
 				const existing = this.orders.findByCheckoutSession(input.checkoutSessionId);
 				if (!existing) fail('ORDER_NOT_FOUND');
-				return this.orders.createPaidOrder(input);
+				const draft = this.drafts.findById(input.checkoutDraftId);
+				if (!draft) fail('ORDER_DRAFT_NOT_FOUND');
+				const order = this.orders.createPaidOrder(input);
+				if (!paidLinesMatchDraft(existing.lines, draft.lines, input.lines)) {
+					fail('ORDER_LINE_CONFLICT');
+				}
+				return order;
 			}
 			if (eventState.processing_status !== 'processing') fail('STRIPE_EVENT_STATE_CONFLICT');
 
@@ -594,16 +669,33 @@ export class SqlitePaidOrderUnitOfWork implements PaidOrderUnitOfWork {
 			const existingBeforeCommit = this.orders.findByCheckoutSession(input.checkoutSessionId);
 			const order = this.orders.createPaidOrder(input);
 			const lineRows = findOrderLines.all(order.id) as OrderLineRow[];
+			const paidLinesByPrice = new Map(input.lines.map((line) => [line.stripePriceId, line]));
 			if (lineRows.length === 0) {
-				if (copyDraftLines.run(order.id, draft.id).changes !== draft.lines.length) {
-					fail('ORDER_LINE_COPY_FAILED');
+				for (const draftLine of draft.lines) {
+					const paidLine = paidLinesByPrice.get(draftLine.stripePriceId);
+					if (
+						!paidLine ||
+						paidLine.quantity !== draftLine.quantity ||
+						paidLine.unitAmount !== draftLine.unitAmount
+					) {
+						fail('ORDER_LINE_CONFLICT');
+					}
+					if (
+						copyDraftLine.run(
+							order.id,
+							paidLine.unitAmount,
+							paidLine.retailUnitAmount,
+							draft.id,
+							draftLine.lineIndex
+						).changes !== 1
+					) {
+						fail('ORDER_LINE_COPY_FAILED');
+					}
 				}
+				if (paidLinesByPrice.size !== draft.lines.length) fail('ORDER_LINE_CONFLICT');
 			} else {
 				const orderLines = lineRows.map((line, index) => mapOrderLine(line, order.id, index));
-				if (
-					orderLines.length !== draft.lines.length ||
-					!orderLines.every((line, index) => lineMatchesDraft(line, draft.lines[index]))
-				) {
+				if (!paidLinesMatchDraft(orderLines, draft.lines, input.lines)) {
 					fail('ORDER_LINE_CONFLICT');
 				}
 			}

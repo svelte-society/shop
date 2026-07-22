@@ -67,7 +67,14 @@ function orderFixture(overrides: Partial<OrderWithLinesAndEvents> = {}): OrderWi
 		customerId: 'cus_test_2042',
 		checkoutDraftId: 'draft_2042',
 		currency: 'eur',
-		amounts: { subtotal: 5_598, discount: 0, shipping: 0, tax: 1_400, total: 6_998 },
+		amounts: {
+			subtotal: 5_598,
+			discount: 0,
+			shipping: 0,
+			shippingTax: 0,
+			tax: 1_400,
+			total: 6_998
+		},
 		destinationCountry: 'SE',
 		paymentStatus: 'paid',
 		fulfillmentStatus: 'pending_review',
@@ -96,6 +103,7 @@ function orderFixture(overrides: Partial<OrderWithLinesAndEvents> = {}): OrderWi
 				},
 				quantity: 2,
 				unitAmount: 2_799,
+				retailUnitAmount: 3_499,
 				currency: 'eur'
 			}
 		]
@@ -1223,13 +1231,22 @@ describe('fulfillment MCP protocol', () => {
 			payment: {
 				status: 'paid',
 				currency: 'eur',
-				amounts: { subtotal: 5_598, discount: 0, shipping: 0, tax: 1_400, total: 6_998 }
+				amounts: {
+					subtotal: 5_598,
+					discount: 0,
+					shipping: 0,
+					shipping_tax: 0,
+					tax: 1_400,
+					total: 6_998
+				}
 			},
 			fulfillment: { status: 'pending_review' },
 			lines: [
 				{
 					product_name: 'Community Tee',
 					quantity: 2,
+					unit_amount: 2_799,
+					retail_unit_amount: 3_499,
 					production_details: {
 						mockup_placements: {
 							front: 'https://cdn.example.test/community-front-mockup.png'
