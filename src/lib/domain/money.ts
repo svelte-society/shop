@@ -1,12 +1,3 @@
-export function swedishReferenceGrossCents(netCents: number): number {
-	if (!Number.isSafeInteger(netCents) || netCents < 0) throw new Error('INVALID_CENTS');
-
-	const grossCents = (BigInt(netCents) * 125n + 50n) / 100n;
-
-	if (grossCents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('INVALID_CENTS');
-	return Number(grossCents);
-}
-
 export function formatEur(cents: number, locale?: string): string {
 	if (!Number.isSafeInteger(cents) || cents < 0) throw new Error('INVALID_CENTS');
 

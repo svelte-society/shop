@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+	ASIA_DESTINATIONS,
+	EU_DESTINATIONS,
 	INITIAL_STYRIA_SUPPORTED_DESTINATIONS,
 	isMarketDestination,
 	parseStyriaSupportedCountries
@@ -82,6 +84,11 @@ const expectedDestinations = [
 ] as const;
 
 describe('Styria-supported destinations', () => {
+	it('exports the reviewed regional lists', () => {
+		expect(EU_DESTINATIONS).toEqual(expectedDestinations.slice(0, 26));
+		expect(ASIA_DESTINATIONS).toEqual(expectedDestinations.slice(26));
+	});
+
 	it('freezes the exact reviewed initial allowlist without Slovenia or the United States', () => {
 		expect(INITIAL_STYRIA_SUPPORTED_DESTINATIONS).toEqual(expectedDestinations);
 		expect(Object.isFrozen(INITIAL_STYRIA_SUPPORTED_DESTINATIONS)).toBe(true);

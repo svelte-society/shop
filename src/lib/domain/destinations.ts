@@ -1,4 +1,4 @@
-const EU_DESTINATIONS = [
+export const EU_DESTINATIONS = [
 	'AT',
 	'BE',
 	'BG',
@@ -27,7 +27,7 @@ const EU_DESTINATIONS = [
 	'SE'
 ] as const;
 
-const ASIA_DESTINATIONS = [
+export const ASIA_DESTINATIONS = [
 	'AE',
 	'AF',
 	'AM',
