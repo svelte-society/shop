@@ -15,7 +15,7 @@
 	let pending = $state(false);
 	let announcement = $state('');
 	let error = $state('');
-	let hydrated = $state(false);
+	let hydrated = $derived(false);
 	let filtered = $derived(
 		destinations.filter((option) =>
 			option.displayName.toLowerCase().includes(query.trim().toLowerCase())
@@ -162,20 +162,22 @@
 					</fieldset>
 				</div>
 
-				{#if error}
-					<p class="form-error" role="alert">{error}</p>
-				{/if}
-
 				<input type="hidden" name="returnTo" value={returnTo} aria-label="Return to" />
 
-				<footer class="dialog-actions">
-					<button type="button" class="cancel" onclick={() => dialog?.close()} disabled={pending}>
-						Cancel
-					</button>
-					<button type="submit" class="update" disabled={pending}>
-						{pending ? 'Updating…' : 'Update country'}
-					</button>
-				</footer>
+				<div class="dialog-footer">
+					{#if error}
+						<p class="form-error" role="alert">{error}</p>
+					{/if}
+
+					<footer class="dialog-actions">
+						<button type="button" class="cancel" onclick={() => dialog?.close()} disabled={pending}>
+							Cancel
+						</button>
+						<button type="submit" class="update" disabled={pending}>
+							{pending ? 'Updating…' : 'Update country'}
+						</button>
+					</footer>
+				</div>
 			</form>
 		</dialog>
 	{/if}
@@ -226,9 +228,11 @@
 		position: fixed;
 		inset: 7.75rem 1rem auto;
 		width: min(32rem, calc(100% - 2rem));
+		height: min(42rem, calc(100dvh - 8.75rem));
 		max-width: 32rem;
 		max-height: calc(100dvh - 8.75rem);
 		margin: 0 auto;
+		overflow: hidden;
 		padding: 0;
 		border: 1px solid var(--color-border);
 		border-radius: 0.9rem;
@@ -243,10 +247,13 @@
 
 	form {
 		display: grid;
-		max-height: inherit;
-		gap: 1.1rem;
-		overflow: auto;
-		padding: 1.35rem;
+		grid-template-rows: auto auto minmax(0, 1fr) auto;
+		height: 100%;
+		overflow: hidden;
+	}
+
+	.dialog-heading {
+		padding: 1.35rem 1.35rem 0;
 	}
 
 	.dialog-heading p,
@@ -279,6 +286,7 @@
 	.search-field {
 		display: grid;
 		gap: 0.35rem;
+		padding: 1rem 1.35rem 0;
 		font-size: 0.82rem;
 		font-weight: 750;
 	}
@@ -294,7 +302,14 @@
 
 	.destination-groups {
 		display: grid;
+		min-height: 0;
+		align-content: start;
 		gap: 1rem;
+		margin-top: 1rem;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding: 0 1.35rem 1rem;
+		scrollbar-gutter: stable;
 	}
 
 	fieldset {
@@ -335,7 +350,7 @@
 	}
 
 	.form-error {
-		margin: 0;
+		margin: 0 0 0.75rem;
 		border-left: 0.25rem solid var(--color-svelte-text);
 		padding: 0.55rem 0.7rem;
 		background: var(--color-svelte-50);
@@ -382,7 +397,13 @@
 		display: grid;
 		grid-template-columns: 1fr 1.4fr;
 		gap: 0.65rem;
-		padding-top: 0.1rem;
+	}
+
+	.dialog-footer {
+		border-top: 1px solid var(--color-border);
+		padding: 0.9rem 1.35rem 1.35rem;
+		background: var(--color-paper);
+		box-shadow: 0 -0.75rem 1.5rem color-mix(in oklch, var(--color-ink) 5%, transparent);
 	}
 
 	.dialog-actions button {
@@ -422,15 +443,30 @@
 		dialog {
 			inset: auto 0 0;
 			width: 100%;
+			height: min(88dvh, 44rem);
 			max-width: none;
-			max-height: min(82dvh, 42rem);
+			max-height: calc(100dvh - 0.5rem);
 			border-bottom: 0;
 			border-radius: 0.9rem 0.9rem 0 0;
 		}
 
-		form {
-			padding: 1.15rem max(1rem, env(safe-area-inset-right))
-				max(1.15rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+		.dialog-heading {
+			padding: 1.15rem max(1rem, env(safe-area-inset-right)) 0 max(1rem, env(safe-area-inset-left));
+		}
+
+		.search-field {
+			padding: 0.9rem max(1rem, env(safe-area-inset-right)) 0 max(1rem, env(safe-area-inset-left));
+		}
+
+		.destination-groups {
+			padding-right: max(1rem, env(safe-area-inset-right));
+			padding-bottom: 0.9rem;
+			padding-left: max(1rem, env(safe-area-inset-left));
+		}
+
+		.dialog-footer {
+			padding: 0.8rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom))
+				max(1rem, env(safe-area-inset-left));
 		}
 	}
 

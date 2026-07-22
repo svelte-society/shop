@@ -23,7 +23,6 @@
 
 		<nav aria-label="Primary navigation">
 			<a href={resolve('/#collection')}>Collection</a>
-			<a href="https://sveltesociety.dev/">Svelte Society</a>
 			<DestinationPicker {destination} {destinations} {returnTo} />
 			<a
 				class="cart-link"

@@ -29,6 +29,37 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 	expect(hasHorizontalOverflow).toBe(false);
 });
 
+test('country picker keeps its actions visible while only the country list scrolls', async ({
+	page
+}) => {
+	await page.goto('/');
+	await expect(page.getByRole('link', { name: 'Svelte Society' })).toHaveCount(0);
+	await page.getByRole('button', { name: 'Choose delivery country, currently Sweden' }).click();
+
+	const dialog = page.getByRole('dialog');
+	const countryList = dialog.locator('.destination-groups');
+	const actions = dialog.locator('.dialog-actions');
+	await expect(dialog).toBeVisible();
+	await expect(actions.getByRole('button', { name: 'Cancel' })).toBeVisible();
+	await expect(actions.getByRole('button', { name: 'Update country' })).toBeVisible();
+	expect(await countryList.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+		true
+	);
+
+	const actionBoxBefore = await actions.boundingBox();
+	await countryList.evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+	const actionBoxAfter = await actions.boundingBox();
+
+	expect(actionBoxBefore).not.toBeNull();
+	expect(actionBoxAfter).not.toBeNull();
+	expect(actionBoxAfter?.y).toBe(actionBoxBefore?.y);
+	expect((actionBoxAfter?.y ?? 0) + (actionBoxAfter?.height ?? 0)).toBeLessThanOrEqual(
+		page.viewportSize()?.height ?? 0
+	);
+});
+
 test('apparel requires a size before adding the selected variant', async ({ page }) => {
 	await page.goto('/products/community-tee');
 

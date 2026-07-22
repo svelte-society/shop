@@ -26,7 +26,7 @@ describe('SiteHeader', () => {
 	beforeEach(() => cart.clear());
 	afterEach(() => cart.clear());
 
-	it('exposes the primary storefront destinations as labelled links', async () => {
+	it('exposes only the shop primary destinations as labelled links', async () => {
 		renderHeader();
 
 		await expect
@@ -37,7 +37,7 @@ describe('SiteHeader', () => {
 			.toHaveAttribute('href', '/#collection');
 		await expect
 			.element(page.getByRole('link', { name: 'Svelte Society' }))
-			.toHaveAttribute('href', 'https://sveltesociety.dev/');
+			.not.toBeInTheDocument();
 		await expect
 			.element(page.getByRole('link', { name: 'Cart, 0 items' }))
 			.toHaveAttribute('href', '/cart');

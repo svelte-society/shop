@@ -131,6 +131,26 @@ describe('DestinationPicker', () => {
 		}
 	});
 
+	it('keeps a fixed dialog shell while only the country list scrolls', async () => {
+		renderPicker();
+		await page.getByRole('button', { name: 'Choose delivery country, currently Sweden' }).click();
+
+		const dialog = page.getByRole('dialog').element();
+		const form = dialog.querySelector('form');
+		const countryList = dialog.querySelector<HTMLElement>('.destination-groups');
+		const actions = dialog.querySelector<HTMLElement>('.dialog-actions');
+
+		expect(form).not.toBeNull();
+		expect(countryList).not.toBeNull();
+		expect(actions).not.toBeNull();
+		expect(getComputedStyle(dialog).overflow).toBe('hidden');
+		expect(getComputedStyle(form as HTMLFormElement).overflow).toBe('hidden');
+		expect(getComputedStyle(countryList as HTMLElement).overflowY).toBe('auto');
+		expect(getComputedStyle(countryList as HTMLElement).minHeight).toBe('0px');
+		await expect.element(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
+		await expect.element(page.getByRole('button', { name: 'Update country' })).toBeVisible();
+	});
+
 	it('posts the validated selection, exposes pending state, invalidates pricing, and announces it', async () => {
 		let resolveFetch: (response: Response) => void;
 		fetchMock.mockImplementation(
