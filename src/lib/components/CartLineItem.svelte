@@ -12,7 +12,7 @@
 	};
 
 	let { product, variant, quantity, maxQuantity, onQuantityChange, onRemove }: Props = $props();
-	let lineTotalCents = $derived(variant.referenceGrossCents * quantity);
+	let lineTotalCents = $derived(variant.unitAmountCents * quantity);
 
 	function handleQuantityChange(event: Event): void {
 		const input = event.currentTarget as HTMLInputElement;
@@ -36,7 +36,7 @@
 		<p class="category">{product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 		<h2>{product.name}</h2>
 		<p class="variant">{variant.label}</p>
-		<p class="unit-price">{formatEur(variant.referenceGrossCents)} each</p>
+		<p class="unit-price">{formatEur(variant.unitAmountCents)} each</p>
 
 		<div class="line-actions">
 			<label for={`quantity-${variant.priceId}`}>Quantity</label>

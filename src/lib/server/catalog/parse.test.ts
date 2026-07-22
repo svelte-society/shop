@@ -28,7 +28,7 @@ function withoutMetadata(product: Stripe.Product, key: string): Stripe.Product {
 }
 
 describe('parseStripeCatalog', () => {
-	it('parses valid apparel and derives the Swedish reference gross price', async () => {
+	it('parses valid apparel using the approved net catalog price', async () => {
 		const product = stripeProduct({
 			metadata: {
 				design_url_back: 'https://cdn.example.com/designs/community-back.svg',
@@ -68,7 +68,6 @@ describe('parseStripeCatalog', () => {
 				sortOrder: 10,
 				currency: 'eur',
 				unitAmountCents: 2_000,
-				referenceGrossCents: 2_500,
 				sku: 'SS-TEE-S',
 				styriaProductNumber: 'STYRIA-TEE-S'
 			},
@@ -79,7 +78,6 @@ describe('parseStripeCatalog', () => {
 				sortOrder: 20,
 				currency: 'eur',
 				unitAmountCents: 2_000,
-				referenceGrossCents: 2_500,
 				sku: 'SS-TEE-M',
 				styriaProductNumber: 'STYRIA-TEE-M'
 			}
@@ -254,6 +252,7 @@ describe('parseStripeCatalog', () => {
 
 	it.each([
 		['non-EUR currency', stripePrice({ currency: 'usd' }), 'PRICE_CURRENCY_INVALID'],
+		['non-approved amount', stripePrice({ unit_amount: 2_001 }), 'PRICE_AMOUNT_INVALID'],
 		['inclusive tax behavior', stripePrice({ tax_behavior: 'inclusive' }), 'PRICE_TAX_INVALID']
 	])('excludes a Price with %s', async (_name, price, code) => {
 		const snapshot = await parse([stripeProduct()], [price]);

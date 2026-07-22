@@ -30,24 +30,21 @@ const communityTee: PublicCatalogProduct = {
 			label: 'S',
 			sortOrder: 10,
 			currency: 'eur',
-			unitAmountCents: 2_500,
-			referenceGrossCents: 3_125
+			unitAmountCents: 2_000
 		},
 		{
 			priceId: 'price_medium',
 			label: 'M',
 			sortOrder: 20,
 			currency: 'eur',
-			unitAmountCents: 2_500,
-			referenceGrossCents: 3_125
+			unitAmountCents: 2_000
 		},
 		{
 			priceId: 'price_large',
 			label: 'L',
 			sortOrder: 30,
 			currency: 'eur',
-			unitAmountCents: 2_500,
-			referenceGrossCents: 3_125
+			unitAmountCents: 2_000
 		}
 	]
 };

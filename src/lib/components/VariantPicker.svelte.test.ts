@@ -15,16 +15,14 @@ const variants: PublicCatalogVariant[] = [
 		label: 'S',
 		sortOrder: 10,
 		currency: 'eur',
-		unitAmountCents: 2_000,
-		referenceGrossCents: 2_500
+		unitAmountCents: 2_000
 	},
 	{
 		priceId: 'price_medium',
 		label: 'M',
 		sortOrder: 20,
 		currency: 'eur',
-		unitAmountCents: 2_000,
-		referenceGrossCents: 2_500
+		unitAmountCents: 2_000
 	}
 ];
 

@@ -51,7 +51,7 @@
 	);
 	let subtotalCents = $derived(
 		resolvedLines.reduce(
-			(total, { line, variant }) => total + line.quantity * variant.referenceGrossCents,
+			(total, { line, variant }) => total + line.quantity * variant.unitAmountCents,
 			0
 		)
 	);

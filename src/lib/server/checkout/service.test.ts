@@ -45,7 +45,6 @@ const medium: CatalogVariant = {
 	sortOrder: 10,
 	currency: 'eur',
 	unitAmountCents: 2_000,
-	referenceGrossCents: 2_500,
 	sku: 'SS-TEE-M',
 	styriaProductNumber: 'STYRIA-TEE-M'
 };

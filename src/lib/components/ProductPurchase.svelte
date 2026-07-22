@@ -72,8 +72,7 @@
 
 <div class="purchase-panel">
 	<div class="price-block">
-		<p class="price">{formatEur(selectedVariant.referenceGrossCents)}</p>
-		<p>Reference price including 25% Swedish VAT.</p>
+		<p class="price">{formatEur(selectedVariant.unitAmountCents)}</p>
 	</div>
 
 	{#key productIdentity}

@@ -28,8 +28,7 @@ const apparel: PublicCatalogProduct = {
 			label: 'M',
 			sortOrder: 10,
 			currency: 'eur',
-			unitAmountCents: 2_000,
-			referenceGrossCents: 2_500
+			unitAmountCents: 2_000
 		}
 	]
 };

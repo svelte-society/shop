@@ -27,8 +27,7 @@ const product: PublicCatalogProduct = {
 			label: 'One size',
 			sortOrder: 10,
 			currency: 'eur',
-			unitAmountCents: 1_600,
-			referenceGrossCents: 2_000
+			unitAmountCents: 2_000
 		}
 	]
 };

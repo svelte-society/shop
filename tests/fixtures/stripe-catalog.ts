@@ -119,8 +119,8 @@ export function stripeAccessoryPrice(overrides: PriceOverrides = {}): Stripe.Pri
 			...metadata
 		},
 		product: 'prod_accessory',
-		unit_amount: 1_600,
-		unit_amount_decimal: Stripe.Decimal.from(1_600),
+		unit_amount: 2_000,
+		unit_amount_decimal: Stripe.Decimal.from(2_000),
 		...priceOverrides
 	});
 }

@@ -14,7 +14,6 @@ export type CatalogVariant = {
 	sortOrder: number;
 	currency: 'eur';
 	unitAmountCents: number;
-	referenceGrossCents: number;
 	sku: string;
 	styriaProductNumber: string;
 };
@@ -110,7 +109,6 @@ function isCatalogVariant(input: unknown): input is CatalogVariant {
 			'sortOrder',
 			'currency',
 			'unitAmountCents',
-			'referenceGrossCents',
 			'sku',
 			'styriaProductNumber'
 		]) &&
@@ -120,7 +118,6 @@ function isCatalogVariant(input: unknown): input is CatalogVariant {
 		isSafeNonNegativeInteger(input.sortOrder) &&
 		input.currency === 'eur' &&
 		isSafeNonNegativeInteger(input.unitAmountCents) &&
-		isSafeNonNegativeInteger(input.referenceGrossCents) &&
 		isNonEmptyString(input.sku) &&
 		isNonEmptyString(input.styriaProductNumber)
 	);
@@ -347,8 +344,7 @@ export function toPublicCatalogProduct(product: CatalogProduct): PublicCatalogPr
 			label: variant.label,
 			sortOrder: variant.sortOrder,
 			currency: variant.currency,
-			unitAmountCents: variant.unitAmountCents,
-			referenceGrossCents: variant.referenceGrossCents
+			unitAmountCents: variant.unitAmountCents
 		}))
 	};
 }

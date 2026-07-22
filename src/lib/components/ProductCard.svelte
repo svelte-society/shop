@@ -9,7 +9,7 @@
 	let { product }: Props = $props();
 	let imageReady = $state(false);
 	let lowestPrice = $derived(
-		Math.min(...product.variants.map((variant) => variant.referenceGrossCents))
+		Math.min(...product.variants.map((variant) => variant.unitAmountCents))
 	);
 </script>
 
