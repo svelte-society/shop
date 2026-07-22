@@ -1,7 +1,7 @@
 # Dynamic Destination Pricing Design
 
 **Date:** 2026-07-22  
-**Status:** Draft for written-spec review  
+**Status:** Approved  
 **Scope:** Storefront price presentation, country selection, Stripe catalog and Checkout, paid-order normalization, Styria retail pricing, policy copy, and rollout
 
 ## Summary
