@@ -17,7 +17,7 @@
 - Merchandise Prices are one-time EUR 20.00 (`unit_amount=2000`) with `tax_behavior=exclusive`.
 - Paid shipping is EUR 8.00 net (`fixed_amount.amount=800`) with `tax_behavior=exclusive` and the Stripe Shipping tax code.
 - Free shipping is EUR 0 with `tax_behavior=exclusive` for carts containing two or more total units.
-- The supported destination list is the runtime `STYRIA_SUPPORTED_COUNTRIES` allowlist; Slovenia, the United States, and every destination outside that allowlist remain unavailable.
+- The supported destination list is the source-controlled `SUPPORTED_DESTINATIONS` union of the reviewed EU and Asia lists; Slovenia, the United States, and every destination outside that list remain unavailable. No Coolify country-list variable exists.
 - Storefront VAT rates are server-owned basis points reviewed on 2026-07-22; Stripe Automatic Tax remains authoritative for the charge.
 - The browser never supplies trusted amounts, VAT rates, Shipping Rate IDs, or Price metadata.
 - Country state uses the `shop_destination_v1` first-party cookie and exact route `/preferences/destination`.
@@ -275,8 +275,7 @@ Cover explicit-cookie precedence, supported Cloudflare hint, invalid hint, Swede
 expect(
 	resolvePricingDestination({
 		cookieValue: 'DE',
-		cloudflareCountry: 'JP',
-		allowedCountries: ['SE', 'DE', 'JP']
+		cloudflareCountry: 'JP'
 	})
 ).toMatchObject({ countryCode: 'DE', source: 'cookie', vatBasisPoints: 1900 });
 ```
@@ -301,19 +300,16 @@ export type ResolvedPricingDestination = PricingDestination & { source: Destinat
 export function resolvePricingDestination(input: {
 	cookieValue: string | undefined;
 	cloudflareCountry: string | null;
-	allowedCountries: readonly MarketDestination[];
 }): ResolvedPricingDestination;
 
-export function destinationOptions(
-	allowedCountries: readonly MarketDestination[]
-): readonly DestinationOption[];
+export function destinationOptions(): readonly DestinationOption[];
 ```
 
-Require Sweden in the runtime allowlist so the approved fallback is always possible. Accept a cookie or Cloudflare code only when it is exact uppercase ASCII and present in the runtime list. Sort options by region (`eu` first) and English display name. Do not expose `source` through layout data.
+Use only source-controlled `SUPPORTED_DESTINATIONS`; Sweden is a compile-time member so the fallback is always possible. Accept a cookie or Cloudflare code only when it is exact uppercase ASCII and present in that list. Sort options by region (`eu` first) and English display name. Do not expose `source` through layout data.
 
 - [ ] **Step 4: Implement strict POST and root layout data**
 
-The endpoint must parse `request.formData()`, require exactly one `country` and one `returnTo`, validate the destination against `parseStyriaSupportedCountries(runtimeEnv.STYRIA_SUPPORTED_COUNTRIES)`, and validate `returnTo` with:
+The endpoint must parse `request.formData()`, require exactly one `country` and one `returnTo`, validate the destination against `SUPPORTED_DESTINATIONS`, and validate `returnTo` with:
 
 ```ts
 function safeReturnPath(value: string): string | null {
@@ -619,6 +615,7 @@ rtk git commit -m "feat: show destination-specific storefront prices"
 
 - `CHECKOUT_CONTRACT_VERSION = 2` only; version 1 metadata is rejected.
 - The checkout route resolves the validated request destination, the service stores it in the draft, and Stripe accepts exactly that one country.
+- `SUPPORTED_DESTINATIONS` is the single source-controlled country policy; remove `STYRIA_SUPPORTED_COUNTRIES` from environment parsing, readiness, Compose, routes, MCP/runtime factories, tests, and operator docs.
 - Session and PaymentIntent metadata contain `checkout_contract_version=2`, `checkout_draft_id`, and `destination_country`.
 - Paid Checkout normalization is v2-only and requires EUR 20 exclusive merchandise, EUR 8/0 exclusive shipping, explicit merchandise/shipping tax reconciliation, frozen destination equality, and zero discounts.
 - Persisted `shipping` is Stripe's gross shipping total, `shippingTax` is explicit, and `retailUnitAmount` is the verified gross line total divided exactly by quantity.
@@ -634,7 +631,7 @@ Test that migration:
 - adds `checkout_drafts.destination_country` plus insert/update guards that reject null or malformed new destinations;
 - adds non-null `orders.shipping_tax_amount`;
 - adds non-null `order_lines.retail_unit_amount`;
-- requires new v2 drafts to contain a valid market destination (the checkout service enforces the runtime Styria allowlist in Task 7);
+- requires new v2 drafts to contain a member of `SUPPORTED_DESTINATIONS`;
 - round-trips explicit shipping tax and retail unit amounts.
 
 - [ ] **Step 2: Run database tests and verify red**
@@ -739,7 +736,7 @@ if (merchandiseTax < 0n || shippingTax > shipping || expectedTotal !== BigInt(to
 }
 ```
 
-Require contract version 2 and a non-null valid market destination on every mapped and newly created draft. Insert every amount explicitly rather than relying on defaults. Task 7 owns validation against the runtime Styria allowlist before draft creation.
+Require contract version 2 and a non-null member of `SUPPORTED_DESTINATIONS` on every mapped and newly created draft. Insert every amount explicitly rather than relying on defaults.
 
 - [ ] **Step 5: Update raw fixtures deliberately**
 
@@ -893,7 +890,7 @@ session.total_details.amount_shipping === shipping.amount_subtotal;
 
 Set persisted `shipping` to `shipping_cost.amount_total` and `shippingTax` to `shipping_cost.amount_tax`. With discounts zero, require `line.amount_total % line.quantity === 0` and set `retailUnitAmount = line.amount_total / line.quantity`.
 
-`comparePaidCheckout()` requires both paid and draft contract version 2, then requires the paid destination to equal `draft.destinationCountry` and remain in the runtime allowlist.
+`comparePaidCheckout()` requires both paid and draft contract version 2, then requires the paid destination to equal `draft.destinationCountry` and remain in `SUPPORTED_DESTINATIONS`.
 
 - [ ] **Step 5: Run paid-checkout and webhook integration tests**
 

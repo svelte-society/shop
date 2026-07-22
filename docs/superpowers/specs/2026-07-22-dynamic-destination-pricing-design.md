@@ -34,7 +34,7 @@ This design replaces the Swedish-reference-price presentation and the fixed EUR 
 
 - No localized currencies; the shop remains EUR-only.
 - No country-specific net merchandising or margin adjustments.
-- No support for destinations outside the configured Styria allowlist.
+- No support for destinations outside the reviewed source-controlled Styria destination list.
 - No United States support in this phase.
 - No Slovenia support in this phase.
 - No promotion codes or merchandise discounts in this phase.
@@ -140,7 +140,7 @@ The list is grouped into:
 1. European Union
 2. Asia
 
-Only destinations in the runtime Styria-supported-country allowlist appear. Slovenia, the United States, and all other countries are absent rather than shown as selectable-but-disabled.
+Only destinations in the source-controlled `SUPPORTED_DESTINATIONS` list appear. It is the reviewed union of the supported EU and Asia lists. Slovenia, the United States, and all other countries are absent rather than shown as selectable-but-disabled. Changing country support requires a reviewed code change and deployment; there is no Coolify country-list variable.
 
 The country control is a global preference, not an item-level choice. A selection change updates product cards, product detail, cart lines, cart totals, shipping price, and tax/customs copy together.
 
@@ -159,7 +159,7 @@ The Cloudflare hint only supplies an initial suggestion. It never overrides an e
 The selected ISO 3166-1 alpha-2 country is stored in a first-party cookie:
 
 - Name is `shop_destination_v1`.
-- Value is accepted only when it is in the current runtime allowlist.
+- Value is accepted only when it is in `SUPPORTED_DESTINATIONS`.
 - `Path=/`.
 - `Max-Age` of one year.
 - `SameSite=Lax`.
@@ -256,7 +256,7 @@ The paid Checkout adapter validates an all-exclusive contract:
 8. Shipping total equals shipping subtotal plus shipping tax.
 9. Session total equals net merchandise plus net shipping plus all tax.
 10. PaymentIntent and captured Charge equal the Session total.
-11. Stripe's shipping country equals the draft's frozen destination and is still in the runtime allowlist.
+11. Stripe's shipping country equals the draft's frozen destination and is still in `SUPPORTED_DESTINATIONS`.
 
 The paid snapshot adds an explicit shipping-tax amount. The persisted top-level order amount meanings are:
 
@@ -310,9 +310,9 @@ The line's existing `unit_amount` remains the net Stripe amount used for order r
 
 Ignore it and resolve from a supported Cloudflare hint or Sweden. Never echo an invalid country code into markup or Stripe parameters.
 
-### Country removed from runtime support
+### Country removed from source-controlled support
 
-If an explicit cookie names a country removed from `STYRIA_SUPPORTED_COUNTRIES`, fall back as above. A Checkout draft cannot be created for the removed country.
+If an explicit cookie names a country removed from `SUPPORTED_DESTINATIONS`, fall back as above. A Checkout draft cannot be created for the removed country.
 
 ### VAT table missing an enabled EU country
 
@@ -369,7 +369,7 @@ Terms and shipping policy prose should describe the pricing rule rather than enu
 
 ## Security and Privacy
 
-- Browser country input is untrusted and validated against the runtime allowlist.
+- Browser country input is untrusted and validated against `SUPPORTED_DESTINATIONS`.
 - Browser amounts, VAT rates, shipping values, and totals are ignored.
 - Checkout Price and Shipping Rate IDs come from server configuration and the validated catalog.
 - Country-selection POST requests use the existing same-origin/origin protections.
@@ -453,7 +453,7 @@ Also confirm that a two-tee order has free shipping, that Stripe's receipt shows
 ## Acceptance Criteria
 
 - The header visibly identifies the selected delivery country on every commerce page.
-- A customer can change to any configured Styria-supported EU or Asia destination.
+- A customer can change to any source-controlled Styria-supported EU or Asia destination.
 - All product and cart prices update coherently from that selection.
 - EU display prices use current standard destination VAT; Asia prices exclude EU VAT and show the import-charge warning.
 - Stripe uses one EUR 20 exclusive Price per variant and an EUR 8 exclusive paid Shipping Rate.
