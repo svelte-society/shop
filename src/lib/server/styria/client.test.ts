@@ -204,6 +204,20 @@ describe('Styria detail/create adapter', () => {
 });
 
 describe('Styria client failures', () => {
+	it('maps a provider error envelope returned with HTTP 200 to a rejected request', async () => {
+		const fetch: typeof globalThis.fetch = async () =>
+			successJson({ error: 'A specified position of design is not allowed.' });
+		const client = createStyriaClient({ ...credentials, fetch });
+
+		await expect(client.create(styriaPayloadFixture())).rejects.toEqual(
+			expect.objectContaining({
+				name: 'StyriaError',
+				code: 'STYRIA_REQUEST_REJECTED',
+				message: 'STYRIA_REQUEST_REJECTED'
+			})
+		);
+	});
+
 	it.each([
 		['non-JSON success', new Response('not-json', { status: 200 })],
 		['malformed detail', successJson({ id: '1042', external_id: 'cs_test_target' })],

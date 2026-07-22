@@ -246,11 +246,20 @@ class HttpStyriaClient implements StyriaGateway {
 			}
 			if (!response.ok) throw httpError(response.status);
 
+			let payload: unknown;
 			try {
-				return await response.json();
+				payload = await response.json();
 			} catch {
 				throw new StyriaError(timedOut ? 'STYRIA_TIMEOUT' : 'STYRIA_RESPONSE_INVALID');
 			}
+			if (
+				isRecord(payload) &&
+				typeof payload.error === 'string' &&
+				payload.error.trim().length > 0
+			) {
+				throw new StyriaError('STYRIA_REQUEST_REJECTED');
+			}
+			return payload;
 		} finally {
 			clearTimeout(timeout);
 			signal?.removeEventListener('abort', abortFromCaller);

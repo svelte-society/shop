@@ -106,6 +106,25 @@ describe('parseStripeCatalog', () => {
 		expect(snapshot.products[0].sizeChart).toEqual(sizeChart);
 	});
 
+	it('maps a Styria placement metadata slug to the exact provider position', async () => {
+		const product = withoutMetadata(
+			stripeProduct({
+				metadata: {
+					design_url_embroidery_centre_chest:
+						'https://cdn.example.com/designs/community-embroidery.png'
+				}
+			}),
+			'design_url_front'
+		);
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.diagnostics).toEqual([]);
+		expect(snapshot.products[0].designPlacements).toEqual({
+			'Embroidery Centre Chest': 'https://cdn.example.com/designs/community-embroidery.png'
+		});
+	});
+
 	it('excludes a Product with malformed inline size-chart metadata', async () => {
 		const product = stripeProduct({ metadata: { size_chart_json: '{"unit":"cm"}' } });
 

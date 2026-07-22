@@ -88,6 +88,17 @@ function build(
 }
 
 describe('buildStyriaPayload', () => {
+	it('accepts and preserves an exact Styria embroidery position', () => {
+		const order = orderFixture();
+		order.lines[0].designPlacements = {
+			'Embroidery Centre Chest': 'https://cdn.example.test/designs/community-embroidery.png'
+		};
+
+		expect(build({ order }).items[0].designs).toEqual({
+			'Embroidery Centre Chest': 'https://cdn.example.test/designs/community-embroidery.png'
+		});
+	});
+
 	it('builds the exact EU courier payload from immutable checkout snapshots', () => {
 		expect(build()).toEqual({
 			external_id: 'cs_test_checkout_123',

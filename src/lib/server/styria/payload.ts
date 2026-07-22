@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ALLOWED_DESTINATIONS, isMarketDestination } from '$lib/domain/destinations';
 import type { OrderWithLines } from '$lib/domain/orders';
+import { isStyriaDesignPosition } from './design-positions';
 import type { StyriaOrderPayload } from './types';
 
 const COUNTRY_NAMES = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' });
@@ -130,7 +131,9 @@ export function buildStyriaPayload(input: {
 			designEntries.length === 0 ||
 			designEntries.some(
 				([position, url]) =>
-					!DESIGN_POSITION.test(position) || !isExactString(url, 2_000) || !isHttpsUrl(url)
+					(!DESIGN_POSITION.test(position) && !isStyriaDesignPosition(position)) ||
+					!isExactString(url, 2_000) ||
+					!isHttpsUrl(url)
 			)
 		) {
 			fail('STYRIA_ORDER_SNAPSHOT_INVALID');

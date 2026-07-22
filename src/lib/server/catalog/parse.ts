@@ -9,6 +9,7 @@ import type {
 	ProductSizeChart
 } from '$lib/domain/catalog';
 import { isProductSizeChart } from '$lib/domain/catalog';
+import { styriaDesignPositionForMetadataSlug } from '$lib/server/styria/design-positions';
 
 type ParsedProduct = Omit<CatalogProduct, 'variants'>;
 
@@ -127,7 +128,9 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 	const designEntries = Object.entries(source.metadata)
 		.map(([key, value]) => {
 			const match = DESIGN_KEY_PATTERN.exec(key);
-			return match ? ([match[1], httpsUrl(value)] as const) : null;
+			return match
+				? ([styriaDesignPositionForMetadataSlug(match[1]), httpsUrl(value)] as const)
+				: null;
 		})
 		.filter((entry): entry is readonly [string, string | null] => entry !== null)
 		.sort(([left], [right]) => compareStrings(left, right));
