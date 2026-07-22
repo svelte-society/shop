@@ -123,7 +123,7 @@
 		<section class="status-card" aria-busy="true">
 			<p role="status">Loading your cart…</p>
 		</section>
-	{:else if removedStaleLines}
+	{:else if removedStaleLines && cart.lines.length === 0}
 		<section class="status-card" role="status">
 			<p class="eyebrow">Price updated</p>
 			<h1>A product price changed. Please add the item again.</h1>
@@ -143,6 +143,13 @@
 			<p>Your cart is safe. Try again shortly.</p>
 		</section>
 	{:else}
+		{#if removedStaleLines}
+			<section class="status-card price-change-notice" role="status">
+				<p class="eyebrow">Price updated</p>
+				<p>A product price changed. Please add the item again.</p>
+				<a class="primary-link" href={resolve('/#collection')}>Browse the collection</a>
+			</section>
+		{/if}
 		<header class="page-heading">
 			<p class="eyebrow">Society Shop</p>
 			<h1>Your cart</h1>
@@ -240,6 +247,10 @@
 		border: 1px solid oklch(88% 0.03 35);
 		border-radius: 1rem;
 		background: var(--color-svelte-50, oklch(97.02% 0.0151 37.88));
+	}
+
+	.price-change-notice {
+		margin-bottom: 1.5rem;
 	}
 
 	.primary-link {

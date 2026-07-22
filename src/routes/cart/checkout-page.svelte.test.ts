@@ -111,6 +111,19 @@ describe('cart page checkout submission state', () => {
 		expect(cart.lines).toEqual([]);
 	});
 
+	it('keeps valid cart lines and checkout available after removing a stale price', async () => {
+		cart.add('price_tee_medium_old');
+		render(CartPage, { data, params: {}, form: null });
+
+		await expect.element(page.getByText('Price updated')).toBeVisible();
+		await expect.element(page.getByRole('heading', { name: 'Your cart' })).toBeVisible();
+		await expect.element(page.getByText('Community Tee')).toBeVisible();
+		await expect
+			.element(page.getByRole('button', { name: 'Continue to secure checkout' }))
+			.toBeEnabled();
+		expect(cart.lines).toEqual([{ priceId: 'price_tee_medium_current', quantity: 1 }]);
+	});
+
 	it('preserves a stale price during a catalog outage', async () => {
 		cart.clear();
 		cart.add('price_tee_medium_old');

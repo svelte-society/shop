@@ -74,23 +74,39 @@ const priced = (product: PublicCatalogProduct) => pricePublicProduct(product, de
 
 describe('ProductPurchase', () => {
 	it('shows the destination-projected price and selected-country disclosure', async () => {
+		const germany = pricingDestination('DE');
 		render(ProductPurchase, {
-			product: {
-				...apparel,
-				variants: apparel.variants.map((variant) => ({
-					...variant,
-					displayPrice: { netCents: 2_000, vatCents: 380, grossCents: 2_380 }
-				}))
-			} as never,
-			destination: {
-				countryCode: 'DE', displayName: 'Germany', region: 'eu', vatBasisPoints: 1900,
-				requiresImportChargeCopy: false
-			} as never
+			product: pricePublicProduct(apparel, germany),
+			destination: germany
 		});
 
 		await expect.element(page.getByText('€23.80')).toBeVisible();
 		await expect
 			.element(page.getByText('Includes 19% Germany VAT. Exact tax is confirmed from your delivery address at checkout.'))
+			.toBeVisible();
+	});
+
+	it('keeps the selected size while destination repricing updates the amount and disclosure', async () => {
+		const sweden = pricingDestination('SE');
+		const germany = pricingDestination('DE');
+		const view = render(ProductPurchase, {
+			product: pricePublicProduct(apparel, sweden),
+			destination: sweden
+		});
+
+		await page.getByText('M', { exact: true }).click();
+		await expect.element(page.getByRole('radio', { name: 'M' })).toBeChecked();
+
+		await view.rerender({ product: pricePublicProduct(apparel, germany), destination: germany });
+
+		await expect.element(page.getByRole('radio', { name: 'M' })).toBeChecked();
+		await expect.element(page.getByText('€23.80')).toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'Includes 19% Germany VAT. Exact tax is confirmed from your delivery address at checkout.'
+				)
+			)
 			.toBeVisible();
 	});
 

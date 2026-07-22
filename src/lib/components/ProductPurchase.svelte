@@ -19,11 +19,14 @@
 	let validationMessage = $state('');
 	let cartMessage = $state('');
 	let productIdentity = $derived(
-		JSON.stringify([product.slug, product.category, product.variants])
+		JSON.stringify([product.slug, product.category, product.variants.map((variant) => variant.priceId)])
 	);
 	let activeProductIdentity = $state('');
 	let selectedVariant = $derived(
 		product.variants.find((variant) => variant.priceId === selectedPriceId) ?? product.variants[0]
+	);
+	let pickerVariants = $derived(
+		product.variants.map(({ displayPrice: _displayPrice, ...variant }) => variant)
 	);
 
 	$effect.pre(() => {
@@ -84,7 +87,7 @@
 	{#key productIdentity}
 		<VariantPicker
 			category={product.category}
-			variants={product.variants}
+			variants={pickerVariants}
 			onSelectionChange={handleSelection}
 		/>
 	{/key}

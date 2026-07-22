@@ -98,7 +98,9 @@ describe('CartSummary checkout action', () => {
 			checkoutEnabled: true
 		});
 
-		await expect.element(page.getByText('Shipping', { exact: true })).toBeVisible();
-		await expect.element(page.getByText('€0.00')).toBeVisible();
+		const shippingRow = page.getByText('Shipping', { exact: true }).element().parentElement;
+		expect(shippingRow?.textContent).toBe('Shipping€0.00');
+		const totalRow = page.getByText('Estimated total', { exact: true }).element().parentElement;
+		expect(totalRow?.textContent).toBe('Estimated total€47.60');
 	});
 });
