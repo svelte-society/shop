@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace Swedish reference pricing with a visible delivery-country selector, destination-specific storefront VAT projection, and a Stripe Checkout v2 contract based on EUR 20 net merchandise and EUR 8 net paid shipping.
+**Goal:** Replace Swedish reference pricing with a visible delivery-country selector, destination-specific storefront VAT projection, and a Stripe Checkout v2 contract whose merchandise and shipping amounts are owned by Stripe.
 
-**Architecture:** Stripe Price and Shipping Rate amounts remain the trusted net source. A pure domain module projects gross storefront amounts from a validated request-level destination; Stripe Automatic Tax and the complete Checkout address remain authoritative for payment. Checkout v2 freezes the selected country in SQLite and records explicit shipping tax and gross retail unit amounts. The cutover is greenfield and v2-only; version 1 Sessions are rejected.
+**Architecture:** Stripe Price and native Shipping Rate amounts remain the trusted net source. One immutable cached catalog snapshot carries merchandise plus validated paid/free shipping data. A pure domain module projects gross storefront amounts from a validated request-level destination; Stripe Automatic Tax and the complete Checkout address remain authoritative for payment. Checkout v2 freezes the selected country, line Price IDs/amounts, and Shipping Rate ID/amount in SQLite and records explicit shipping tax and gross retail unit amounts. The cutover is greenfield and v2-only; version 1 Sessions are rejected.
 
 **Tech Stack:** Node.js 24, pnpm 10, SvelteKit 2, Svelte 5 runes, TypeScript 6, Stripe SDK 22, SQLite/better-sqlite3, Vitest Browser Mode, Playwright, Docker/Coolify.
 
@@ -14,9 +14,10 @@
 - Do not use `smerch` for any part of the work.
 - Every shell command in this workspace begins with `rtk`.
 - Use `apply_patch` for source and documentation edits.
-- Merchandise Prices are one-time EUR 20.00 (`unit_amount=2000`) with `tax_behavior=exclusive`.
-- Paid shipping is EUR 8.00 net (`fixed_amount.amount=800`) with `tax_behavior=exclusive` and the Stripe Shipping tax code.
+- Purchasable merchandise Prices are one-time EUR Prices with a positive safe-integer `unit_amount` and `tax_behavior=exclusive`; Stripe owns the amount and variants may differ.
+- Paid shipping is a configured native Stripe Shipping Rate with a positive fixed EUR amount, `tax_behavior=exclusive`, and the Stripe Shipping tax code.
 - Free shipping is EUR 0 with `tax_behavior=exclusive` for carts containing two or more total units.
+- The application retrieves and validates both configured Shipping Rates, projects their Stripe-owned amounts in the storefront, and freezes the selected Rate ID and amount in each checkout draft.
 - The supported destination list is the source-controlled `SUPPORTED_DESTINATIONS` union of the reviewed EU and Asia lists; Slovenia, the United States, and every destination outside that list remain unavailable. No Coolify country-list variable exists.
 - Storefront VAT rates are server-owned basis points reviewed on 2026-07-22; Stripe Automatic Tax remains authoritative for the charge.
 - The browser never supplies trusted amounts, VAT rates, Shipping Rate IDs, or Price metadata.
@@ -74,7 +75,7 @@
 - Modify: `src/lib/domain/money.test.ts`
 
 **Interfaces:**
-- Produces: `PricingDestination`, `DestinationOption`, `DisplayPrice`, `CartDisplayPrice`, `PAID_SHIPPING_NET_CENTS`, `displayPriceForDestination()`, `displayCartPrice()`, and `pricingDisclosure()`.
+- Produces: `PricingDestination`, `DestinationOption`, `DisplayPrice`, `CartDisplayPrice`, `displayPriceForDestination()`, `displayCartPrice()`, and `pricingDisclosure()`.
 - Consumes: exported `EU_DESTINATIONS`, `ASIA_DESTINATIONS`, and `MarketDestination` from `destinations.ts`.
 
 - [ ] **Step 1: Export the region lists and write failing destination-pricing tests**
@@ -100,7 +101,7 @@ describe('destination pricing', () => {
 	] as const)('projects %s with integer cents', (country, merchandise, shipping, total) => {
 		const destination = pricingDestination(country);
 		expect(displayPriceForDestination(2_000, destination).grossCents).toBe(merchandise);
-		expect(displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], destination)).toMatchObject({
+		expect(displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], destination, 800)).toMatchObject({
 			shipping: { grossCents: shipping },
 			totalGrossCents: total
 		});
@@ -108,7 +109,7 @@ describe('destination pricing', () => {
 
 	it('keeps shipping free for two units', () => {
 		expect(
-			displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], pricingDestination('FI'))
+			displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], pricingDestination('FI'), 800)
 		).toMatchObject({ shipping: { netCents: 0, vatCents: 0, grossCents: 0 } });
 	});
 
@@ -133,7 +134,6 @@ Expected: FAIL because `pricing.ts` and the new exports do not exist.
 Export the existing destination arrays and add this exact public shape:
 
 ```ts
-export const PAID_SHIPPING_NET_CENTS = 800;
 export const VAT_TABLE_REVIEWED_AT = '2026-07-22';
 export const VAT_TABLE_SOURCE =
 	'https://europa.eu/youreurope/business/finance-and-tax/vat/vat-rules-rates/index_en.htm';
@@ -201,7 +201,8 @@ function safeCents(value: bigint): number {
 
 export function displayCartPrice(
 	lines: readonly { netUnitCents: number; quantity: number }[],
-	destination: PricingDestination
+	destination: PricingDestination,
+	paidShippingNetCents: number
 ): CartDisplayPrice {
 	let units = 0;
 	let merchandiseNet = 0n;
@@ -215,7 +216,7 @@ export function displayCartPrice(
 		merchandiseNet += BigInt(line.netUnitCents) * BigInt(line.quantity);
 	}
 	const merchandise = displayPriceForDestination(safeCents(merchandiseNet), destination);
-	const shipping = displayPriceForDestination(units === 1 ? PAID_SHIPPING_NET_CENTS : 0, destination);
+	const shipping = displayPriceForDestination(units === 1 ? paidShippingNetCents : 0, destination);
 	return {
 		merchandise,
 		shipping,
@@ -453,7 +454,7 @@ rtk git commit -m "feat: add delivery country picker"
 - Modify every source/test fixture returned by `rtk rg -l referenceGrossCents src tests`
 
 **Interfaces:**
-- Consumes: `unitAmountCents` from Stripe and the approved EUR 20 catalog contract.
+- Consumes: positive one-time EUR exclusive `unitAmountCents` values from Stripe.
 - Produces: `CatalogVariant`/`PublicCatalogVariant` without `referenceGrossCents`.
 
 - [ ] **Step 1: Change tests to expect net-only variants**
@@ -470,26 +471,17 @@ with:
 { unitAmountCents: 2_000 }
 ```
 
-Add a parser test that a one-time EUR exclusive Price with `unit_amount: 2_001` produces `PRICE_AMOUNT_INVALID`, and retain tests rejecting inclusive/unspecified tax behavior.
+Add parser tests showing two different positive one-time EUR exclusive Price amounts are purchasable. Retain tests rejecting zero/null/unsafe amounts and inclusive/unspecified tax behavior.
 
 - [ ] **Step 2: Run catalog tests and verify red**
 
 Run: `rtk pnpm exec vitest run --project server src/lib/server/catalog/parse.test.ts src/lib/server/catalog/service.test.ts src/lib/server/checkout/service.test.ts`
 
-Expected: FAIL because catalog types and parser still emit Swedish gross references and accept other amounts.
+Expected: FAIL because catalog types and parser still emit Swedish gross references and enforce one application-owned amount.
 
-- [ ] **Step 3: Remove Swedish projection and enforce the approved source amount**
+- [ ] **Step 3: Remove Swedish projection and trust valid Stripe source amounts**
 
-Delete `referenceGrossCents` from `CatalogVariant`, its exact-key validator, clone/public conversion, and all consumers. In `parse.ts`, keep the existing one-time EUR exclusive checks and add:
-
-```ts
-if (source.unit_amount !== 2_000) {
-	add(source.id, 'PRICE_AMOUNT_INVALID');
-	continue;
-}
-```
-
-Return only `unitAmountCents: source.unit_amount`. Update the test Stripe catalog so every active purchasable fixture Price is 2_000; retain deliberately invalid fixtures only in diagnostic scenarios.
+Delete `referenceGrossCents` from `CatalogVariant`, its exact-key validator, clone/public conversion, and all consumers. In `parse.ts`, retain the one-time EUR exclusive checks and require `unit_amount` to be a positive safe integer. Return `unitAmountCents: source.unit_amount` without comparing it to a source-code constant. Test fixtures should deliberately include differing valid Stripe amounts as well as invalid diagnostic cases.
 
 - [ ] **Step 4: Run the reference scan and focused tests**
 
@@ -515,6 +507,12 @@ rtk git commit -m "refactor: keep catalog prices net"
 **Files:**
 - Modify: `src/lib/domain/pricing.ts`
 - Modify: `src/lib/domain/pricing.test.ts`
+- Modify: `src/lib/domain/catalog.ts`
+- Modify: `src/lib/server/catalog/gateway.ts`
+- Modify: `src/lib/server/catalog/stripe-catalog.server.ts`
+- Modify: `src/lib/server/catalog/service.server.ts`
+- Modify: `src/routes/+page.server.ts`
+- Modify: `src/routes/cart/+page.server.ts`
 - Modify: `src/lib/components/ProductGrid.svelte`
 - Modify: `src/lib/components/ProductCard.svelte`
 - Modify: `src/lib/components/ProductPurchase.svelte`
@@ -526,12 +524,12 @@ rtk git commit -m "refactor: keep catalog prices net"
 - Modify corresponding component/page tests listed in the design.
 
 **Interfaces:**
-- Consumes: net `PublicCatalogVariant`, `PricingDestination`, `DisplayPrice`, `CartDisplayPrice`.
+- Consumes: net `PublicCatalogVariant`, the validated Stripe paid Shipping Rate amount, `PricingDestination`, `DisplayPrice`, `CartDisplayPrice`.
 - Produces: destination-priced product/card/cart view models; components render supplied `DisplayPrice` rather than recomputing hidden tax rules.
 
 - [ ] **Step 1: Write failing SE/DE/JP component tests**
 
-Assert a net 2_000 variant renders EUR 25.00 for SE, EUR 23.80 for DE, and EUR 20.00 plus import-charge copy for JP. Assert a one-unit German cart shows merchandise EUR 23.80, shipping EUR 9.52, VAT EUR 5.32, total EUR 33.32; a two-unit cart shows free shipping.
+Using representative fixture amounts of EUR 20 merchandise and EUR 8 shipping, assert the variant renders EUR 25.00 for SE, EUR 23.80 for DE, and EUR 20.00 plus import-charge copy for JP. Assert a one-unit German cart shows merchandise EUR 23.80, shipping EUR 9.52, VAT EUR 5.32, total EUR 33.32; a two-unit cart shows free shipping. Add a second non-EUR-8 shipping fixture to prove the UI uses the Stripe-owned amount.
 
 - [ ] **Step 2: Run component tests and verify red**
 
@@ -563,11 +561,11 @@ export function pricePublicProduct(
 }
 ```
 
-ProductGrid receives raw products plus destination, derives priced products once, and ProductCard receives `PricedPublicCatalogProduct`. Product detail derives one priced product and ProductPurchase receives it. Cart derives `unitDisplayPrice`, `lineDisplayPrice`, and one `CartDisplayPrice`; CartLineItem and CartSummary receive those values.
+ProductGrid receives raw products plus destination, derives priced products once, and ProductCard receives `PricedPublicCatalogProduct`. Product detail derives one priced product and ProductPurchase receives it. The cached internal catalog snapshot also contains validated paid/free native Stripe Shipping Rates. Home and cart page data expose only the paid net amount; cart passes it explicitly to `displayCartPrice`. CartLineItem and CartSummary receive the resulting display values. No public or domain constant owns a shipping amount.
 
 - [ ] **Step 4: Replace public copy and amounts**
 
-Render gross cents as the primary amount. ProductPurchase renders `pricingDisclosure(destination)`. CartSummary rows are exactly `Merchandise`, `Shipping`, `VAT` for EU or `EU VAT` with EUR 0 for Asia, and `Estimated total`; supporting text names the selected delivery country and Checkout authority. Homepage Shipping uses the projected EUR 8 rate and Tax uses the same disclosure. Remove `Reference price`, `Reference subtotal`, Swedish VAT reference copy, and hard-coded `€10`.
+Render gross cents as the primary amount. ProductPurchase renders `pricingDisclosure(destination)`. CartSummary rows are exactly `Merchandise`, `Shipping`, `VAT` for EU or `EU VAT` with EUR 0 for Asia, and `Estimated total`; supporting text names the selected delivery country and Checkout authority. Homepage Shipping uses the projected Stripe Shipping Rate amount and Tax uses the same disclosure. Remove `Reference price`, `Reference subtotal`, Swedish VAT reference copy, and every hard-coded shipping amount.
 
 For stale cart lines, when `catalogUnavailable` is false, remove unresolved old Price IDs on mount and show `A product price changed. Please add the item again.` with a collection link; do not silently map old IDs to new IDs. When the catalog itself is unavailable, preserve the cart unchanged and keep the existing retry state.
 
@@ -604,12 +602,18 @@ rtk git commit -m "feat: show destination-specific storefront prices"
 - Modify: `src/lib/server/stripe/webhook.server.ts`
 - Modify: `src/lib/server/checkout/service.server.ts`
 - Modify: `src/routes/checkout/+server.ts`
+- Modify: `src/lib/domain/catalog.ts`
+- Modify: `src/lib/domain/pricing.ts`
+- Modify: `src/lib/server/catalog/gateway.ts`
+- Modify: `src/lib/server/catalog/stripe-catalog.server.ts`
+- Modify: `src/lib/server/catalog/service.server.ts`
+- Modify: home, cart, catalog, and pricing loaders/components/tests named in Tasks 4 and 5.
 - Modify: checkout, paid-checkout, webhook, success-page, and integration fixtures/tests named in Tasks 7 and 8.
 - Modify raw SQL fixtures identified by `rtk rg -l "INSERT INTO (checkout_drafts|orders|order_lines)" src tests`.
 
 **Interfaces:**
-- Produces: `NewCheckoutDraft.destinationCountry`, `OrderAmounts.shippingTax`, `PaidOrderLineAmount`, and `OrderLine.retailUnitAmount`.
-- Enforces: every draft is contract version 2 and has a valid market destination.
+- Produces: `NewCheckoutDraft.destinationCountry`, frozen `shippingRateId`/`shippingNetAmount`, `OrderAmounts.shippingTax`, `PaidOrderLineAmount`, and `OrderLine.retailUnitAmount`.
+- Enforces: every draft is contract version 2, has a valid market destination, and freezes the selected Stripe Shipping Rate identity and net amount.
 
 **Atomic greenfield boundary:** The new required schema fields cannot be introduced while the old checkout and webhook callers remain compile-safe without fake values. Therefore this task also implements the real Task 7/8 producer plumbing in the same commit range:
 
@@ -617,7 +621,9 @@ rtk git commit -m "feat: show destination-specific storefront prices"
 - The checkout route resolves the validated request destination, the service stores it in the draft, and Stripe accepts exactly that one country.
 - `SUPPORTED_DESTINATIONS` is the single source-controlled country policy; remove `STYRIA_SUPPORTED_COUNTRIES` from environment parsing, readiness, Compose, routes, MCP/runtime factories, tests, and operator docs.
 - Session and PaymentIntent metadata contain `checkout_contract_version=2`, `checkout_draft_id`, and `destination_country`.
-- Paid Checkout normalization is v2-only and requires EUR 20 exclusive merchandise, EUR 8/0 exclusive shipping, explicit merchandise/shipping tax reconciliation, frozen destination equality, and zero discounts.
+- Purchasable catalog Prices may have any positive safe-integer one-time EUR exclusive amount; the Stripe Price ID and amount are frozen per draft line.
+- The configured native paid/free Stripe Shipping Rates are fetched with the catalog, validated as active fixed EUR exclusive Shipping-tax-code rates, and cached in the same immutable snapshot. Paid must be positive and free must be zero.
+- Paid Checkout normalization is v2-only and requires exclusive merchandise and shipping, explicit merchandise/shipping tax reconciliation, frozen Price and Shipping Rate equality, frozen destination equality, and zero discounts. Paid-session verification does not require a previously selected Price or Rate to remain active.
 - Persisted `shipping` is Stripe's gross shipping total, `shippingTax` is explicit, and `retailUnitAmount` is the verified gross line total divided exactly by quantity.
 - The webhook passes the verified paid line amounts into the unit of work; no optional fields, casts, inferred placeholders, or mixed-tax compatibility branch is permitted.
 
@@ -631,8 +637,9 @@ Test that migration:
 - adds `checkout_drafts.destination_country` plus insert/update guards that reject null or malformed new destinations;
 - adds non-null `orders.shipping_tax_amount`;
 - adds non-null `order_lines.retail_unit_amount`;
+- adds required `checkout_drafts.shipping_rate_id` and `checkout_drafts.shipping_net_amount` snapshots;
 - requires new v2 drafts to contain a member of `SUPPORTED_DESTINATIONS`;
-- round-trips explicit shipping tax and retail unit amounts.
+- round-trips frozen shipping identity/net amount, explicit shipping tax, and retail unit amounts.
 
 - [ ] **Step 2: Run database tests and verify red**
 
@@ -666,6 +673,24 @@ BEFORE UPDATE OF destination_country ON checkout_drafts
 WHEN NEW.destination_country IS NULL
 BEGIN SELECT RAISE(ABORT, 'checkout destination required'); END;
 
+ALTER TABLE checkout_drafts ADD COLUMN shipping_rate_id TEXT;
+ALTER TABLE checkout_drafts ADD COLUMN shipping_net_amount INTEGER
+  CHECK (shipping_net_amount IS NULL OR shipping_net_amount >= 0);
+
+CREATE TRIGGER checkout_drafts_shipping_required_insert
+BEFORE INSERT ON checkout_drafts
+WHEN NEW.shipping_rate_id IS NULL OR NEW.shipping_net_amount IS NULL OR
+  (NEW.shipping_mode = 'paid' AND NEW.shipping_net_amount <= 0) OR
+  (NEW.shipping_mode = 'free' AND NEW.shipping_net_amount <> 0)
+BEGIN SELECT RAISE(ABORT, 'checkout shipping snapshot required'); END;
+
+CREATE TRIGGER checkout_drafts_shipping_required_update
+BEFORE UPDATE OF shipping_rate_id, shipping_net_amount, shipping_mode ON checkout_drafts
+WHEN NEW.shipping_rate_id IS NULL OR NEW.shipping_net_amount IS NULL OR
+  (NEW.shipping_mode = 'paid' AND NEW.shipping_net_amount <= 0) OR
+  (NEW.shipping_mode = 'free' AND NEW.shipping_net_amount <> 0)
+BEGIN SELECT RAISE(ABORT, 'checkout shipping snapshot required'); END;
+
 ALTER TABLE orders ADD COLUMN shipping_tax_amount INTEGER NOT NULL DEFAULT 0
   CHECK (shipping_tax_amount >= 0);
 
@@ -673,7 +698,7 @@ ALTER TABLE order_lines ADD COLUMN retail_unit_amount INTEGER NOT NULL DEFAULT 0
   CHECK (retail_unit_amount >= 0);
 ```
 
-The nullable column declaration is an SQLite `ALTER TABLE` limitation; the insert/update triggers and repository validation make null invalid for all post-migration rows. The migration deliberately does not backfill old commerce data.
+The nullable destination and shipping declarations are SQLite `ALTER TABLE` limitations; insert/update triggers and repository validation make null invalid for all post-migration rows and enforce paid-positive/free-zero shipping. The migration deliberately does not backfill old commerce data.
 
 - [ ] **Step 4: Extend domain and repositories**
 
@@ -686,6 +711,8 @@ export type NewCheckoutDraft = {
 	currency: 'eur';
 	totalUnitCount: number;
 	shippingMode: ShippingMode;
+	shippingRateId: string;
+	shippingNetAmount: number;
 	createdAt: Date;
 	expiresAt: Date;
 	lines: NewCheckoutDraftLine[];
@@ -774,7 +801,7 @@ rtk git commit -m "feat: persist pricing tax snapshots"
 
 - [ ] **Step 1: Write failing checkout v2 tests**
 
-Assert checkout reads the validated destination cookie rather than request JSON, stores `destinationCountry: 'DE'`, passes `allowed_countries: ['DE']`, sets contract version 2 and `destination_country: DE` metadata, chooses configured paid/free Shipping Rate by quantity, and rejects missing/unsupported destination configuration before provider work.
+Assert checkout reads the validated destination cookie rather than request JSON, stores `destinationCountry: 'DE'`, passes `allowed_countries: ['DE']`, sets contract version 2 and `destination_country: DE` metadata, chooses the paid/free Shipping Rate from the same cached catalog snapshot by quantity, freezes its ID and net amount, and rejects invalid destination or shipping configuration before provider work.
 
 - [ ] **Step 2: Run checkout tests and verify red**
 
@@ -801,7 +828,7 @@ export interface CheckoutService {
 }
 ```
 
-Store the destination in the draft. Gateway metadata includes `destination_country`, and `shipping_address_collection.allowed_countries` is exactly `[input.destinationCountry]`.
+Store the destination plus the selected catalog-resolved Shipping Rate ID/net amount in the draft. Create the Session from that frozen Rate ID. Gateway metadata includes `destination_country`, and `shipping_address_collection.allowed_countries` is exactly `[input.destinationCountry]`.
 
 - [ ] **Step 4: Resolve destination in the route**
 
@@ -838,7 +865,7 @@ rtk git commit -m "feat: freeze destination in checkout v2"
 
 - [ ] **Step 1: Replace fixtures and write the v2 matrix first**
 
-Replace the existing mixed-tax fixture builder with `paidCheckoutV2Fixture()` that creates exclusive shipping with `amount_subtotal=800`, destination tax, `amount_total=subtotal+tax`, version 2 metadata, and full line tax totals. Add SE/DE/FI/HU/JP cases with expected totals from the approved spec, plus free shipping, reverse charge, destination mismatch, version 1 metadata rejection, inclusive shipping rejection, line non-divisibility, and hidden shipping tax.
+Replace the existing mixed-tax fixture builder with `paidCheckoutV2Fixture()` that accepts arbitrary positive merchandise and paid-shipping fixture amounts, creates exclusive destination tax, version 2 metadata, and full line tax totals. Add SE/DE/FI/HU/JP cases, at least one non-2000 Price and non-800 paid Rate, plus free shipping, reverse charge, destination mismatch, frozen Shipping Rate ID/amount mismatch, version 1 metadata rejection, inclusive shipping rejection, line non-divisibility, and hidden shipping tax.
 
 - [ ] **Step 2: Run the paid-checkout suite and verify red**
 
@@ -868,6 +895,7 @@ export type PaidCheckoutSnapshot = {
 		unitAmount: number;
 		retailUnitAmount: number;
 	}>;
+	shippingRate: { id: string; netAmount: number };
 };
 ```
 
@@ -881,7 +909,7 @@ Require:
 rate.type === 'fixed_amount';
 rate.tax_behavior === 'exclusive';
 rate.fixed_amount.currency === 'eur';
-rate.fixed_amount.amount === (shippingMode === 'paid' ? 800 : 0);
+rate.fixed_amount.amount === shipping.amount_subtotal;
 shipping.amount_total === shipping.amount_subtotal + shipping.amount_tax;
 providerTax === lineTax + shipping.amount_tax;
 providerTotal === merchandiseTotal + shipping.amount_total;
@@ -890,7 +918,7 @@ session.total_details.amount_shipping === shipping.amount_subtotal;
 
 Set persisted `shipping` to `shipping_cost.amount_total` and `shippingTax` to `shipping_cost.amount_tax`. With discounts zero, require `line.amount_total % line.quantity === 0` and set `retailUnitAmount = line.amount_total / line.quantity`.
 
-`comparePaidCheckout()` requires both paid and draft contract version 2, then requires the paid destination to equal `draft.destinationCountry` and remain in `SUPPORTED_DESTINATIONS`.
+`comparePaidCheckout()` requires both paid and draft contract version 2, then requires the paid destination to equal `draft.destinationCountry` and remain in `SUPPORTED_DESTINATIONS`. It also requires the expanded paid Shipping Rate ID and net amount to equal the immutable draft snapshot. Current Stripe configuration is not consulted during replay.
 
 - [ ] **Step 5: Run paid-checkout and webhook integration tests**
 
@@ -1081,7 +1109,7 @@ rtk git commit -m "test: cover destination pricing journey"
 
 - [ ] **Step 1: Write failing runbook-contract tests**
 
-Assert documentation includes `unit_amount=2000`, exclusive merchandise, paid `fixed_amount.amount=800`, exclusive Shipping tax behavior, free EUR 0, checkout-off maintenance, encrypted backup plus greenfield commerce-database reset, v2-only webhook handling, stop-first deployment, default Price switch, and the SE/DE/FI/HU/Asia test matrix.
+Assert documentation requires positive one-time EUR exclusive merchandise Prices, a positive fixed EUR exclusive paid Shipping Rate with the Shipping tax code, a fixed EUR 0 exclusive free rate, checkout-off maintenance, encrypted backup plus greenfield commerce-database reset, v2-only webhook handling, stop-first deployment, and the SE/DE/FI/HU/Asia test matrix using the actual Stripe amounts.
 
 - [ ] **Step 2: Write the exact operator documentation**
 
@@ -1091,15 +1119,15 @@ Document this sequence without secrets:
 2. Set `CHECKOUT_ENABLED=false` in Coolify and perform the existing stop-first redeploy.
 3. Require `/health/live` and `/health/ready` to return 200 and checkout creation to return `CHECKOUT_DISABLED`.
 4. Reset the disposable pre-launch SQLite commerce database/volume while retaining the verified backup; do not carry test drafts, Sessions, orders, or fulfillment state into v2.
-5. In the Stripe sandbox, create one inactive EUR 20 one-time exclusive Price per active variant and copy exact `label`, `sort_order`, `sku`, and `styria_pn` metadata.
-6. Create EUR 8 fixed exclusive paid shipping with the Shipping tax code; create an exclusive EUR 0 rate if the existing free rate is not exclusive.
-7. Put replacement Shipping Rate IDs into the existing Coolify variables.
+5. In the Stripe sandbox, verify each active variant uses its intended positive one-time EUR exclusive Price and exact `label`, `sort_order`, `sku`, and `styria_pn` metadata. No replacement Price is required merely to satisfy an application constant.
+6. Create or verify a positive fixed EUR exclusive paid Shipping Rate with the Shipping tax code and a fixed EUR 0 exclusive free rate.
+7. Put the validated Shipping Rate IDs into the existing Coolify variables.
 8. Deploy code/migration stop-first while checkout remains disabled.
-9. Activate replacement Prices, update Product `default_price`, then archive old EUR 25 Prices and superseded Shipping Rates. No v1 Session window is retained.
+9. Archive only genuinely superseded Prices or Shipping Rates after new Sessions use the intended resources. No v1 Session window is retained.
 10. Restart once to clear the 60-second fresh/15-minute stale catalog cache.
 11. Run acceptance, policy/accounting review, then re-enable checkout.
 
-Update Styria docs to say `retailPrice` is the immutable paid gross customer unit amount while MCP `net_unit_amount` is net. `.env.example` comments describe the exact Shipping Rate contracts; no environment variable names change.
+Update Styria docs to say `retailPrice` is the immutable paid gross customer unit amount while MCP `net_unit_amount` is net. `.env.example` comments describe the provider-owned paid/free Shipping Rate contracts; no environment variable names change.
 
 - [ ] **Step 3: Run documentation and package tests**
 
@@ -1109,25 +1137,7 @@ Expected: PASS.
 
 - [ ] **Step 4: Provision inactive Stripe sandbox resources**
 
-Using the authenticated Stripe MCP, inspect the current Community Tee Product and active variants, then create one replacement Price for each `existingPrice` with this exact mapping:
-
-```ts
-{
-	product: existingPrice.product,
-	currency: 'eur',
-	unit_amount: 2_000,
-	tax_behavior: 'exclusive',
-	active: false,
-	metadata: {
-		label: existingPrice.metadata.label,
-		sort_order: existingPrice.metadata.sort_order,
-		sku: existingPrice.metadata.sku,
-		styria_pn: existingPrice.metadata.styria_pn
-	}
-}
-```
-
-Create paid/free Shipping Rates with the contracts above. Record returned non-secret IDs in the operator handoff, not hard-coded source. Do not activate or archive resources yet.
+Using the authenticated Stripe MCP, inspect the current Community Tee Product, active variant Prices, and configured Shipping Rates. Reuse every resource satisfying the contracts above. Create only missing or invalid resources, preserving intended Stripe-owned amounts and required metadata. Record returned non-secret IDs in the operator handoff, not hard-coded source. Do not archive resources yet.
 
 - [ ] **Step 5: Commit documentation before deployment**
 

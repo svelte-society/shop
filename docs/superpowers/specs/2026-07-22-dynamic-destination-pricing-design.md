@@ -6,10 +6,10 @@
 
 ## Summary
 
-The shop will use one net EUR catalog price for every destination and add destination tax through Stripe Automatic Tax at Checkout.
+The shop will use Stripe-owned net EUR prices and add destination tax through Stripe Automatic Tax at Checkout.
 
-- Every Community Tee variant costs **EUR 20.00 excluding tax**.
-- Paid shipping costs **EUR 8.00 excluding tax** for a one-unit cart.
+- Every Community Tee variant uses its active Stripe Price amount. Variants may have different prices.
+- Paid shipping uses the fixed amount on the configured Stripe Shipping Rate.
 - Shipping is free for carts with two or more total units.
 - EU storefront prices add the selected destination's standard VAT rate.
 - Supported non-EU storefront prices show the export price without EU VAT.
@@ -17,12 +17,12 @@ The shop will use one net EUR catalog price for every destination and add destin
 
 The country picker is visible in the global header immediately before the cart. It controls the prices and tax/customs copy shown throughout the storefront. The selected country is also the only country accepted by the Checkout Session created from that storefront state, preventing a customer from choosing one market and checking out to another.
 
-This design replaces the Swedish-reference-price presentation and the fixed EUR 10 tax-inclusive shipping contract.
+This design replaces the Swedish-reference-price presentation and all application-owned merchandise or shipping amounts.
 
 ## Goals
 
 1. Present a useful destination-specific price before Checkout.
-2. Keep merchandise economics stable with one EUR 20 net price in every market.
+2. Keep merchandise and shipping amounts editable in Stripe without a code deployment.
 3. Let Stripe Automatic Tax remain authoritative for the actual charge and OSS reporting.
 4. Avoid trusting browser-supplied prices, VAT rates, totals, or fulfillment data.
 5. Keep the selected market consistent between the storefront and Stripe Checkout.
@@ -51,27 +51,25 @@ Each active purchasable variant has one one-time EUR Price with:
 | Field | Required value |
 | --- | --- |
 | `currency` | `eur` |
-| `unit_amount` | `2000` |
+| `unit_amount` | Positive safe integer cents owned by Stripe |
 | `tax_behavior` | `exclusive` |
 | Product tax code | Tangible apparel tax code already approved for the product |
 
-The active variants continue to carry the existing variant, SKU, Styria product number, design, mockup, thread-colour, and size metadata. A Stripe Price ID identifies a net EUR 20 unit, never a VAT-inclusive market price.
-
-Existing EUR 25 exclusive Prices may be archived after the replacement Prices are ready. This is a greenfield cutover: old test Sessions and local orders are not part of the supported contract.
+The active variants continue to carry the existing variant, SKU, Styria product number, design, mockup, thread-colour, and size metadata. A Stripe Price ID identifies the trusted net amount for that variant, never a VAT-inclusive market price. Prices with zero, unsafe, non-EUR, recurring, inclusive, or unspecified amounts are excluded from the purchasable catalog.
 
 ### Stripe shipping rates
 
-The paid Shipping Rate is replaced with:
+The configured paid Shipping Rate must have:
 
 | Field | Required value |
 | --- | --- |
 | Type | Fixed amount |
 | `currency` | `eur` |
-| `fixed_amount.amount` | `800` |
+| `fixed_amount.amount` | Positive safe integer cents owned by Stripe |
 | `tax_behavior` | `exclusive` |
 | Tax code | Shipping |
 
-The free Shipping Rate remains EUR 0 with `tax_behavior=exclusive`. The Checkout service selects paid shipping for exactly one total unit and free shipping for two or more total units.
+The configured free Shipping Rate must be fixed EUR 0 with `tax_behavior=exclusive`. The Checkout service selects paid shipping for exactly one total unit and free shipping for two or more total units. Both configured rates are retrieved and validated server-side. Their IDs and net amounts are frozen into the checkout draft before the Session is created.
 
 ### Display calculation
 
@@ -83,7 +81,7 @@ gross_cents = round_half_up(net_cents * (10_000 + vat_basis_points) / 10_000)
 
 The implementation must not use binary floating-point arithmetic for money.
 
-Examples:
+Illustrative examples when Stripe merchandise is EUR 20 net and paid shipping is EUR 8 net:
 
 | Destination | Standard VAT | Tee | Paid shipping | One-tee total before any adjustment |
 | --- | ---: | ---: | ---: | ---: |
@@ -217,9 +215,9 @@ Add `destination_country` to `checkout_drafts`. The Checkout service reads the v
 
 The browser still submits only cart identifiers and quantities. The server resolves:
 
-- active Stripe Price IDs and EUR 20 unit amounts;
+- active Stripe Price IDs and their positive EUR unit amounts;
 - shipping mode from total quantity;
-- the configured exclusive Shipping Rate ID;
+- the configured exclusive Shipping Rate ID and its fixed amount;
 - the selected, validated destination from request state.
 
 The destination is also included in versioned Checkout metadata for operator diagnostics, but the database draft remains the comparison source of truth.
@@ -246,8 +244,8 @@ Increment the checkout contract version because the shipping-tax and line-snapsh
 
 The paid Checkout adapter validates an all-exclusive contract:
 
-1. Every merchandise Price is EUR, one-time, exclusive, and matches the immutable draft amount.
-2. The paid Shipping Rate is fixed EUR, exclusive, and matches the draft's paid/free mode.
+1. Every merchandise Price is EUR, one-time, exclusive, and matches the Price ID and immutable amount frozen in the draft.
+2. The Shipping Rate is fixed EUR, exclusive, and matches the Rate ID, amount, and paid/free mode frozen in the draft.
 3. Every line satisfies `amount_total = amount_subtotal - amount_discount + amount_tax`.
 4. Discounts remain zero because this Checkout contract does not enable them.
 5. Session merchandise subtotal equals the sum of line subtotals.
@@ -284,7 +282,7 @@ total_amount = subtotal_amount - discount_amount + merchandise_tax + shipping_am
 
 ### Customer-facing retail unit amount
 
-The Styria API defines `retailPrice` as the retail price printed on the invoice sent with the parcel. It must therefore receive the customer-facing gross merchandise unit price, not the EUR 20 net Stripe Price.
+The Styria API defines `retailPrice` as the retail price printed on the invoice sent with the parcel. It must therefore receive the customer-facing gross merchandise unit price, not the net Stripe Price.
 
 The paid Checkout adapter derives an immutable `retailUnitAmount` for each merchandise line:
 
@@ -292,7 +290,7 @@ The paid Checkout adapter derives an immutable `retailUnitAmount` for each merch
 retail_unit_amount = line.amount_total / line.quantity
 ```
 
-Because discounts are disabled and the selected EUR 20 net price produces whole-cent gross prices at every supported standard EU rate, the result is expected to be an integer. The adapter rejects a paid snapshot if a line total is not evenly divisible by quantity; it must not guess or round a provider invoice value.
+Because discounts are disabled, the result is expected to be an integer for a valid paid line. The adapter rejects a paid snapshot if a line total is not evenly divisible by quantity; it must not guess or round a provider invoice value.
 
 Add a non-null `retail_unit_amount` column to `order_lines`. It is populated from the verified paid Stripe line and remains immutable. There is no historical backfill. Draft lines continue to store the trusted net unit amount.
 
@@ -320,7 +318,7 @@ Fail closed for commerce rendering and Checkout creation with a stable catalog/p
 
 ### Catalog and VAT mismatch
 
-Checkout always uses server-resolved Stripe Price IDs. If a Price is not EUR 20 exclusive, it is excluded from the purchasable catalog and reported through existing catalog diagnostics.
+Checkout always uses server-resolved Stripe Price IDs. If a Price is not a positive one-time EUR exclusive Price, it is excluded from the purchasable catalog and reported through existing catalog diagnostics. If either configured Shipping Rate is not a valid fixed EUR exclusive paid/free rate, commerce pricing and Checkout fail closed.
 
 ### Storefront projection differs from Checkout
 
@@ -347,7 +345,7 @@ Replace it with destination-aware copy:
 - prices are in EUR and use the country shown in `Deliver to`;
 - EU prices include the selected country's standard VAT projection;
 - exact tax is confirmed from the full delivery and business details in Checkout;
-- paid shipping is EUR 8 excluding tax and is displayed with destination tax where applicable;
+- paid shipping uses the configured Stripe Shipping Rate amount and is displayed with destination tax where applicable;
 - shipping remains free for two or more units;
 - supported non-EU orders exclude EU VAT and may incur recipient-paid import charges;
 - changing the delivery country can change the displayed price.
@@ -384,8 +382,8 @@ Use a controlled checkout maintenance window:
 
 1. Disable creation of new Checkout Sessions.
 2. Take the required encrypted SQLite backup, then reset the disposable pre-launch commerce database so migration 0007 starts from an empty commerce store.
-3. Create replacement EUR 20 exclusive Stripe Prices for every active variant, preserving required metadata.
-4. Create the EUR 8 exclusive paid Shipping Rate and verify the EUR 0 rate contract.
+3. Verify every active variant has a positive one-time EUR exclusive Stripe Price with the required metadata.
+4. Create or verify a positive fixed EUR exclusive paid Shipping Rate and an EUR 0 exclusive free rate.
 5. Configure product and shipping tax codes in the Stripe sandbox.
 6. Deploy the destination-pricing code and v2-only database migration with checkout still disabled.
 7. Update Coolify to the replacement paid/free Shipping Rate IDs as required.
@@ -400,13 +398,13 @@ Use a controlled checkout maintenance window:
 ### Unit tests
 
 - Integer calculation at 0%, 17%, 19%, 20%, 25%, 25.5%, and 27%.
-- Half-up rounding behavior even though the initial EUR 20/EUR 8 amounts yield whole cents.
+- Half-up rounding behavior across representative Stripe-owned merchandise and shipping amounts.
 - Every enabled EU destination has one valid VAT entry.
 - Every Asia destination produces the export projection and import-charge copy.
 - Slovenia, US, duplicate entries, lowercase codes, and unknown countries are rejected.
 - Cookie, Cloudflare hint, and Sweden fallback precedence.
-- EUR 20 exclusive catalog validation.
-- EUR 8 exclusive and EUR 0 shipping validation.
+- Positive one-time EUR exclusive catalog validation across differing variant amounts.
+- Positive paid and zero free fixed EUR exclusive Shipping Rate validation.
 - Destination-specific merchandise, cart, and shipping projections.
 - Styria `retailPrice` uses `retailUnitAmount`, not net `unitAmount`.
 
@@ -442,11 +440,11 @@ For a one-tee cart, confirm:
 
 | Destination | Merchandise | Shipping | Tax included/added by Stripe | Expected total |
 | --- | ---: | ---: | ---: | ---: |
-| SE | EUR 20.00 net | EUR 8.00 net | EUR 7.00 | EUR 35.00 |
-| DE | EUR 20.00 net | EUR 8.00 net | EUR 5.32 | EUR 33.32 |
-| FI | EUR 20.00 net | EUR 8.00 net | EUR 7.14 | EUR 35.14 |
-| HU | EUR 20.00 net | EUR 8.00 net | EUR 7.56 | EUR 35.56 |
-| Supported Asia destination | EUR 20.00 | EUR 8.00 | EUR 0.00 in current registration setup | EUR 28.00 |
+| SE | Current Stripe Price | Current paid Shipping Rate | 25% of both net amounts | Net amounts plus tax |
+| DE | Current Stripe Price | Current paid Shipping Rate | 19% of both net amounts | Net amounts plus tax |
+| FI | Current Stripe Price | Current paid Shipping Rate | 25.5% of both net amounts | Net amounts plus tax |
+| HU | Current Stripe Price | Current paid Shipping Rate | 27% of both net amounts | Net amounts plus tax |
+| Supported Asia destination | Current Stripe Price | Current paid Shipping Rate | EUR 0.00 in current registration setup | Merchandise plus shipping |
 
 Also confirm that a two-tee order has free shipping, that Stripe's receipt shows the correct tax breakdown, and that Styria receives the paid line's gross customer-facing unit amount.
 
@@ -456,7 +454,7 @@ Also confirm that a two-tee order has free shipping, that Stripe's receipt shows
 - A customer can change to any source-controlled Styria-supported EU or Asia destination.
 - All product and cart prices update coherently from that selection.
 - EU display prices use current standard destination VAT; Asia prices exclude EU VAT and show the import-charge warning.
-- Stripe uses one EUR 20 exclusive Price per variant and an EUR 8 exclusive paid Shipping Rate.
+- Stripe owns each variant's positive EUR exclusive Price and the paid Shipping Rate amount.
 - Checkout accepts exactly the selected country and uses Automatic Tax.
 - Checkout's paid totals reconcile as net merchandise plus net shipping plus tax.
 - New orders persist a separate customer-facing retail unit amount.
