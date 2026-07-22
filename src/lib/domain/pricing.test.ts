@@ -46,7 +46,9 @@ describe('destination pricing', () => {
 	] as const)('projects %s with integer cents', (country, merchandise, shipping, total) => {
 		const destination = pricingDestination(country);
 		expect(displayPriceForDestination(2_000, destination).grossCents).toBe(merchandise);
-		expect(displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], destination)).toMatchObject({
+		expect(
+			displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], destination, 800)
+		).toMatchObject({
 			shipping: { grossCents: shipping },
 			totalGrossCents: total
 		});
@@ -54,8 +56,19 @@ describe('destination pricing', () => {
 
 	it('keeps shipping free for two units', () => {
 		expect(
-			displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], pricingDestination('FI'))
+			displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], pricingDestination('FI'), 937)
 		).toMatchObject({ shipping: { netCents: 0, vatCents: 0, grossCents: 0 } });
+	});
+
+	it('uses the trusted paid shipping amount supplied by the server', () => {
+		expect(
+			displayCartPrice([{ netUnitCents: 2_347, quantity: 1 }], pricingDestination('DE'), 937)
+		).toMatchObject({
+			shipping: { netCents: 937, vatCents: 178, grossCents: 1_115 },
+			totalNetCents: 3_284,
+			totalVatCents: 624,
+			totalGrossCents: 3_908
+		});
 	});
 
 	it.each([-1, 1.5, Number.MAX_SAFE_INTEGER])('rejects unsafe cents %s', (cents) => {
@@ -76,7 +89,7 @@ describe('destination pricing', () => {
 		'rejects invalid cart quantity %s',
 		(quantity) => {
 			expect(() =>
-				displayCartPrice([{ netUnitCents: 2_000, quantity }], pricingDestination('SE'))
+				displayCartPrice([{ netUnitCents: 2_000, quantity }], pricingDestination('SE'), 937)
 			).toThrowError('INVALID_CENTS');
 		}
 	);
@@ -85,7 +98,8 @@ describe('destination pricing', () => {
 		expect(() =>
 			displayCartPrice(
 				[{ netUnitCents: Number.MAX_SAFE_INTEGER, quantity: 2 }],
-				pricingDestination('JP')
+				pricingDestination('JP'),
+				937
 			)
 		).toThrowError('INVALID_CENTS');
 	});

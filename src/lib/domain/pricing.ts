@@ -1,7 +1,6 @@
 import { ASIA_DESTINATIONS, EU_DESTINATIONS, type MarketDestination } from './destinations';
 import type { PublicCatalogProduct, PublicCatalogVariant } from './catalog';
 
-export const PAID_SHIPPING_NET_CENTS = 800;
 export const VAT_TABLE_REVIEWED_AT = '2026-07-22';
 export const VAT_TABLE_SOURCE =
 	'https://europa.eu/youreurope/business/finance-and-tax/vat/vat-rules-rates/index_en.htm';
@@ -104,8 +103,12 @@ function safeCents(value: bigint): number {
 
 export function displayCartPrice(
 	lines: readonly { netUnitCents: number; quantity: number }[],
-	destination: PricingDestination
+	destination: PricingDestination,
+	paidShippingNetCents: number
 ): CartDisplayPrice {
+	if (!Number.isSafeInteger(paidShippingNetCents) || paidShippingNetCents <= 0) {
+		throw new Error('INVALID_CENTS');
+	}
 	let units = 0;
 	let merchandiseNet = 0n;
 	for (const line of lines) {
@@ -121,10 +124,7 @@ export function displayCartPrice(
 		merchandiseNet += BigInt(line.netUnitCents) * BigInt(line.quantity);
 	}
 	const merchandise = displayPriceForDestination(safeCents(merchandiseNet), destination);
-	const shipping = displayPriceForDestination(
-		units === 1 ? PAID_SHIPPING_NET_CENTS : 0,
-		destination
-	);
+	const shipping = displayPriceForDestination(units === 1 ? paidShippingNetCents : 0, destination);
 	return {
 		merchandise,
 		shipping,

@@ -56,8 +56,9 @@ function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Currency and shipping rate',
 				paragraphs: [
-					'All store prices and charges are in EUR.',
-					'Shipping is EUR 10 when an order contains one total unit. Shipping is free when an order contains two or more total units.'
+					'All store prices and charges are in EUR. The country shown in “Deliver to” controls the storefront tax projection.',
+					'When an order contains one total unit, the current amount is shown before checkout. Shipping is free when an order contains two or more total units.',
+					'For an EU destination, the storefront displays shipping with that country’s standard VAT projection. Stripe confirms the exact tax from the complete delivery and business details at checkout.'
 				]
 			},
 			{
@@ -239,8 +240,8 @@ function termsDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Prices, VAT, and shipping',
 				paragraphs: [
-					'Prices are in EUR. Final VAT and other tax treatment are calculated at checkout from the delivery and business details provided there.',
-					'Shipping costs EUR 10 for one total unit and is free for two or more total units. The Shipping page contains delivery estimates and the notice about charges that may apply outside the EU.'
+					'Prices are in EUR. The country shown in “Deliver to” controls the storefront tax projection. For EU destinations, displayed prices include that country’s standard VAT projection; Stripe confirms exact tax from the complete delivery and business details at checkout. For supported destinations outside the EU, displayed prices exclude EU VAT and import charges may still be assessed after checkout.',
+					'The current shipping amount is shown before checkout for one total unit and is free for two or more total units. Changing “Deliver to” can change the displayed merchandise, shipping, and total prices. The Shipping page contains delivery estimates and the complete notice about charges outside the EU.'
 				],
 				links: [{ label: 'Read the Shipping policy', href: '/shipping' }]
 			},

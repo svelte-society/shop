@@ -87,6 +87,8 @@ export function recordPaidOrder(database: ShopDatabase, suffix: string) {
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
+		shippingRateId: 'shr_paid_8_eur',
+		shippingNetAmount: 800,
 		createdAt: new Date(PAID_AT.getTime() - 60 * 60_000),
 		expiresAt: new Date(PAID_AT.getTime() + 24 * 60 * 60_000),
 		lines: [

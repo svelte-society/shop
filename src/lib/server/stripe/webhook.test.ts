@@ -86,6 +86,8 @@ function draftInput(): NewCheckoutDraft {
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
+		shippingRateId: 'shr_paid_8_eur',
+		shippingNetAmount: 800,
 		createdAt: new Date('2026-07-16T11:00:00.000Z'),
 		expiresAt: new Date('2026-07-16T13:00:00.000Z'),
 		lines: [
@@ -116,6 +118,7 @@ function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 		currency: 'eur',
 		paymentStatus: 'paid',
 		destinationCountry: 'SE',
+		shippingRate: { id: 'shr_paid_8_eur', netAmount: 800 },
 		amounts: {
 			subtotal: 2_000,
 			discount: 0,

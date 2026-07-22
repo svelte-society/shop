@@ -7,6 +7,16 @@ export type CatalogDiagnostic = {
 	code: string;
 };
 
+export type CatalogShippingRate = {
+	id: string;
+	netAmountCents: number;
+};
+
+export type CatalogShippingRates = {
+	paid: CatalogShippingRate;
+	free: CatalogShippingRate & { netAmountCents: 0 };
+};
+
 export type CatalogVariant = {
 	priceId: string;
 	productId: string;
@@ -45,6 +55,7 @@ export type CatalogProduct = {
 
 export type CatalogSnapshot = {
 	products: CatalogProduct[];
+	shippingRates: CatalogShippingRates;
 	diagnostics: CatalogDiagnostic[];
 	loadedAt: Date;
 	stale: boolean;
@@ -118,8 +129,29 @@ function isCatalogVariant(input: unknown): input is CatalogVariant {
 		isSafeNonNegativeInteger(input.sortOrder) &&
 		input.currency === 'eur' &&
 		isSafeNonNegativeInteger(input.unitAmountCents) &&
+		input.unitAmountCents > 0 &&
 		isNonEmptyString(input.sku) &&
 		isNonEmptyString(input.styriaProductNumber)
+	);
+}
+
+function isCatalogShippingRate(input: unknown, expectedAmount: 'positive' | 'zero'): boolean {
+	return (
+		isRecord(input) &&
+		hasExactKeys(input, ['id', 'netAmountCents']) &&
+		isNonEmptyString(input.id) &&
+		isSafeNonNegativeInteger(input.netAmountCents) &&
+		(expectedAmount === 'positive' ? input.netAmountCents > 0 : input.netAmountCents === 0)
+	);
+}
+
+function isCatalogShippingRates(input: unknown): input is CatalogShippingRates {
+	return (
+		isRecord(input) &&
+		hasExactKeys(input, ['paid', 'free']) &&
+		isCatalogShippingRate(input.paid, 'positive') &&
+		isCatalogShippingRate(input.free, 'zero') &&
+		(input.paid as CatalogShippingRate).id !== (input.free as CatalogShippingRate).id
 	);
 }
 
@@ -222,9 +254,10 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 export function assertCatalogSnapshot(input: unknown): asserts input is CatalogSnapshot {
 	if (
 		!isRecord(input) ||
-		!hasExactKeys(input, ['products', 'diagnostics', 'loadedAt', 'stale']) ||
+		!hasExactKeys(input, ['products', 'shippingRates', 'diagnostics', 'loadedAt', 'stale']) ||
 		!Array.isArray(input.products) ||
 		!input.products.every(isCatalogProduct) ||
+		!isCatalogShippingRates(input.shippingRates) ||
 		!Array.isArray(input.diagnostics) ||
 		!input.diagnostics.every(isCatalogDiagnostic) ||
 		!(input.loadedAt instanceof Date) ||
@@ -274,6 +307,10 @@ export function cloneCatalogSnapshot(
 			},
 			variants: product.variants.map((variant) => ({ ...variant }))
 		})),
+		shippingRates: {
+			paid: { ...snapshot.shippingRates.paid },
+			free: { ...snapshot.shippingRates.free }
+		},
 		diagnostics: snapshot.diagnostics.map((entry) => ({ ...entry })),
 		loadedAt: new Date(snapshot.loadedAt),
 		stale
@@ -304,6 +341,9 @@ export function freezeCatalogSnapshot(snapshot: CatalogSnapshot): CatalogSnapsho
 	}
 
 	for (const entry of snapshot.diagnostics) Object.freeze(entry);
+	Object.freeze(snapshot.shippingRates.paid);
+	Object.freeze(snapshot.shippingRates.free);
+	Object.freeze(snapshot.shippingRates);
 	Object.freeze(snapshot.products);
 	Object.freeze(snapshot.diagnostics);
 	Object.freeze(snapshot.loadedAt);

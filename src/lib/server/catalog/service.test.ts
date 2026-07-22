@@ -7,10 +7,11 @@ import {
 	stripeAccessoryProduct,
 	stripeList,
 	stripePrice,
-	stripeProduct
+	stripeProduct,
+	stripeShippingRate
 } from '../../../../tests/fixtures/stripe-catalog';
 import { createCatalogCache } from './cache.server';
-import { parseStripeCatalog } from './parse';
+import { parseStripeCatalog, parseStripeShippingRates } from './parse';
 import { createCatalogService } from './service.server';
 import { createStripeCatalogGateway, type StripeCatalogClient } from './stripe-catalog.server';
 
@@ -48,8 +49,20 @@ function page<T extends { id: string }>(
 function providerClient(
 	products: readonly Stripe.Product[],
 	prices: readonly Stripe.Price[]
-): { client: StripeCatalogClient; priceRequests: string[] } {
+): { client: StripeCatalogClient; priceRequests: string[]; shippingRateRequests: string[] } {
 	const priceRequests: string[] = [];
+	const shippingRateRequests: string[] = [];
+	const shippingRates = new Map([
+		['shr_paid', stripeShippingRate()],
+		[
+			'shr_free',
+			stripeShippingRate({
+				id: 'shr_free',
+				display_name: 'Free shipping',
+				fixed_amount: { amount: 0, currency: 'eur' }
+			})
+		]
+	]);
 
 	return {
 		client: {
@@ -78,9 +91,18 @@ function providerClient(
 						'/v1/prices'
 					);
 				}
+			},
+			shippingRates: {
+				async retrieve(id) {
+					shippingRateRequests.push(id);
+					const rate = shippingRates.get(id);
+					if (!rate) throw new Error('TEST_SHIPPING_RATE_MISSING');
+					return rate;
+				}
 			}
 		},
-		priceRequests
+		priceRequests,
+		shippingRateRequests
 	};
 }
 
@@ -88,7 +110,17 @@ async function validSnapshot(loadedAt: Date, name = 'Society Mug'): Promise<Cata
 	return parseStripeCatalog(
 		[stripeAccessoryProduct({ name })],
 		async () => [stripeAccessoryPrice()],
-		loadedAt
+		loadedAt,
+		parseStripeShippingRates({
+			paid: { configuredId: 'shr_paid', rate: stripeShippingRate() },
+			free: {
+				configuredId: 'shr_free',
+				rate: stripeShippingRate({
+					id: 'shr_free',
+					fixed_amount: { amount: 0, currency: 'eur' }
+				})
+			}
+		})
 	);
 }
 
@@ -108,12 +140,14 @@ describe('createStripeCatalogGateway', () => {
 			id: 'price_apparel_small',
 			metadata: { label: 'S', sort_order: '10', sku: 'SS-TEE-S', styria_pn: 'STYRIA-TEE-S' }
 		});
-		const { client, priceRequests } = providerClient(
+		const { client, priceRequests, shippingRateRequests } = providerClient(
 			[nonMerch, invalid, apparel],
 			[stripePrice(), small]
 		);
 		const gateway = createStripeCatalogGateway('sk_test_catalog', {
 			client,
+			paidShippingRateId: 'shr_paid',
+			freeShippingRateId: 'shr_free',
 			clock: () => new Date(STRIPE_CATALOG_LOADED_AT)
 		});
 
@@ -124,31 +158,16 @@ describe('createStripeCatalogGateway', () => {
 			'price_apparel_small',
 			'price_apparel_medium'
 		]);
+		expect(snapshot.shippingRates).toEqual({
+			paid: { id: 'shr_paid', netAmountCents: 937 },
+			free: { id: 'shr_free', netAmountCents: 0 }
+		});
+		expect(shippingRateRequests).toEqual(['shr_paid', 'shr_free']);
 		expect(snapshot.diagnostics).toEqual([
 			{ providerId: 'prod_invalid', code: 'PRODUCT_IMAGE_INVALID' }
 		]);
 		expect(priceRequests).not.toContain('prod_invalid');
 		expect(priceRequests).not.toContain('prod_non_merch');
-	});
-
-	it('resolves requested variants from the validated provider catalog', async () => {
-		const small = stripePrice({
-			id: 'price_apparel_small',
-			metadata: { label: 'S', sort_order: '10', sku: 'SS-TEE-S', styria_pn: 'STYRIA-TEE-S' }
-		});
-		const { client } = providerClient([stripeProduct()], [stripePrice(), small]);
-		const gateway = createStripeCatalogGateway('sk_test_catalog', { client });
-
-		const variants = await gateway.resolveVariants([
-			'price_apparel_medium',
-			'price_missing',
-			'price_apparel_small'
-		]);
-
-		expect(variants.map((variant) => variant.priceId)).toEqual([
-			'price_apparel_medium',
-			'price_apparel_small'
-		]);
 	});
 });
 
@@ -213,6 +232,7 @@ describe('createCatalogCache', () => {
 		expect(stale.stale).toBe(true);
 		expect(stale.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(stale.products[0].slug).toBe('society-mug');
+		expect(stale.shippingRates.paid.netAmountCents).toBe(937);
 	});
 
 	it('throws CATALOG_UNAVAILABLE when no last-known-good snapshot exists', async () => {
@@ -270,13 +290,20 @@ describe('createCatalogCache', () => {
 		expect(Object.isFrozen(first)).toBe(true);
 		expect(Object.isFrozen(first.products)).toBe(true);
 		expect(Object.isFrozen(first.products[0].variants)).toBe(true);
+		expect(Object.isFrozen(first.shippingRates)).toBe(true);
+		expect(Object.isFrozen(first.shippingRates.paid)).toBe(true);
 		expect(() => first.products[0].variants.push(first.products[0].variants[0])).toThrow(TypeError);
+		expect(() => {
+			first.shippingRates.paid.netAmountCents = 1;
+		}).toThrow(TypeError);
 		first.loadedAt.setTime(0);
 		source.products[0].name = 'Mutated source';
+		source.shippingRates.paid.netAmountCents = 1;
 
 		const second = await cache.get();
 		expect(second.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(second.products[0].name).toBe('Society Mug');
+		expect(second.shippingRates.paid.netAmountCents).toBe(937);
 	});
 
 	it('shares one provider refresh across concurrent reads of an expired snapshot', async () => {
@@ -442,6 +469,8 @@ describe('createCatalogService', () => {
 		const { client } = providerClient([invalid, stripeProduct()], [stripePrice()]);
 		const gateway = createStripeCatalogGateway('sk_test_catalog', {
 			client,
+			paidShippingRateId: 'shr_paid',
+			freeShippingRateId: 'shr_free',
 			clock: () => new Date(STRIPE_CATALOG_LOADED_AT)
 		});
 		const service = createCatalogService(gateway, {
@@ -452,6 +481,7 @@ describe('createCatalogService', () => {
 		const product = listed.products[0];
 
 		expect(listed.stale).toBe(false);
+		expect(listed.paidShippingNetCents).toBe(937);
 		expect(product).toMatchObject({
 			slug: 'community-tee',
 			materials: '100% organic cotton',
@@ -481,6 +511,8 @@ describe('createCatalogService', () => {
 		);
 		const gateway = createStripeCatalogGateway('sk_test_catalog', {
 			client,
+			paidShippingRateId: 'shr_paid',
+			freeShippingRateId: 'shr_free',
 			clock: () => new Date(STRIPE_CATALOG_LOADED_AT)
 		});
 		const service = createCatalogService(gateway, {
@@ -493,9 +525,16 @@ describe('createCatalogService', () => {
 
 		const resolved = await service.resolveCart(lines);
 
-		expect(resolved.map(({ line }) => line)).toEqual(lines);
-		expect(resolved.map(({ product }) => product.slug)).toEqual(['community-tee', 'society-mug']);
-		expect(resolved.map(({ variant }) => variant.sku)).toEqual(['SS-TEE-M', 'SS-MUG']);
+		expect(resolved.lines.map(({ line }) => line)).toEqual(lines);
+		expect(resolved.lines.map(({ product }) => product.slug)).toEqual([
+			'community-tee',
+			'society-mug'
+		]);
+		expect(resolved.lines.map(({ variant }) => variant.sku)).toEqual(['SS-TEE-M', 'SS-MUG']);
+		expect(resolved.shippingRates).toEqual({
+			paid: { id: 'shr_paid', netAmountCents: 937 },
+			free: { id: 'shr_free', netAmountCents: 0 }
+		});
 		await expect(
 			service.resolveCart([{ priceId: 'price_missing', quantity: 1 }])
 		).rejects.toThrowError('CATALOG_VARIANT_UNAVAILABLE');
@@ -509,11 +548,14 @@ describe('createCatalogService', () => {
 				.mockRejectedValueOnce(new Error('private Stripe response and stack'))
 				.mockResolvedValue({
 					products: [],
+					shippingRates: {
+						paid: { id: 'shr_paid', netAmountCents: 937 },
+						free: { id: 'shr_free', netAmountCents: 0 }
+					},
 					diagnostics: [],
 					loadedAt: new Date(STRIPE_CATALOG_LOADED_AT),
 					stale: false
-				}),
-			resolveVariants: vi.fn()
+				})
 		};
 		const observedAt = new Date(STRIPE_CATALOG_LOADED_AT);
 		const service = createCatalogService(gateway, { clock: () => observedAt }, alerts);
@@ -525,7 +567,11 @@ describe('createCatalogService', () => {
 			observedAt
 		);
 		alerts.enqueueAlert.mockClear();
-		await expect(service.listPublic()).resolves.toEqual({ products: [], stale: false });
+		await expect(service.listPublic()).resolves.toEqual({
+			products: [],
+			paidShippingNetCents: 937,
+			stale: false
+		});
 		expect(alerts.enqueueAlert).not.toHaveBeenCalled();
 	});
 });

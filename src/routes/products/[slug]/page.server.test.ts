@@ -36,10 +36,16 @@ describe('product catalog loader', () => {
 			() =>
 				({
 					async loadMerchCatalog() {
-						return { products: [], diagnostics: [], loadedAt: new Date(), stale: false };
-					},
-					async resolveVariants() {
-						return [];
+						return {
+							products: [],
+							shippingRates: {
+								paid: { id: 'shr_paid', netAmountCents: 937 },
+								free: { id: 'shr_free', netAmountCents: 0 }
+							},
+							diagnostics: [],
+							loadedAt: new Date(),
+							stale: false
+						};
 					}
 				}) satisfies CatalogGateway
 		);

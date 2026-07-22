@@ -70,6 +70,8 @@ function createDraft(
 		currency: 'eur',
 		totalUnitCount: quantity,
 		shippingMode: quantity === 1 ? 'paid' : 'free',
+		shippingRateId: quantity === 1 ? 'shr_paid_8_eur' : 'shr_free',
+		shippingNetAmount: quantity === 1 ? 800 : 0,
 		createdAt: new Date('2026-07-16T10:00:00.000Z'),
 		expiresAt: new Date('2026-07-17T10:00:00.000Z'),
 		lines: [

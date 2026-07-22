@@ -627,10 +627,11 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 	const insert = database.transaction(() => {
 		database.prepare(`INSERT INTO checkout_drafts (
 			id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-			shipping_mode, created_at, expires_at, completed_at, destination_country
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+			shipping_mode, created_at, expires_at, completed_at, destination_country,
+			shipping_rate_id, shipping_net_amount
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
 			"draft_docker_persist", "cs_docker_persist", 2, "eur", 1,
-			"paid", now, "2026-07-18T00:00:00.000Z", now, "SE"
+			"paid", now, "2026-07-18T00:00:00.000Z", now, "SE", "shr_paid_8_eur", 800
 		);
 		database.prepare(`INSERT INTO orders (
 			id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,

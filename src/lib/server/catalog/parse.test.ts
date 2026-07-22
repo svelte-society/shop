@@ -5,9 +5,10 @@ import {
 	stripeAccessoryPrice,
 	stripeAccessoryProduct,
 	stripePrice,
-	stripeProduct
+	stripeProduct,
+	stripeShippingRate
 } from '../../../../tests/fixtures/stripe-catalog';
-import { parseStripeCatalog } from './parse';
+import { parseStripeCatalog, parseStripeShippingRates } from './parse';
 
 function productIdFor(price: Stripe.Price): string {
 	return typeof price.product === 'string' ? price.product : price.product.id;
@@ -17,7 +18,18 @@ async function parse(products: readonly Stripe.Product[], prices: readonly Strip
 	return parseStripeCatalog(
 		products,
 		async (productId) => prices.filter((price) => productIdFor(price) === productId),
-		STRIPE_CATALOG_LOADED_AT
+		STRIPE_CATALOG_LOADED_AT,
+		parseStripeShippingRates({
+			paid: { configuredId: 'shr_paid', rate: stripeShippingRate() },
+			free: {
+				configuredId: 'shr_free',
+				rate: stripeShippingRate({
+					id: 'shr_free',
+					display_name: 'Free shipping',
+					fixed_amount: { amount: 0, currency: 'eur' }
+				})
+			}
+		})
 	);
 }
 
@@ -28,7 +40,7 @@ function withoutMetadata(product: Stripe.Product, key: string): Stripe.Product {
 }
 
 describe('parseStripeCatalog', () => {
-	it('parses valid apparel using the approved net catalog price', async () => {
+	it('accepts differing positive Stripe-owned net amounts for valid variants', async () => {
 		const product = stripeProduct({
 			metadata: {
 				design_url_back: 'https://cdn.example.com/designs/community-back.svg',
@@ -37,6 +49,8 @@ describe('parseStripeCatalog', () => {
 		});
 		const small = stripePrice({
 			id: 'price_apparel_small',
+			unit_amount: 2_347,
+			unit_amount_decimal: Stripe.Decimal.from(2_347),
 			metadata: { label: 'S', sort_order: '10', sku: 'SS-TEE-S', styria_pn: 'STYRIA-TEE-S' }
 		});
 
@@ -44,6 +58,10 @@ describe('parseStripeCatalog', () => {
 
 		expect(snapshot.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(snapshot.stale).toBe(false);
+		expect(snapshot.shippingRates).toEqual({
+			paid: { id: 'shr_paid', netAmountCents: 937 },
+			free: { id: 'shr_free', netAmountCents: 0 }
+		});
 		expect(snapshot.diagnostics).toEqual([]);
 		expect(snapshot.products).toHaveLength(1);
 		expect(snapshot.products[0]).toMatchObject({
@@ -67,7 +85,7 @@ describe('parseStripeCatalog', () => {
 				label: 'S',
 				sortOrder: 10,
 				currency: 'eur',
-				unitAmountCents: 2_000,
+				unitAmountCents: 2_347,
 				sku: 'SS-TEE-S',
 				styriaProductNumber: 'STYRIA-TEE-S'
 			},
@@ -253,9 +271,17 @@ describe('parseStripeCatalog', () => {
 	it.each([
 		['non-EUR currency', stripePrice({ currency: 'usd' }), 'PRICE_CURRENCY_INVALID'],
 		[
-			'non-approved amount',
-			stripePrice({ unit_amount: 2_001, unit_amount_decimal: Stripe.Decimal.from(2_001) }),
-			'PRICE_AMOUNT_INVALID'
+			'zero amount',
+			stripePrice({ unit_amount: 0, unit_amount_decimal: Stripe.Decimal.from(0) }),
+			'PRICE_UNIT_AMOUNT_INVALID'
+		],
+		[
+			'unsafe amount',
+			stripePrice({
+				unit_amount: Number.MAX_SAFE_INTEGER + 1,
+				unit_amount_decimal: Stripe.Decimal.from(Number.MAX_SAFE_INTEGER + 1)
+			}),
+			'PRICE_UNIT_AMOUNT_INVALID'
 		],
 		['inclusive tax behavior', stripePrice({ tax_behavior: 'inclusive' }), 'PRICE_TAX_INVALID']
 	])('excludes a Price with %s', async (_name, price, code) => {
@@ -263,6 +289,74 @@ describe('parseStripeCatalog', () => {
 
 		expect(snapshot.products).toEqual([]);
 		expect(snapshot.diagnostics).toContainEqual({ providerId: price.id, code });
+	});
+
+	it('normalizes configured paid and free Stripe Shipping Rates', () => {
+		expect(
+			parseStripeShippingRates({
+				paid: { configuredId: 'shr_paid', rate: stripeShippingRate() },
+				free: {
+					configuredId: 'shr_free',
+					rate: stripeShippingRate({
+						id: 'shr_free',
+						display_name: 'Free shipping',
+						fixed_amount: { amount: 0, currency: 'eur' }
+					})
+				}
+			})
+		).toEqual({
+			paid: { id: 'shr_paid', netAmountCents: 937 },
+			free: { id: 'shr_free', netAmountCents: 0 }
+		});
+	});
+
+	it.each([
+		['wrong configured ID', 'paid', stripeShippingRate({ id: 'shr_other' })],
+		['inactive paid rate', 'paid', stripeShippingRate({ active: false })],
+		[
+			'wrong paid type',
+			'paid',
+			{ ...stripeShippingRate(), type: 'calculated' } as unknown as Stripe.ShippingRate
+		],
+		[
+			'wrong paid currency',
+			'paid',
+			stripeShippingRate({ fixed_amount: { amount: 937, currency: 'usd' } })
+		],
+		['inclusive paid tax', 'paid', stripeShippingRate({ tax_behavior: 'inclusive' })],
+		['wrong paid tax code', 'paid', stripeShippingRate({ tax_code: 'txcd_99999999' })],
+		[
+			'zero paid amount',
+			'paid',
+			stripeShippingRate({ fixed_amount: { amount: 0, currency: 'eur' } })
+		],
+		[
+			'positive free amount',
+			'free',
+			stripeShippingRate({
+				id: 'shr_free',
+				fixed_amount: { amount: 1, currency: 'eur' }
+			})
+		]
+	] as const)('rejects %s', (_name, kind, rate) => {
+		const paid = {
+			configuredId: 'shr_paid',
+			rate: kind === 'paid' ? rate : stripeShippingRate()
+		};
+		const free = {
+			configuredId: 'shr_free',
+			rate:
+				kind === 'free'
+					? rate
+					: stripeShippingRate({
+							id: 'shr_free',
+							fixed_amount: { amount: 0, currency: 'eur' }
+						})
+		};
+
+		expect(() => parseStripeShippingRates({ paid, free })).toThrowError(
+			'CATALOG_SHIPPING_RATE_INVALID'
+		);
 	});
 
 	it.each([

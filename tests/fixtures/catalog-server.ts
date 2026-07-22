@@ -1,6 +1,5 @@
-import type { CatalogVariant } from '$lib/domain/catalog';
 import type { CatalogGateway } from '$lib/server/catalog/gateway';
-import { parseStripeCatalog } from '$lib/server/catalog/parse';
+import { parseStripeCatalog, parseStripeShippingRates } from '$lib/server/catalog/parse';
 import type { StripeCheckoutClient } from '$lib/server/stripe/checkout.server';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
@@ -11,7 +10,8 @@ import {
 	stripeAccessoryPrice,
 	stripeAccessoryProduct,
 	stripePrice,
-	stripeProduct
+	stripeProduct,
+	stripeShippingRate
 } from './stripe-catalog';
 import {
 	paidCheckoutProviderFixture,
@@ -37,6 +37,8 @@ function ensureVerifiedDraft(): string {
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
+		shippingRateId: 'shr_paid_8_eur',
+		shippingNetAmount: 800,
 		createdAt: new Date('2026-07-22T09:00:00.000Z'),
 		expiresAt: new Date('2026-07-23T09:00:00.000Z'),
 		lines: [
@@ -210,37 +212,45 @@ export function createStripeClient(
 	};
 }
 
-async function parsedFixtureCatalog() {
+async function parsedFixtureCatalog(options: {
+	paidShippingRateId: string;
+	freeShippingRateId: string;
+}) {
 	return parseStripeCatalog(
 		PRODUCTS,
 		async (productId) => PRICES_BY_PRODUCT.get(productId) ?? [],
-		STRIPE_CATALOG_LOADED_AT
+		STRIPE_CATALOG_LOADED_AT,
+		parseStripeShippingRates({
+			paid: {
+				configuredId: options.paidShippingRateId,
+				rate: stripeShippingRate({
+					id: options.paidShippingRateId,
+					fixed_amount: { amount: 937, currency: 'eur' }
+				})
+			},
+			free: {
+				configuredId: options.freeShippingRateId,
+				rate: stripeShippingRate({
+					id: options.freeShippingRateId,
+					fixed_amount: { amount: 0, currency: 'eur' }
+				})
+			}
+		})
 	);
 }
 
-export function createCatalogGateway(stripeSecretKey: string): CatalogGateway {
+export function createCatalogGateway(
+	stripeSecretKey: string,
+	options: { paidShippingRateId: string; freeShippingRateId: string }
+): CatalogGateway {
 	void stripeSecretKey;
 	const activeScenario = scenario();
 	if (activeScenario === 'guard-proof') throw new Error('STOREFRONT_GUARD_BYPASSED');
 
 	async function loadMerchCatalog() {
 		if (activeScenario === 'unavailable') throw new Error('CATALOG_UNAVAILABLE');
-		return parsedFixtureCatalog();
+		return parsedFixtureCatalog(options);
 	}
 
-	return {
-		loadMerchCatalog,
-		async resolveVariants(priceIds) {
-			const snapshot = await loadMerchCatalog();
-			const variants = new Map<string, CatalogVariant>();
-
-			for (const product of snapshot.products) {
-				for (const variant of product.variants) variants.set(variant.priceId, variant);
-			}
-
-			return priceIds
-				.map((priceId) => variants.get(priceId))
-				.filter((variant): variant is CatalogVariant => variant !== undefined);
-		}
-	};
+	return { loadMerchCatalog };
 }

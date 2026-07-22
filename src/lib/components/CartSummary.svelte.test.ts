@@ -13,7 +13,10 @@ const germanCart = {
 	totalGrossCents: 3_332
 };
 const germanDestination: PricingDestination = {
-	countryCode: 'DE', displayName: 'Germany', region: 'eu' as const, vatBasisPoints: 1900,
+	countryCode: 'DE',
+	displayName: 'Germany',
+	region: 'eu' as const,
+	vatBasisPoints: 1900,
 	requiresImportChargeCopy: false
 };
 
@@ -31,9 +34,7 @@ describe('CartSummary checkout action', () => {
 		});
 
 		await page.getByRole('button', { name: 'Continue to secure checkout' }).click();
-		await expect
-			.element(page.getByText('Merchandise'))
-			.toBeVisible();
+		await expect.element(page.getByText('Merchandise')).toBeVisible();
 		await expect
 			.element(
 				page.getByText(
@@ -93,7 +94,7 @@ describe('CartSummary checkout action', () => {
 		const destination = pricingDestination('DE');
 		render(CartSummary, {
 			totalUnits: 2,
-			cartDisplayPrice: displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], destination),
+			cartDisplayPrice: displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], destination, 937),
 			destination,
 			checkoutEnabled: true
 		});

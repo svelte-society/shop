@@ -2,17 +2,15 @@
 	import { resolve } from '$app/paths';
 	import CatalogUnavailable from '$lib/components/CatalogUnavailable.svelte';
 	import ProductGrid from '$lib/components/ProductGrid.svelte';
-	import {
-		displayPriceForDestination,
-		PAID_SHIPPING_NET_CENTS,
-		pricingDisclosure
-	} from '$lib/domain/pricing';
+	import { displayPriceForDestination, pricingDisclosure } from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 	let projectedShipping = $derived(
-		displayPriceForDestination(PAID_SHIPPING_NET_CENTS, data.pricingDestination)
+		data.paidShippingNetCents === null
+			? null
+			: displayPriceForDestination(data.paidShippingNetCents, data.pricingDestination)
 	);
 </script>
 
@@ -66,10 +64,14 @@
 		<div class="commerce-grid">
 			<article>
 				<h3>Shipping</h3>
-				<p>
-					{formatEur(projectedShipping.grossCents)} for one item. Free shipping when you pick two or
-					more.
-				</p>
+				{#if projectedShipping}
+					<p>
+						{formatEur(projectedShipping.grossCents)} for one item. Free shipping when you pick two or
+						more.
+					</p>
+				{:else}
+					<p>Current shipping is shown before checkout. Free shipping when you pick two or more.</p>
+				{/if}
 			</article>
 			<article>
 				<h3>Regions</h3>

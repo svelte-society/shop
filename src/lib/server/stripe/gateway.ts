@@ -25,6 +25,7 @@ export type PaidCheckoutSnapshot = {
 	currency: 'eur';
 	paymentStatus: 'paid';
 	destinationCountry: string;
+	shippingRate: { id: string; netAmount: number };
 	amounts: {
 		subtotal: number;
 		discount: number;

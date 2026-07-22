@@ -8,7 +8,10 @@ import { createCatalogService } from '$lib/server/catalog/service.server';
 import { requireStorefront } from '$lib/server/storefront/guard.server';
 import type { PageServerLoad } from './$types';
 
-type CatalogGatewayFactory = (stripeSecretKey: string) => CatalogGateway;
+type CatalogGatewayFactory = (
+	stripeSecretKey: string,
+	options: { paidShippingRateId: string; freeShippingRateId: string }
+) => CatalogGateway;
 
 function isCatalogUnavailable(cause: unknown): boolean {
 	return cause instanceof Error && cause.message === 'CATALOG_UNAVAILABLE';
@@ -23,7 +26,12 @@ export function _createProductPageServerLoad(
 	return async ({ params }) => {
 		requireStorefront(runtimeEnv);
 		const config = parsePrivateConfig(runtimeEnv);
-		catalogService ??= createCatalogService(createGateway(config.stripeSecretKey));
+		catalogService ??= createCatalogService(
+			createGateway(config.stripeSecretKey, {
+				paidShippingRateId: config.stripePaidShippingRateId,
+				freeShippingRateId: config.stripeFreeShippingRateId
+			})
+		);
 
 		try {
 			const product = await catalogService.findPublicBySlug(params.slug);

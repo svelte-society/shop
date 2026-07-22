@@ -42,6 +42,8 @@ export type NewCheckoutDraft = {
 	currency: 'eur';
 	totalUnitCount: number;
 	shippingMode: ShippingMode;
+	shippingRateId: string;
+	shippingNetAmount: number;
 	createdAt: Date;
 	expiresAt: Date;
 	lines: NewCheckoutDraftLine[];

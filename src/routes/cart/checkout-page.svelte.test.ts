@@ -38,6 +38,7 @@ const product: PublicCatalogProduct = {
 
 const data = {
 	products: [product],
+	paidShippingNetCents: 937,
 	catalogUnavailable: false,
 	checkoutEnabled: true,
 	pricingDestination: pricingDestination('DE')
@@ -58,9 +59,9 @@ describe('cart page checkout submission state', () => {
 		await expect.element(page.getByText('Merchandise')).toBeVisible();
 		const summary = page.getByRole('complementary', { name: 'Order summary' });
 		await expect.element(summary.getByText('€23.80')).toBeVisible();
-		await expect.element(summary.getByText('€9.52')).toBeVisible();
-		await expect.element(summary.getByText('€5.32')).toBeVisible();
-		await expect.element(summary.getByText('€33.32')).toBeVisible();
+		await expect.element(summary.getByText('€11.15')).toBeVisible();
+		await expect.element(summary.getByText('€5.58')).toBeVisible();
+		await expect.element(summary.getByText('€34.95')).toBeVisible();
 	});
 
 	it('keeps the button disabled and blocks a second request after navigation is assigned', async () => {

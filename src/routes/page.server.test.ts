@@ -19,6 +19,7 @@ describe('homepage catalog loader', () => {
 
 		await expect(load({} as Parameters<typeof load>[0])).resolves.toEqual({
 			products: [],
+			paidShippingNetCents: null,
 			stale: false,
 			catalogUnavailable: false
 		});
@@ -39,15 +40,13 @@ describe('homepage catalog loader', () => {
 				({
 					async loadMerchCatalog() {
 						throw new Error('STRIPE_UNAVAILABLE');
-					},
-					async resolveVariants() {
-						return [];
 					}
 				}) satisfies CatalogGateway
 		);
 
 		await expect(load({} as Parameters<typeof load>[0])).resolves.toEqual({
 			products: [],
+			paidShippingNetCents: null,
 			stale: false,
 			catalogUnavailable: true
 		});

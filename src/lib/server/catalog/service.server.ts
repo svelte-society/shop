@@ -3,6 +3,7 @@ import {
 	toPublicCatalogProduct,
 	type CatalogDiagnostic,
 	type CatalogProduct,
+	type CatalogShippingRates,
 	type CatalogVariant,
 	type PublicCatalogProduct
 } from '$lib/domain/catalog';
@@ -11,11 +12,16 @@ import type { CatalogGateway } from './gateway';
 import { enqueueAlert, type AlertService } from '$lib/server/monitoring/alerts.server';
 
 export interface CatalogService {
-	listPublic(): Promise<{ products: PublicCatalogProduct[]; stale: boolean }>;
+	listPublic(): Promise<{
+		products: PublicCatalogProduct[];
+		paidShippingNetCents: number;
+		stale: boolean;
+	}>;
 	findPublicBySlug(slug: string): Promise<PublicCatalogProduct | null>;
-	resolveCart(
-		lines: CartLine[]
-	): Promise<Array<{ line: CartLine; product: CatalogProduct; variant: CatalogVariant }>>;
+	resolveCart(lines: CartLine[]): Promise<{
+		lines: Array<{ line: CartLine; product: CatalogProduct; variant: CatalogVariant }>;
+		shippingRates: CatalogShippingRates;
+	}>;
 	diagnostics(): Promise<CatalogDiagnostic[]>;
 }
 
@@ -51,6 +57,7 @@ export function createCatalogService(
 			const snapshot = await monitoredSnapshot();
 			return {
 				products: snapshot.products.map(toPublicCatalogProduct),
+				paidShippingNetCents: snapshot.shippingRates.paid.netAmountCents,
 				stale: snapshot.stale
 			};
 		},
@@ -69,11 +76,14 @@ export function createCatalogService(
 				}
 			}
 
-			return lines.map((line) => {
-				const resolved = byPriceId.get(line.priceId);
-				if (!resolved) throw new Error('CATALOG_VARIANT_UNAVAILABLE');
-				return { line: { ...line }, ...resolved };
-			});
+			return {
+				lines: lines.map((line) => {
+					const resolved = byPriceId.get(line.priceId);
+					if (!resolved) throw new Error('CATALOG_VARIANT_UNAVAILABLE');
+					return { line: { ...line }, ...resolved };
+				}),
+				shippingRates: snapshot.shippingRates
+			};
 		},
 		async diagnostics() {
 			const snapshot = await monitoredSnapshot();

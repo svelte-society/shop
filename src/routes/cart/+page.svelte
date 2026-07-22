@@ -55,16 +55,18 @@
 				resolved.variant.unitAmountCents,
 				data.pricingDestination
 			);
-			return [{
-				line,
-				product: resolved.product,
-				variant: { ...resolved.variant, displayPrice: unitDisplayPrice },
-				unitDisplayPrice,
-				lineDisplayPrice: displayPriceForDestination(
-					resolved.variant.unitAmountCents * line.quantity,
-					data.pricingDestination
-				)
-			}];
+			return [
+				{
+					line,
+					product: resolved.product,
+					variant: { ...resolved.variant, displayPrice: unitDisplayPrice },
+					unitDisplayPrice,
+					lineDisplayPrice: displayPriceForDestination(
+						resolved.variant.unitAmountCents * line.quantity,
+						data.pricingDestination
+					)
+				}
+			];
 		});
 	});
 
@@ -72,13 +74,16 @@
 		ready && cart.lines.some((line) => !catalogByPriceId.has(line.priceId))
 	);
 	let cartDisplayPrice = $derived(
-		displayCartPrice(
-			resolvedLines.map(({ line, variant }) => ({
-				netUnitCents: variant.unitAmountCents,
-				quantity: line.quantity
-			})),
-			data.pricingDestination
-		)
+		data.paidShippingNetCents === null
+			? null
+			: displayCartPrice(
+					resolvedLines.map(({ line, variant }) => ({
+						netUnitCents: variant.unitAmountCents,
+						quantity: line.quantity
+					})),
+					data.pricingDestination,
+					data.paidShippingNetCents
+				)
 	);
 	let removedStaleLines = $state(false);
 
@@ -142,7 +147,7 @@
 			<h1>Collection temporarily unavailable.</h1>
 			<p>Your cart is safe. Try again shortly.</p>
 		</section>
-	{:else}
+	{:else if cartDisplayPrice}
 		{#if removedStaleLines}
 			<section class="status-card price-change-notice" role="status">
 				<p class="eyebrow">Price updated</p>

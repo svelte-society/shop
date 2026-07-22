@@ -195,6 +195,7 @@ export type PaidCheckoutFixtureOptions = {
 	draftId?: string;
 	country?: string;
 	shippingSubtotal?: number;
+	shippingRateId?: string;
 	shippingTaxAmount?: number;
 	lines?: PaidCheckoutFixtureLine[];
 	taxExempt?: 'none' | 'exempt' | 'reverse';
@@ -394,7 +395,7 @@ export function paidCheckoutProviderFixture(
 				amount_tax: shippingTaxAmount,
 				amount_total: shippingTotal,
 				shipping_rate: {
-					id: shippingSubtotal === 0 ? 'shr_free' : 'shr_paid_8_eur',
+					id: options.shippingRateId ?? (shippingSubtotal === 0 ? 'shr_free' : 'shr_paid_8_eur'),
 					object: 'shipping_rate',
 					fixed_amount: { amount: shippingSubtotal, currency: 'eur' },
 					tax_behavior: 'exclusive',

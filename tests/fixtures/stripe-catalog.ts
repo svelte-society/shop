@@ -8,6 +8,10 @@ type PriceOverrides = Omit<Partial<Stripe.Price>, 'metadata'> & {
 	metadata?: Record<string, string>;
 };
 
+type ShippingRateOverrides = Omit<Partial<Stripe.ShippingRate>, 'metadata'> & {
+	metadata?: Record<string, string>;
+};
+
 export const STRIPE_CATALOG_LOADED_AT = new Date('2026-07-15T18:00:00.000Z');
 
 export function stripeProduct(overrides: ProductOverrides = {}): Stripe.Product {
@@ -123,6 +127,26 @@ export function stripeAccessoryPrice(overrides: PriceOverrides = {}): Stripe.Pri
 		unit_amount_decimal: Stripe.Decimal.from(2_000),
 		...priceOverrides
 	});
+}
+
+export function stripeShippingRate(overrides: ShippingRateOverrides = {}): Stripe.ShippingRate {
+	const { metadata, ...shippingRateOverrides } = overrides;
+
+	return {
+		id: 'shr_paid',
+		object: 'shipping_rate',
+		active: true,
+		created: 1_752_600_000,
+		delivery_estimate: null,
+		display_name: 'Standard shipping',
+		fixed_amount: { amount: 937, currency: 'eur' },
+		livemode: false,
+		metadata: { ...metadata },
+		tax_behavior: 'exclusive',
+		tax_code: 'txcd_92010001',
+		type: 'fixed_amount',
+		...shippingRateOverrides
+	};
 }
 
 export function stripeList<T extends { id: string }>(data: readonly T[]): Stripe.ApiList<T> {

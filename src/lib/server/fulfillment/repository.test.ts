@@ -165,8 +165,9 @@ function seedOrder(database: ShopDatabase, overrides: Partial<OrderSeed> = {}): 
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at, destination_country
-			) VALUES (?, ?, 2, 'eur', 2, 'free', ?, ?, ?, 'SE')`
+				shipping_mode, created_at, expires_at, completed_at, destination_country,
+				shipping_rate_id, shipping_net_amount
+			) VALUES (?, ?, 2, 'eur', 2, 'free', ?, ?, ?, 'SE', 'shr_free', 0)`
 		)
 		.run(
 			`draft_${suffix}`,

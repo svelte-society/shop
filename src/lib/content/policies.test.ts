@@ -47,21 +47,32 @@ describe('configured policy documents', () => {
 		}
 	});
 
-	it('publishes the configured shipping regions, rates, estimates, and non-EU import notice', () => {
+	it('publishes provider-owned shipping rules without a fixed public price promise', () => {
 		const shipping = text(createPolicyDocuments(config).shipping);
 
 		expect(shipping).toContain('EUR');
 		expect(shipping).toContain('European Union except Slovenia');
 		expect(shipping).toContain('selected destinations across Asia');
 		expect(shipping).not.toContain('United States');
-		expect(shipping).toContain('EUR 10');
+		expect(shipping).toContain('Deliver to');
+		expect(shipping).toContain('current amount is shown before checkout');
+		expect(shipping).not.toMatch(/EUR\s+\d/u);
 		expect(shipping).toContain('one total unit');
 		expect(shipping).toContain('two or more total units');
 		expect(shipping).toContain('Reviewed EU estimate');
 		expect(shipping).toContain('Reviewed Asia estimate');
-		expect(shipping).toContain('Final tax is calculated at checkout');
+		expect(shipping).toContain('exact tax');
 		expect(shipping).toContain('customs duties, brokerage fees, or carrier charges');
 		expect(shipping).toContain('not guaranteed delivery dates');
+	});
+
+	it('keeps the terms aligned with provider-owned shipping and destination pricing', () => {
+		const terms = text(createPolicyDocuments(config).terms);
+
+		expect(terms).toContain('Deliver to');
+		expect(terms).toContain('current shipping amount is shown before checkout');
+		expect(terms).toContain('free for two or more total units');
+		expect(terms).not.toMatch(/Shipping (?:costs|is) EUR\s+\d/u);
 	});
 
 	it('publishes approval-first returns instructions without inventing a merchandise exclusion', () => {

@@ -90,6 +90,8 @@ function draftInput(overrides: Partial<NewCheckoutDraft> = {}): NewCheckoutDraft
 		currency: 'eur',
 		totalUnitCount: 2,
 		shippingMode: 'free',
+		shippingRateId: 'shr_free',
+		shippingNetAmount: 0,
 		createdAt: new Date('2026-07-16T08:00:00.000Z'),
 		expiresAt: new Date('2026-07-16T09:00:00.000Z'),
 		lines: [
@@ -197,6 +199,11 @@ describe('SqliteCheckoutDraftRepository', () => {
 
 		const found = drafts.findById(created.id);
 		expect(found).toEqual(expect.objectContaining(created));
+		expect(found).toMatchObject({
+			shippingMode: 'free',
+			shippingRateId: 'shr_free',
+			shippingNetAmount: 0
+		});
 		expect(found?.lines).toEqual([
 			expect.objectContaining({
 				lineIndex: 0,
@@ -270,6 +277,36 @@ describe('SqliteCheckoutDraftRepository', () => {
 		expect(() => drafts.create(draftInput({ createdAt: new Date(Number.NaN) }))).toThrowError(
 			'CHECKOUT_DRAFT_INVALID'
 		);
+		expect(() => drafts.create(draftInput({ shippingRateId: '' }))).toThrowError(
+			'CHECKOUT_DRAFT_INVALID'
+		);
+		expect(() =>
+			drafts.create(draftInput({ shippingNetAmount: Number.MAX_SAFE_INTEGER + 1 }))
+		).toThrowError('CHECKOUT_DRAFT_INVALID');
+		expect(() =>
+			drafts.create(
+				draftInput({
+					totalUnitCount: 1,
+					shippingMode: 'paid',
+					shippingRateId: 'shr_paid',
+					shippingNetAmount: 0,
+					lines: [{ ...draftInput().lines[0], quantity: 1 }]
+				})
+			)
+		).toThrowError('CHECKOUT_DRAFT_INVALID');
+		expect(() => drafts.create(draftInput({ shippingNetAmount: 1 }))).toThrowError(
+			'CHECKOUT_DRAFT_INVALID'
+		);
+	});
+
+	it('rejects a corrupted stored shipping snapshot at the row boundary', () => {
+		const draft = drafts.create(draftInput());
+		database.exec('DROP TRIGGER checkout_drafts_shipping_required_update');
+		database
+			.prepare('UPDATE checkout_drafts SET shipping_net_amount = ? WHERE id = ?')
+			.run(1, draft.id);
+
+		expect(() => drafts.findById(draft.id)).toThrowError('CHECKOUT_DRAFT_ROW_INVALID');
 	});
 
 	it('attaches one unique Checkout Session idempotently and reports stable conflicts', () => {

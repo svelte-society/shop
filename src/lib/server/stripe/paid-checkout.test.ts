@@ -66,6 +66,8 @@ function checkoutDraft(
 		id?: string;
 		checkoutSessionId?: string | null;
 		shippingMode?: 'paid' | 'free';
+		shippingRateId?: string;
+		shippingNetAmount?: number;
 		totalUnitCount?: number;
 		lines?: Array<{ priceId: string; quantity: number; unitAmount: number }>;
 	} = {}
@@ -73,6 +75,7 @@ function checkoutDraft(
 	const lines = options.lines ?? [{ priceId: 'price_tee_medium', quantity: 1, unitAmount: 2_000 }];
 	const totalUnitCount =
 		options.totalUnitCount ?? lines.reduce((total, line) => total + line.quantity, 0);
+	const shippingMode = options.shippingMode ?? (totalUnitCount === 1 ? 'paid' : 'free');
 	return {
 		id: options.id ?? 'draft-paid-123',
 		checkoutSessionId:
@@ -81,7 +84,10 @@ function checkoutDraft(
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount,
-		shippingMode: options.shippingMode ?? (totalUnitCount === 1 ? 'paid' : 'free'),
+		shippingMode,
+		shippingRateId:
+			options.shippingRateId ?? (shippingMode === 'paid' ? 'shr_paid_8_eur' : 'shr_free'),
+		shippingNetAmount: options.shippingNetAmount ?? (shippingMode === 'paid' ? 800 : 0),
 		createdAt: new Date('2026-07-16T10:00:00.000Z'),
 		expiresAt: new Date('2026-07-17T10:00:00.000Z'),
 		completedAt: null,
@@ -144,6 +150,7 @@ describe('Stripe paid Checkout normalization', () => {
 			currency: 'eur',
 			paymentStatus: 'paid',
 			destinationCountry: 'SE',
+			shippingRate: { id: 'shr_paid_8_eur', netAmount: 800 },
 			amounts: {
 				subtotal: 2_000,
 				discount: 0,
@@ -185,6 +192,39 @@ describe('Stripe paid Checkout normalization', () => {
 				params: { limit: 100, expand: ['data.price'] }
 			}
 		]);
+	});
+
+	it('normalizes arbitrary positive Stripe Price and paid Shipping Rate amounts', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			country: 'DE',
+			shippingSubtotal: 937,
+			shippingRateId: 'shr_paid_dynamic',
+			lines: [
+				{
+					id: 'li_dynamic_price',
+					priceId: 'price_dynamic',
+					quantity: 1,
+					unitAmount: 2_347,
+					taxAmount: 446
+				}
+			]
+		});
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			shippingRate: { id: 'shr_paid_dynamic', netAmount: 937 },
+			amounts: {
+				subtotal: 2_347,
+				shipping: 1_115,
+				shippingTax: 178,
+				tax: 624,
+				total: 3_908
+			},
+			lines: [{ priceId: 'price_dynamic', unitAmount: 2_347, retailUnitAmount: 2_793 }]
+		});
 	});
 
 	it('accepts an absent Customer shipping phone when Checkout customer phone copies agree', async () => {
@@ -1031,6 +1071,32 @@ describe('paid Checkout comparison', () => {
 		expect(() => comparePaidCheckout(checkoutDraft(), snapshot)).not.toThrow();
 	});
 
+	it('accepts arbitrary frozen Price and Shipping Rate amounts', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			country: 'DE',
+			shippingSubtotal: 937,
+			shippingRateId: 'shr_paid_dynamic',
+			lines: [
+				{
+					id: 'li_dynamic_price',
+					priceId: 'price_dynamic',
+					quantity: 1,
+					unitAmount: 2_347,
+					taxAmount: 446
+				}
+			]
+		});
+		const { snapshot } = await normalizedSnapshot(fixture);
+		const draft = checkoutDraft({
+			shippingRateId: 'shr_paid_dynamic',
+			shippingNetAmount: 937,
+			lines: [{ priceId: 'price_dynamic', quantity: 1, unitAmount: 2_347 }]
+		});
+		draft.destinationCountry = 'DE';
+
+		expect(() => comparePaidCheckout(draft, snapshot)).not.toThrow();
+	});
+
 	it('accepts reordered exact lines and a destination-specific final tax', async () => {
 		const fixture = paidCheckoutProviderFixture({
 			shippingSubtotal: 0,
@@ -1075,6 +1141,19 @@ describe('paid Checkout comparison', () => {
 		expectComparisonCode(
 			() => comparePaidCheckout(checkoutDraft(), snapshot),
 			'PAID_CHECKOUT_LINES_MISMATCH'
+		);
+	});
+
+	it.each([
+		['Shipping Rate ID', (paid: PaidCheckoutSnapshot) => (paid.shippingRate.id = 'shr_other')],
+		['Shipping Rate amount', (paid: PaidCheckoutSnapshot) => (paid.shippingRate.netAmount = 799)]
+	])('rejects a frozen %s mismatch', async (_label, mutate) => {
+		const { snapshot } = await normalizedSnapshot();
+		mutate(snapshot);
+
+		expectComparisonCode(
+			() => comparePaidCheckout(checkoutDraft(), snapshot),
+			'PAID_CHECKOUT_SHIPPING_MISMATCH'
 		);
 	});
 

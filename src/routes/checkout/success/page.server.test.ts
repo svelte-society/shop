@@ -23,6 +23,7 @@ const PAID_CHECKOUT: PaidCheckoutSnapshot = {
 	currency: 'eur',
 	paymentStatus: 'paid',
 	destinationCountry: 'SE',
+	shippingRate: { id: 'shr_paid_8_eur', netAmount: 800 },
 	amounts: {
 		subtotal: 2_000,
 		discount: 0,
@@ -50,6 +51,8 @@ function draftFixture(overrides: Partial<CheckoutDraftWithLines> = {}): Checkout
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
+		shippingRateId: 'shr_paid_8_eur',
+		shippingNetAmount: 800,
 		createdAt: new Date('2026-07-22T09:00:00.000Z'),
 		expiresAt: new Date('2026-07-23T09:00:00.000Z'),
 		completedAt: null,

@@ -73,8 +73,9 @@ function prepareDatabase(databasePath) {
 			.prepare(
 				`INSERT INTO checkout_drafts (
 					id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-					shipping_mode, created_at, expires_at, completed_at, destination_country
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+					shipping_mode, created_at, expires_at, completed_at, destination_country,
+					shipping_rate_id, shipping_net_amount
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.run(
 				'draft_process_shutdown',
@@ -86,7 +87,9 @@ function prepareDatabase(databasePath) {
 				'2026-07-17T00:00:00.000Z',
 				'2026-07-18T00:00:00.000Z',
 				'2026-07-17T00:00:00.000Z',
-				'SE'
+				'SE',
+				'shr_paid_8_eur',
+				800
 			);
 		database
 			.prepare(

@@ -15,7 +15,6 @@ const LINE_ITEM_ID_PATTERN = /^li_[A-Za-z0-9_]+$/;
 const PRICE_ID_PATTERN = /^price_[A-Za-z0-9_]+$/;
 const SHIPPING_RATE_ID_PATTERN = /^shr_[A-Za-z0-9_]+$/;
 const TAX_RATE_ID_PATTERN = /^txr_[A-Za-z0-9_]+$/;
-const PAID_SHIPPING_AMOUNT = 800;
 const LINE_PAGE_LIMIT = 100;
 const MAX_CHECKOUT_LINES = 20;
 const MAX_CHECKOUT_UNITS = 20;
@@ -403,7 +402,7 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 		!isRecord(value.price) ||
 		value.price.object !== 'price' ||
 		!isProviderId(value.price.id, PRICE_ID_PATTERN) ||
-		value.price.unit_amount !== 2_000 ||
+		!isSafePositiveInteger(value.price.unit_amount) ||
 		value.price.tax_behavior !== 'exclusive' ||
 		value.price.type !== 'one_time' ||
 		value.price.recurring !== null
@@ -542,7 +541,10 @@ function validatePaymentIntent(
 	return { paymentIntentId: value.id, charge };
 }
 
-function validateExclusiveShipping(value: UnknownRecord, expectedSubtotal: 0 | 800): void {
+function normalizeExclusiveShipping(
+	value: UnknownRecord,
+	requiresPaidShipping: boolean
+): { id: string; netAmount: number } {
 	const rate = value.shipping_rate;
 	if (
 		!isRecord(rate) ||
@@ -551,7 +553,9 @@ function validateExclusiveShipping(value: UnknownRecord, expectedSubtotal: 0 | 8
 		rate.type !== 'fixed_amount' ||
 		rate.tax_behavior !== 'exclusive' ||
 		!isRecord(rate.fixed_amount) ||
-		rate.fixed_amount.amount !== expectedSubtotal ||
+		!isSafeNonNegativeInteger(rate.fixed_amount.amount) ||
+		rate.fixed_amount.amount !== value.amount_subtotal ||
+		(requiresPaidShipping ? rate.fixed_amount.amount <= 0 : rate.fixed_amount.amount !== 0) ||
 		rate.fixed_amount.currency !== 'eur'
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
@@ -576,7 +580,6 @@ function validateExclusiveShipping(value: UnknownRecord, expectedSubtotal: 0 | 8
 	);
 	if (
 		shippingTax !== value.amount_tax ||
-		value.amount_subtotal !== expectedSubtotal ||
 		value.amount_total !==
 			safeSum(
 				[value.amount_subtotal as number, value.amount_tax as number],
@@ -585,6 +588,7 @@ function validateExclusiveShipping(value: UnknownRecord, expectedSubtotal: 0 | 8
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
+	return { id: rate.id, netAmount: rate.fixed_amount.amount };
 }
 
 function normalizePaidCheckout(
@@ -641,7 +645,7 @@ function normalizePaidCheckout(
 		lines.map((line) => line.quantity),
 		'STRIPE_PAID_CHECKOUT_LINES_INVALID'
 	);
-	validateExclusiveShipping(session.shipping_cost, unitCount === 1 ? 800 : 0);
+	const shippingRate = normalizeExclusiveShipping(session.shipping_cost, unitCount === 1);
 
 	// Stripe 2026-06-24.dahlia all-exclusive reconciliation.
 	const lineSubtotal = safeSum(
@@ -710,6 +714,7 @@ function normalizePaidCheckout(
 		currency: 'eur',
 		paymentStatus: 'paid',
 		destinationCountry,
+		shippingRate,
 		amounts: {
 			subtotal: session.amount_subtotal,
 			discount: session.total_details.amount_discount,
@@ -897,7 +902,15 @@ export function comparePaidCheckout(
 	if (
 		!Number.isSafeInteger(netShipping) ||
 		netShipping < 0 ||
-		netShipping !== (draft.shippingMode === 'paid' ? PAID_SHIPPING_AMOUNT : 0)
+		!paid.shippingRate ||
+		!isProviderId(paid.shippingRate.id, SHIPPING_RATE_ID_PATTERN) ||
+		!isSafeNonNegativeInteger(paid.shippingRate.netAmount) ||
+		!isProviderId(draft.shippingRateId, SHIPPING_RATE_ID_PATTERN) ||
+		!isSafeNonNegativeInteger(draft.shippingNetAmount) ||
+		paid.shippingRate.id !== draft.shippingRateId ||
+		paid.shippingRate.netAmount !== draft.shippingNetAmount ||
+		netShipping !== draft.shippingNetAmount ||
+		(draft.shippingMode === 'paid' ? draft.shippingNetAmount <= 0 : draft.shippingNetAmount !== 0)
 	) {
 		comparisonFail('PAID_CHECKOUT_SHIPPING_MISMATCH');
 	}

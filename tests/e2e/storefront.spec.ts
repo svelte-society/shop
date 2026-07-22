@@ -11,6 +11,7 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 		page.getByRole('heading', { level: 1, name: 'Made for people who make with Svelte.' })
 	).toBeVisible();
 	await expect(page.getByText('Free shipping when you pick two.', { exact: true })).toBeVisible();
+	await expect(page.getByText(/€11\.71 for one item/)).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Apparel' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Accessories' })).toBeVisible();
 	await expect(page.getByRole('link', { name: /Community Tee/ })).toHaveAttribute(

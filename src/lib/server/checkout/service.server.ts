@@ -1,5 +1,5 @@
 import { parseCart, selectShippingMode, totalUnits, type CartLine } from '$lib/domain/cart';
-import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
+import type { CatalogProduct, CatalogShippingRates, CatalogVariant } from '$lib/domain/catalog';
 import { isSupportedDestination, type MarketDestination } from '$lib/domain/destinations';
 import type { NewCheckoutDraftLine } from '$lib/domain/orders';
 import type { CatalogService } from '$lib/server/catalog/service.server';
@@ -44,8 +44,6 @@ export type CheckoutServiceOptions = {
 	catalog: Pick<CatalogService, 'resolveCart'>;
 	drafts: CheckoutDraftRepository;
 	stripe: StripeCheckoutGateway;
-	paidShippingRateId: string;
-	freeShippingRateId: string;
 	productionOrigin: URL;
 	clock?: () => Date;
 	alerts?: AlertService;
@@ -64,7 +62,30 @@ function parseCheckoutCart(input: unknown): CartLine[] {
 	return lines;
 }
 
-function validateResolution(lines: CartLine[], resolved: ResolvedCartLine[]): ResolvedCartLine[] {
+function validateShippingRates(input: CatalogShippingRates): CatalogShippingRates {
+	if (
+		!input ||
+		!input.paid ||
+		!input.free ||
+		typeof input.paid.id !== 'string' ||
+		input.paid.id.trim().length === 0 ||
+		typeof input.free.id !== 'string' ||
+		input.free.id.trim().length === 0 ||
+		input.paid.id === input.free.id ||
+		!Number.isSafeInteger(input.paid.netAmountCents) ||
+		input.paid.netAmountCents <= 0 ||
+		input.free.netAmountCents !== 0
+	) {
+		throw new Error('CATALOG_SHIPPING_RATE_INVALID');
+	}
+	return input;
+}
+
+function validateResolution(
+	lines: CartLine[],
+	resolution: Awaited<ReturnType<CatalogService['resolveCart']>>
+): { lines: ResolvedCartLine[]; shippingRates: CatalogShippingRates } {
+	const resolved = resolution.lines;
 	if (resolved.length !== lines.length) throw new CheckoutError('CHECKOUT_VARIANT_UNAVAILABLE');
 
 	for (const [index, item] of resolved.entries()) {
@@ -80,7 +101,7 @@ function validateResolution(lines: CartLine[], resolved: ResolvedCartLine[]): Re
 		}
 	}
 
-	return resolved;
+	return { lines: resolved, shippingRates: validateShippingRates(resolution.shippingRates) };
 }
 
 function snapshotLine(item: ResolvedCartLine): NewCheckoutDraftLine {
@@ -131,9 +152,12 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 			const lines = parseCheckoutCart(input);
 			const observedAt = clock();
 			let resolved: ResolvedCartLine[];
+			let shippingRates: CatalogShippingRates;
 
 			try {
-				resolved = validateResolution(lines, await options.catalog.resolveCart(lines));
+				const resolution = validateResolution(lines, await options.catalog.resolveCart(lines));
+				resolved = resolution.lines;
+				shippingRates = resolution.shippingRates;
 			} catch (error) {
 				if (error instanceof CheckoutError) throw error;
 				if (error instanceof Error && error.message === 'CATALOG_VARIANT_UNAVAILABLE') {
@@ -144,6 +168,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 			}
 
 			const shippingMode = selectShippingMode(lines);
+			const shippingRate = shippingRates[shippingMode];
 			const createdAt = observedAt;
 			let draft;
 
@@ -154,6 +179,8 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 					currency: 'eur',
 					totalUnitCount: totalUnits(lines),
 					shippingMode,
+					shippingRateId: shippingRate.id,
+					shippingNetAmount: shippingRate.netAmountCents,
 					createdAt,
 					expiresAt: new Date(createdAt.getTime() + CHECKOUT_DRAFT_TTL_MS),
 					lines: resolved.map(snapshotLine)
@@ -172,8 +199,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 						priceId: item.variant.priceId,
 						quantity: item.line.quantity
 					})),
-					shippingRateId:
-						shippingMode === 'paid' ? options.paidShippingRateId : options.freeShippingRateId,
+					shippingRateId: shippingRate.id,
 					successUrl: `${options.productionOrigin.origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
 					cancelUrl: `${options.productionOrigin.origin}/checkout/cancel`
 				});

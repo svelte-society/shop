@@ -3,6 +3,7 @@ import type {
 	CatalogCategory,
 	CatalogDiagnostic,
 	CatalogProduct,
+	CatalogShippingRates,
 	CatalogSnapshot,
 	CatalogVariant,
 	ProductSizeChart
@@ -27,6 +28,7 @@ const INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const DESIGN_KEY_PATTERN = /^design_url_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
 const MOCKUP_KEY_PATTERN = /^mockup_url_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
 const THREAD_COLORS_KEY_PATTERN = /^thread_colors_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
+const SHIPPING_TAX_CODE = 'txcd_92010001';
 function diagnostic(providerId: string, code: string): CatalogDiagnostic {
 	return { providerId, code };
 }
@@ -258,12 +260,11 @@ function parsePrice(source: Stripe.Price, productId: string): PriceResult {
 	if (
 		source.unit_amount === null ||
 		!Number.isSafeInteger(source.unit_amount) ||
-		source.unit_amount < 0
+		source.unit_amount <= 0
 	) {
 		add('PRICE_UNIT_AMOUNT_INVALID');
 	}
 	if (source.tax_behavior !== 'exclusive') add('PRICE_TAX_INVALID');
-	if (source.unit_amount !== 2_000) add('PRICE_AMOUNT_INVALID');
 
 	const label = nonEmpty(source.metadata.label);
 	if (!label) add('PRICE_LABEL_INVALID');
@@ -303,6 +304,53 @@ function parsePrice(source: Stripe.Price, productId: string): PriceResult {
 	};
 }
 
+type ShippingRateSource = {
+	configuredId: string;
+	rate: Stripe.ShippingRate;
+};
+
+function shippingTaxCode(value: Stripe.ShippingRate['tax_code']): string | null {
+	if (typeof value === 'string') return value;
+	return value && typeof value.id === 'string' ? value.id : null;
+}
+
+function parseShippingRate(
+	source: ShippingRateSource,
+	expectedAmount: 'positive' | 'zero'
+): { id: string; netAmountCents: number } {
+	const { rate } = source;
+	const amount = rate.fixed_amount?.amount;
+	if (
+		!nonEmpty(source.configuredId) ||
+		rate.id !== source.configuredId ||
+		rate.object !== 'shipping_rate' ||
+		rate.active !== true ||
+		rate.type !== 'fixed_amount' ||
+		!rate.fixed_amount ||
+		rate.fixed_amount.currency !== 'eur' ||
+		!Number.isSafeInteger(amount) ||
+		amount === undefined ||
+		amount < 0 ||
+		(expectedAmount === 'positive' ? amount <= 0 : amount !== 0) ||
+		rate.tax_behavior !== 'exclusive' ||
+		shippingTaxCode(rate.tax_code) !== SHIPPING_TAX_CODE
+	) {
+		throw new Error('CATALOG_SHIPPING_RATE_INVALID');
+	}
+
+	return { id: rate.id, netAmountCents: amount };
+}
+
+export function parseStripeShippingRates(input: {
+	paid: ShippingRateSource;
+	free: ShippingRateSource;
+}): CatalogShippingRates {
+	const paid = parseShippingRate(input.paid, 'positive');
+	const free = parseShippingRate(input.free, 'zero');
+	if (paid.id === free.id) throw new Error('CATALOG_SHIPPING_RATE_INVALID');
+	return { paid, free: { ...free, netAmountCents: 0 } };
+}
+
 function sortDiagnostics(diagnostics: CatalogDiagnostic[]): CatalogDiagnostic[] {
 	return diagnostics.sort(
 		(left, right) =>
@@ -332,7 +380,8 @@ function duplicateSlugClaimants(sources: readonly Stripe.Product[]): Set<string>
 export async function parseStripeCatalog(
 	sources: readonly Stripe.Product[],
 	loadPrices: (productId: string) => Promise<readonly Stripe.Price[]>,
-	loadedAt: Date
+	loadedAt: Date,
+	shippingRates: CatalogShippingRates
 ): Promise<CatalogSnapshot> {
 	const diagnostics: CatalogDiagnostic[] = [];
 	const duplicateProviderIds = duplicateSlugClaimants(sources);
@@ -385,6 +434,7 @@ export async function parseStripeCatalog(
 
 	return {
 		products,
+		shippingRates,
 		diagnostics: sortDiagnostics(diagnostics),
 		loadedAt: new Date(loadedAt),
 		stale: false

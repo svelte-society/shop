@@ -15,13 +15,19 @@ function isCatalogUnavailable(error: unknown): boolean {
 export const load: PageServerLoad = async () => {
 	requireStorefront(env);
 	const config = parsePrivateConfig(env);
-	catalogService ??= createCatalogService(createCatalogGateway(config.stripeSecretKey));
+	catalogService ??= createCatalogService(
+		createCatalogGateway(config.stripeSecretKey, {
+			paidShippingRateId: config.stripePaidShippingRateId,
+			freeShippingRateId: config.stripeFreeShippingRateId
+		})
+	);
 
 	try {
 		const catalog = await catalogService.listPublic();
 
 		return {
 			products: catalog.products,
+			paidShippingNetCents: catalog.paidShippingNetCents,
 			catalogUnavailable: false,
 			checkoutEnabled: config.checkoutEnabled
 		};
@@ -30,6 +36,7 @@ export const load: PageServerLoad = async () => {
 
 		return {
 			products: [],
+			paidShippingNetCents: null,
 			catalogUnavailable: true,
 			checkoutEnabled: false
 		};

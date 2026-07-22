@@ -1,7 +1,6 @@
 import Stripe from 'stripe';
 import type { CatalogGateway } from './gateway';
-import type { CatalogVariant } from '$lib/domain/catalog';
-import { parseStripeCatalog } from './parse';
+import { parseStripeCatalog, parseStripeShippingRates } from './parse';
 
 export type StripeCatalogClient = {
 	products: {
@@ -10,9 +9,14 @@ export type StripeCatalogClient = {
 	prices: {
 		list(params: Stripe.PriceListParams): Promise<Stripe.ApiList<Stripe.Price>>;
 	};
+	shippingRates: {
+		retrieve(id: string): Promise<Stripe.ShippingRate>;
+	};
 };
 
 export type StripeCatalogGatewayOptions = {
+	paidShippingRateId: string;
+	freeShippingRateId: string;
 	client?: StripeCatalogClient;
 	clock?: () => Date;
 };
@@ -67,29 +71,31 @@ async function listPrices(client: StripeCatalogClient, productId: string): Promi
 
 export function createStripeCatalogGateway(
 	stripeSecretKey: string,
-	options: StripeCatalogGatewayOptions = {}
+	options: StripeCatalogGatewayOptions
 ): CatalogGateway {
 	const client = options.client ?? new Stripe(stripeSecretKey);
 	const clock = options.clock ?? (() => new Date());
 
 	async function loadMerchCatalog() {
-		const products = await listProducts(client);
-		return parseStripeCatalog(products, (productId) => listPrices(client, productId), clock());
+		if (!options.paidShippingRateId.trim() || !options.freeShippingRateId.trim()) {
+			throw new Error('CATALOG_SHIPPING_RATE_INVALID');
+		}
+		const [products, paidRate, freeRate] = await Promise.all([
+			listProducts(client),
+			client.shippingRates.retrieve(options.paidShippingRateId),
+			client.shippingRates.retrieve(options.freeShippingRateId)
+		]);
+		const shippingRates = parseStripeShippingRates({
+			paid: { configuredId: options.paidShippingRateId, rate: paidRate },
+			free: { configuredId: options.freeShippingRateId, rate: freeRate }
+		});
+		return parseStripeCatalog(
+			products,
+			(productId) => listPrices(client, productId),
+			clock(),
+			shippingRates
+		);
 	}
 
-	return {
-		loadMerchCatalog,
-		async resolveVariants(priceIds) {
-			const snapshot = await loadMerchCatalog();
-			const variantsById = new Map<string, CatalogVariant>();
-
-			for (const product of snapshot.products) {
-				for (const variant of product.variants) variantsById.set(variant.priceId, variant);
-			}
-
-			return priceIds
-				.map((priceId) => variantsById.get(priceId))
-				.filter((variant): variant is CatalogVariant => variant !== undefined);
-		}
-	};
+	return { loadMerchCatalog };
 }

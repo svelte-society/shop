@@ -52,7 +52,12 @@ function isJsonRequest(request: Request): boolean {
 function defaultCheckoutServiceFactory(config: PrivateConfig): CheckoutService {
 	const database = applicationLifecycle.current()?.database;
 	if (!database?.open) throw new Error('APPLICATION_NOT_READY');
-	const catalog = createCatalogService(createCatalogGateway(config.stripeSecretKey));
+	const catalog = createCatalogService(
+		createCatalogGateway(config.stripeSecretKey, {
+			paidShippingRateId: config.stripePaidShippingRateId,
+			freeShippingRateId: config.stripeFreeShippingRateId
+		})
+	);
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const stripe = createStripeCheckoutGateway(createStripeClient(config.stripeSecretKey));
 
@@ -60,8 +65,6 @@ function defaultCheckoutServiceFactory(config: PrivateConfig): CheckoutService {
 		catalog,
 		drafts,
 		stripe,
-		paidShippingRateId: config.stripePaidShippingRateId,
-		freeShippingRateId: config.stripeFreeShippingRateId,
 		productionOrigin: config.productionOrigin
 	});
 }

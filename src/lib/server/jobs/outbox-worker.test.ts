@@ -60,8 +60,9 @@ function insertOrder(
 		.prepare(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
-				shipping_mode, created_at, expires_at, completed_at, destination_country
-			) VALUES (?, ?, 2, 'eur', ?, ?, ?, ?, ?, 'SE')`
+				shipping_mode, created_at, expires_at, completed_at, destination_country,
+				shipping_rate_id, shipping_net_amount
+			) VALUES (?, ?, 2, 'eur', ?, ?, ?, ?, ?, 'SE', ?, ?)`
 		)
 		.run(
 			draftId,
@@ -70,7 +71,9 @@ function insertOrder(
 			shippingMode,
 			now.toISOString(),
 			new Date(now.getTime() + 60_000).toISOString(),
-			now.toISOString()
+			now.toISOString(),
+			shippingMode === 'paid' ? 'shr_paid_8_eur' : 'shr_free',
+			shippingMode === 'paid' ? 800 : 0
 		);
 	database
 		.prepare(

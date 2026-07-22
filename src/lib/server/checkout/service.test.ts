@@ -44,7 +44,7 @@ const medium: CatalogVariant = {
 	label: 'M',
 	sortOrder: 10,
 	currency: 'eur',
-	unitAmountCents: 2_000,
+	unitAmountCents: 2_347,
 	sku: 'SS-TEE-M',
 	styriaProductNumber: 'STYRIA-TEE-M'
 };
@@ -87,6 +87,8 @@ class RecordingDraftRepository implements CheckoutDraftRepository {
 			currency: input.currency,
 			totalUnitCount: input.totalUnitCount,
 			shippingMode: input.shippingMode,
+			shippingRateId: input.shippingRateId,
+			shippingNetAmount: input.shippingNetAmount,
 			createdAt: input.createdAt,
 			expiresAt: input.expiresAt,
 			completedAt: null
@@ -133,6 +135,16 @@ class RecordingStripeGateway implements StripeCheckoutGateway {
 
 type ResolvedCart = Awaited<ReturnType<CatalogService['resolveCart']>>;
 
+function catalogResolution(lines: ResolvedCart['lines'], paidShippingNetCents = 937): ResolvedCart {
+	return {
+		lines,
+		shippingRates: {
+			paid: { id: 'shr_paid_dynamic', netAmountCents: paidShippingNetCents },
+			free: { id: 'shr_free', netAmountCents: 0 }
+		}
+	};
+}
+
 function serviceFixture(
 	options: {
 		resolved?: ResolvedCart;
@@ -149,15 +161,13 @@ function serviceFixture(
 		async resolveCart(lines) {
 			resolveInputs.push(structuredClone(lines));
 			if (options.resolveFailure) throw options.resolveFailure;
-			return options.resolved ?? [resolvedLine(medium, 1)];
+			return options.resolved ?? catalogResolution([resolvedLine(medium, 1)]);
 		}
 	};
 	const service = createCheckoutService({
 		catalog,
 		drafts,
 		stripe,
-		paidShippingRateId: 'shr_paid_10_eur',
-		freeShippingRateId: 'shr_free',
 		productionOrigin: ORIGIN,
 		clock: () => new Date(NOW),
 		alerts: options.alerts
@@ -246,7 +256,7 @@ describe('createCheckoutService', () => {
 		const drafts = new RecordingDraftRepository(events);
 		const stripe = new RecordingStripeGateway(events);
 		const { service } = serviceFixture({
-			resolved: [resolvedLine(medium, 1)],
+			resolved: catalogResolution([resolvedLine(medium, 1)]),
 			drafts,
 			stripe
 		});
@@ -263,6 +273,8 @@ describe('createCheckoutService', () => {
 				currency: 'eur',
 				totalUnitCount: 1,
 				shippingMode: 'paid',
+				shippingRateId: 'shr_paid_dynamic',
+				shippingNetAmount: 937,
 				createdAt: NOW,
 				expiresAt: new Date('2026-07-17T10:00:00.000Z'),
 				lines: [
@@ -280,7 +292,7 @@ describe('createCheckoutService', () => {
 						},
 						productionDetails: { mockupPlacements: {}, threadColors: {} },
 						quantity: 1,
-						unitAmount: 2_000,
+						unitAmount: 2_347,
 						currency: 'eur'
 					}
 				]
@@ -289,14 +301,14 @@ describe('createCheckoutService', () => {
 		expect(stripe.creations[0]).toMatchObject({
 			draftId: 'draft_123',
 			lines: [{ priceId: medium.priceId, quantity: 1 }],
-			shippingRateId: 'shr_paid_10_eur'
+			shippingRateId: 'shr_paid_dynamic'
 		});
 		expect(drafts.attachments).toEqual([{ draftId: 'draft_123', sessionId: 'cs_test_123' }]);
 	});
 
 	it('selects free shipping for two distinct server-resolved units', async () => {
 		const { service, stripe, drafts } = serviceFixture({
-			resolved: [resolvedLine(medium, 1), resolvedLine(large, 1)]
+			resolved: catalogResolution([resolvedLine(medium, 1), resolvedLine(large, 1)])
 		});
 
 		await service.start(
@@ -307,7 +319,12 @@ describe('createCheckoutService', () => {
 			'SE'
 		);
 
-		expect(drafts.creates[0]).toMatchObject({ totalUnitCount: 2, shippingMode: 'free' });
+		expect(drafts.creates[0]).toMatchObject({
+			totalUnitCount: 2,
+			shippingMode: 'free',
+			shippingRateId: 'shr_free',
+			shippingNetAmount: 0
+		});
 		expect(stripe.creations[0]).toMatchObject({
 			shippingRateId: 'shr_free',
 			lines: [
@@ -319,7 +336,7 @@ describe('createCheckoutService', () => {
 
 	it('merges duplicate lines and selects free shipping for two of the same variant', async () => {
 		const { service, resolveInputs, stripe } = serviceFixture({
-			resolved: [resolvedLine(medium, 2)]
+			resolved: catalogResolution([resolvedLine(medium, 2)])
 		});
 
 		await service.start(
@@ -346,11 +363,24 @@ describe('createCheckoutService', () => {
 			draftId: 'draft_123',
 			destinationCountry: 'JP',
 			lines: [{ priceId: medium.priceId, quantity: 1 }],
-			shippingRateId: 'shr_paid_10_eur',
+			shippingRateId: 'shr_paid_dynamic',
 			successUrl:
 				'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
 			cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
 		});
+	});
+
+	it('rejects an incoherent catalog shipping snapshot before draft or provider work', async () => {
+		const { service, drafts, stripe } = serviceFixture({
+			resolved: catalogResolution([resolvedLine(medium, 1)], 0)
+		});
+
+		await expectCheckoutCode(
+			service.start([{ priceId: medium.priceId, quantity: 1 }], 'SE'),
+			'CHECKOUT_CATALOG_UNAVAILABLE'
+		);
+		expect(drafts.creates).toEqual([]);
+		expect(stripe.creations).toEqual([]);
 	});
 
 	it('does not attach when Stripe times out or fails', async () => {
@@ -412,13 +442,11 @@ describe('createCheckoutService', () => {
 		const service = createCheckoutService({
 			catalog: {
 				async resolveCart() {
-					return [resolvedLine(medium, 1)];
+					return catalogResolution([resolvedLine(medium, 1)]);
 				}
 			},
 			drafts,
 			stripe,
-			paidShippingRateId: 'shr_paid_10_eur',
-			freeShippingRateId: 'shr_free',
 			productionOrigin: ORIGIN,
 			clock: () => new Date(NOW)
 		});
