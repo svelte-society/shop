@@ -85,7 +85,12 @@
 					data.paidShippingNetCents
 				)
 	);
-	let removedStaleLines = $state(false);
+
+	function removeUnavailableLines(): void {
+		for (const line of cart.lines) {
+			if (!catalogByPriceId.has(line.priceId)) cart.remove(line.priceId);
+		}
+	}
 
 	async function startCheckout(): Promise<void> {
 		if (!data.checkoutEnabled || checkoutPending) return;
@@ -103,14 +108,6 @@
 
 	onMount(() => {
 		track('cart_viewed');
-		if (!data.catalogUnavailable) {
-			for (const line of cart.lines) {
-				if (!catalogByPriceId.has(line.priceId)) {
-					cart.remove(line.priceId);
-					removedStaleLines = true;
-				}
-			}
-		}
 		ready = true;
 	});
 </script>
@@ -128,12 +125,6 @@
 		<section class="status-card" aria-busy="true">
 			<p role="status">Loading your cart…</p>
 		</section>
-	{:else if removedStaleLines && cart.lines.length === 0}
-		<section class="status-card" role="status">
-			<p class="eyebrow">Price updated</p>
-			<h1>A product price changed. Please add the item again.</h1>
-			<a class="primary-link" href={resolve('/#collection')}>Browse the collection</a>
-		</section>
 	{:else if cart.lines.length === 0}
 		<section class="empty-state">
 			<p class="eyebrow">Society Shop</p>
@@ -141,20 +132,25 @@
 			<p>Pick something made for Svelte people.</p>
 			<a class="primary-link" href={resolve('/#collection')}>Browse the collection</a>
 		</section>
-	{:else if data.catalogUnavailable || hasUnavailableLines}
+	{:else if data.catalogUnavailable}
 		<section class="status-card" role="status">
 			<p class="eyebrow">Your cart is preserved</p>
 			<h1>Collection temporarily unavailable.</h1>
 			<p>Your cart is safe. Try again shortly.</p>
 		</section>
-	{:else if cartDisplayPrice}
-		{#if removedStaleLines}
-			<section class="status-card price-change-notice" role="status">
-				<p class="eyebrow">Price updated</p>
-				<p>A product price changed. Please add the item again.</p>
+	{:else if hasUnavailableLines}
+		<section class="status-card" role="status">
+			<p class="eyebrow">Your cart is saved</p>
+			<h1>A product changed. Your cart is preserved.</h1>
+			<p>Remove the unavailable item, then add the current version from the collection.</p>
+			<div class="status-actions">
+				<button class="secondary-action" type="button" onclick={removeUnavailableLines}
+					>Remove unavailable items</button
+				>
 				<a class="primary-link" href={resolve('/#collection')}>Browse the collection</a>
-			</section>
-		{/if}
+			</div>
+		</section>
+	{:else if cartDisplayPrice}
 		<header class="page-heading">
 			<p class="eyebrow">Society Shop</p>
 			<h1>Your cart</h1>
@@ -254,8 +250,11 @@
 		background: var(--color-svelte-50, oklch(97.02% 0.0151 37.88));
 	}
 
-	.price-change-notice {
-		margin-bottom: 1.5rem;
+	.status-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		align-items: center;
 	}
 
 	.primary-link {
@@ -269,6 +268,19 @@
 		color: var(--color-ink, oklch(24% 0.025 255));
 		font-weight: 800;
 		text-decoration: none;
+	}
+
+	.secondary-action {
+		min-height: 2.75rem;
+		margin-top: 0.75rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.65rem;
+		padding: 0.65rem 1rem;
+		background: var(--color-paper);
+		color: var(--color-ink);
+		font: inherit;
+		font-weight: 750;
+		cursor: pointer;
 	}
 
 	@media (max-width: 52rem) {

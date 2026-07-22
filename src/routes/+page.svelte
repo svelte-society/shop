@@ -75,9 +75,7 @@
 			</article>
 			<article>
 				<h3>Regions</h3>
-				<p>
-					Shipping across the EU, except Slovenia, and to Styria-supported destinations in Asia.
-				</p>
+				<p>Shipping across the EU, except Slovenia, and to selected destinations in Asia.</p>
 			</article>
 			<article>
 				<h3>Tax</h3>

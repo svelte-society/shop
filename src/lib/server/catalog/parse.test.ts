@@ -66,6 +66,7 @@ describe('parseStripeCatalog', () => {
 		expect(snapshot.products).toHaveLength(1);
 		expect(snapshot.products[0]).toMatchObject({
 			providerId: 'prod_apparel',
+			taxCode: 'txcd_99999999',
 			slug: 'community-tee',
 			name: 'Community Tee',
 			category: 'apparel',
@@ -101,6 +102,33 @@ describe('parseStripeCatalog', () => {
 			}
 		]);
 		expect(Object.keys(snapshot.products[0].designPlacements)).toEqual(['back', 'front']);
+	});
+
+	it('accepts an expanded Product tax code and retains only its ID', async () => {
+		const product = stripeProduct({
+			tax_code: {
+				id: 'txcd_99999999',
+				object: 'tax_code',
+				name: 'General - Tangible Goods',
+				description: 'General tangible goods'
+			} as Stripe.TaxCode
+		});
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.products[0].taxCode).toBe('txcd_99999999');
+	});
+
+	it('excludes a physical Product without a tax code', async () => {
+		const product = stripeProduct({ tax_code: null });
+
+		const snapshot = await parse([product], [stripePrice()]);
+
+		expect(snapshot.products).toEqual([]);
+		expect(snapshot.diagnostics).toContainEqual({
+			providerId: product.id,
+			code: 'PRODUCT_PHYSICAL_GOODS_INVALID'
+		});
 	});
 
 	it('parses an inline size chart from Product metadata', async () => {

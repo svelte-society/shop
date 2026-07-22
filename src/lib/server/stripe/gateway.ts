@@ -1,11 +1,19 @@
 import type { PaymentStatus } from '$lib/domain/orders';
 
-export const CHECKOUT_CONTRACT_VERSION = 2;
+export const CHECKOUT_CONTRACT_VERSION = 3;
 
 export type CreateCheckoutInput = {
 	draftId: string;
 	destinationCountry: string;
-	lines: Array<{ priceId: string; quantity: number }>;
+	lines: Array<{
+		priceId: string;
+		quantity: number;
+		unitAmount: number;
+		productName: string;
+		variantLabel: string;
+		taxCode: string;
+		images: string[];
+	}>;
 	shippingRateId: string;
 	successUrl: string;
 	cancelUrl: string;
@@ -17,7 +25,7 @@ export interface StripeCheckoutGateway {
 }
 
 export type PaidCheckoutSnapshot = {
-	contractVersion: 2;
+	contractVersion: 3;
 	checkoutSessionId: string;
 	paymentIntentId: string;
 	customerId: string;

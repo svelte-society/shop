@@ -18,6 +18,7 @@ const ORIGIN = new URL('https://shop.sveltesociety.dev');
 
 const product: CatalogProduct = {
 	providerId: 'prod_tee',
+	taxCode: 'txcd_99999999',
 	slug: 'community-tee',
 	name: 'Community Tee',
 	description: 'A community tee for people who make with Svelte.',
@@ -57,6 +58,18 @@ const large: CatalogVariant = {
 	sku: 'SS-TEE-L',
 	styriaProductNumber: 'STYRIA-TEE-L'
 };
+
+function checkoutGatewayLine(variant: CatalogVariant, quantity: number) {
+	return {
+		priceId: variant.priceId,
+		quantity,
+		unitAmount: variant.unitAmountCents,
+		productName: product.name,
+		variantLabel: variant.label,
+		taxCode: product.taxCode,
+		images: product.images
+	};
+}
 
 function resolvedLine(variant: CatalogVariant, quantity: number) {
 	return {
@@ -133,7 +146,7 @@ class RecordingStripeGateway implements StripeCheckoutGateway {
 	}
 }
 
-type ResolvedCart = Awaited<ReturnType<CatalogService['resolveCart']>>;
+type ResolvedCart = Awaited<ReturnType<CatalogService['resolveCartForCheckout']>>;
 
 function catalogResolution(lines: ResolvedCart['lines'], paidShippingNetCents = 937): ResolvedCart {
 	return {
@@ -157,8 +170,8 @@ function serviceFixture(
 	const resolveInputs: Array<Array<{ priceId: string; quantity: number }>> = [];
 	const drafts = options.drafts ?? new RecordingDraftRepository();
 	const stripe = options.stripe ?? new RecordingStripeGateway();
-	const catalog: Pick<CatalogService, 'resolveCart'> = {
-		async resolveCart(lines) {
+	const catalog: Pick<CatalogService, 'resolveCartForCheckout'> = {
+		async resolveCartForCheckout(lines) {
 			resolveInputs.push(structuredClone(lines));
 			if (options.resolveFailure) throw options.resolveFailure;
 			return options.resolved ?? catalogResolution([resolvedLine(medium, 1)]);
@@ -300,7 +313,17 @@ describe('createCheckoutService', () => {
 		]);
 		expect(stripe.creations[0]).toMatchObject({
 			draftId: 'draft_123',
-			lines: [{ priceId: medium.priceId, quantity: 1 }],
+			lines: [
+				{
+					priceId: medium.priceId,
+					quantity: 1,
+					unitAmount: 2_347,
+					productName: 'Community Tee',
+					variantLabel: 'M',
+					taxCode: 'txcd_99999999',
+					images: ['https://cdn.example.com/products/tee.png']
+				}
+			],
 			shippingRateId: 'shr_paid_dynamic'
 		});
 		expect(drafts.attachments).toEqual([{ draftId: 'draft_123', sessionId: 'cs_test_123' }]);
@@ -328,8 +351,8 @@ describe('createCheckoutService', () => {
 		expect(stripe.creations[0]).toMatchObject({
 			shippingRateId: 'shr_free',
 			lines: [
-				{ priceId: medium.priceId, quantity: 1 },
-				{ priceId: large.priceId, quantity: 1 }
+				{ priceId: medium.priceId, quantity: 1, variantLabel: 'M' },
+				{ priceId: large.priceId, quantity: 1, variantLabel: 'L' }
 			]
 		});
 	});
@@ -350,7 +373,7 @@ describe('createCheckoutService', () => {
 		expect(resolveInputs).toEqual([[{ priceId: medium.priceId, quantity: 2 }]]);
 		expect(stripe.creations[0]).toMatchObject({
 			shippingRateId: 'shr_free',
-			lines: [{ priceId: medium.priceId, quantity: 2 }]
+			lines: [{ priceId: medium.priceId, quantity: 2, variantLabel: 'M' }]
 		});
 	});
 
@@ -362,7 +385,17 @@ describe('createCheckoutService', () => {
 		expect(stripe.creations[0]).toEqual({
 			draftId: 'draft_123',
 			destinationCountry: 'JP',
-			lines: [{ priceId: medium.priceId, quantity: 1 }],
+			lines: [
+				{
+					priceId: medium.priceId,
+					quantity: 1,
+					unitAmount: 2_347,
+					productName: 'Community Tee',
+					variantLabel: 'M',
+					taxCode: 'txcd_99999999',
+					images: ['https://cdn.example.com/products/tee.png']
+				}
+			],
 			shippingRateId: 'shr_paid_dynamic',
 			successUrl:
 				'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
@@ -441,7 +474,7 @@ describe('createCheckoutService', () => {
 		});
 		const service = createCheckoutService({
 			catalog: {
-				async resolveCart() {
+				async resolveCartForCheckout() {
 					return catalogResolution([resolvedLine(medium, 1)]);
 				}
 			},
@@ -531,8 +564,24 @@ describe('createStripeCheckoutGateway', () => {
 				draftId: 'draft_123',
 				destinationCountry: 'DE',
 				lines: [
-					{ priceId: medium.priceId, quantity: 1 },
-					{ priceId: large.priceId, quantity: 2 }
+					{
+						priceId: medium.priceId,
+						quantity: 1,
+						unitAmount: 2_347,
+						productName: 'Community Tee',
+						variantLabel: 'M',
+						taxCode: 'txcd_99999999',
+						images: ['https://cdn.example.com/products/tee.png']
+					},
+					{
+						priceId: large.priceId,
+						quantity: 2,
+						unitAmount: 2_347,
+						productName: 'Community Tee',
+						variantLabel: 'L',
+						taxCode: 'txcd_99999999',
+						images: ['https://cdn.example.com/products/tee.png']
+					}
 				],
 				shippingRateId: 'shr_free',
 				successUrl:
@@ -548,8 +597,34 @@ describe('createStripeCheckoutGateway', () => {
 			params: {
 				mode: 'payment',
 				line_items: [
-					{ price: medium.priceId, quantity: 1 },
-					{ price: large.priceId, quantity: 2 }
+					{
+						price_data: {
+							currency: 'eur',
+							unit_amount: 2_347,
+							tax_behavior: 'exclusive',
+							product_data: {
+								name: 'Community Tee — M',
+								tax_code: 'txcd_99999999',
+								images: ['https://cdn.example.com/products/tee.png']
+							}
+						},
+						quantity: 1,
+						metadata: { catalog_price_id: medium.priceId }
+					},
+					{
+						price_data: {
+							currency: 'eur',
+							unit_amount: 2_347,
+							tax_behavior: 'exclusive',
+							product_data: {
+								name: 'Community Tee — L',
+								tax_code: 'txcd_99999999',
+								images: ['https://cdn.example.com/products/tee.png']
+							}
+						},
+						quantity: 2,
+						metadata: { catalog_price_id: large.priceId }
+					}
 				],
 				customer_creation: 'always',
 				automatic_tax: { enabled: true },
@@ -658,7 +733,7 @@ describe('createStripeCheckoutGateway', () => {
 			createStripeCheckoutGateway(client).createSession({
 				draftId: 'draft_123',
 				destinationCountry: 'SE',
-				lines: [{ priceId: medium.priceId, quantity: 1 }],
+				lines: [checkoutGatewayLine(medium, 1)],
 				shippingRateId: 'shr_paid_10_eur',
 				successUrl:
 					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',
@@ -691,7 +766,7 @@ describe('createStripeCheckoutGateway', () => {
 			createStripeCheckoutGateway(client).createSession({
 				draftId: 'draft_123',
 				destinationCountry: 'SE',
-				lines: [{ priceId: medium.priceId, quantity: 1 }],
+				lines: [checkoutGatewayLine(medium, 1)],
 				shippingRateId: 'shr_paid_10_eur',
 				successUrl:
 					'https://shop.sveltesociety.dev/checkout/success?session_id={CHECKOUT_SESSION_ID}',

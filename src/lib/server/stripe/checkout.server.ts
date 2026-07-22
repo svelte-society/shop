@@ -60,8 +60,18 @@ export function createStripeCheckoutGateway(client: StripeCheckoutClient): Strip
 				{
 					mode: 'payment',
 					line_items: input.lines.map((line) => ({
-						price: line.priceId,
-						quantity: line.quantity
+						price_data: {
+							currency: 'eur',
+							unit_amount: line.unitAmount,
+							tax_behavior: 'exclusive',
+							product_data: {
+								name: `${line.productName} — ${line.variantLabel}`,
+								tax_code: line.taxCode,
+								images: line.images
+							}
+						},
+						quantity: line.quantity,
+						metadata: { catalog_price_id: line.priceId }
 					})),
 					customer_creation: 'always',
 					automatic_tax: { enabled: true },

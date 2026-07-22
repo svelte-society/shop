@@ -15,7 +15,7 @@ const PRIVATE_ENV = {
 } as const;
 
 const PAID_CHECKOUT: PaidCheckoutSnapshot = {
-	contractVersion: 2,
+	contractVersion: 3,
 	checkoutSessionId: 'cs_test_verified',
 	paymentIntentId: 'pi_test_verified',
 	customerId: 'cus_test_verified',
@@ -46,7 +46,7 @@ function draftFixture(overrides: Partial<CheckoutDraftWithLines> = {}): Checkout
 	return {
 		id: 'draft-test-verified',
 		checkoutSessionId: 'cs_test_verified',
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,

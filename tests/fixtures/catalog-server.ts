@@ -32,7 +32,7 @@ function ensureVerifiedDraft(): string {
 
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,

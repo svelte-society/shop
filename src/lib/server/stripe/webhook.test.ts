@@ -81,7 +81,7 @@ function refundEvent(id = 'evt_refund'): Stripe.Event {
 
 function draftInput(): NewCheckoutDraft {
 	return {
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
@@ -110,7 +110,7 @@ function draftInput(): NewCheckoutDraft {
 
 function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 	return {
-		contractVersion: 2,
+		contractVersion: 3,
 		checkoutSessionId: 'cs_paid',
 		paymentIntentId: 'pi_paid',
 		customerId: 'cus_paid',

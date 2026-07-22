@@ -110,6 +110,11 @@ function productIdFor(price: Stripe.Price): string | null {
 	return price.product.id;
 }
 
+function productTaxCode(value: Stripe.Product['tax_code']): string | null {
+	if (typeof value === 'string') return value;
+	return value && typeof value.id === 'string' ? value.id : null;
+}
+
 function parseProduct(source: Stripe.Product): ProductResult | null {
 	if (source.metadata.product_type !== 'merch') return null;
 
@@ -127,7 +132,8 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 	const images = source.images.map(httpsUrl).filter((image): image is string => image !== null);
 	if (images.length === 0) add('PRODUCT_IMAGE_INVALID');
 
-	if (source.shippable !== true || !source.tax_code) {
+	const taxCode = productTaxCode(source.tax_code);
+	if (source.shippable !== true || !taxCode) {
 		add('PRODUCT_PHYSICAL_GOODS_INVALID');
 	}
 
@@ -212,6 +218,7 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 		(category !== 'apparel' && category !== 'accessory') ||
 		!materials ||
 		!care ||
+		!taxCode ||
 		!designReference
 	) {
 		return { product: null, diagnostics };
@@ -220,6 +227,7 @@ function parseProduct(source: Stripe.Product): ProductResult | null {
 	return {
 		product: {
 			providerId: source.id,
+			taxCode,
 			slug,
 			name,
 			description,

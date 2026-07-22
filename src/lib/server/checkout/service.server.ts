@@ -41,7 +41,7 @@ type ResolvedCartLine = {
 };
 
 export type CheckoutServiceOptions = {
-	catalog: Pick<CatalogService, 'resolveCart'>;
+	catalog: Pick<CatalogService, 'resolveCartForCheckout'>;
 	drafts: CheckoutDraftRepository;
 	stripe: StripeCheckoutGateway;
 	productionOrigin: URL;
@@ -83,7 +83,7 @@ function validateShippingRates(input: CatalogShippingRates): CatalogShippingRate
 
 function validateResolution(
 	lines: CartLine[],
-	resolution: Awaited<ReturnType<CatalogService['resolveCart']>>
+	resolution: Awaited<ReturnType<CatalogService['resolveCartForCheckout']>>
 ): { lines: ResolvedCartLine[]; shippingRates: CatalogShippingRates } {
 	const resolved = resolution.lines;
 	if (resolved.length !== lines.length) throw new CheckoutError('CHECKOUT_VARIANT_UNAVAILABLE');
@@ -155,7 +155,10 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 			let shippingRates: CatalogShippingRates;
 
 			try {
-				const resolution = validateResolution(lines, await options.catalog.resolveCart(lines));
+				const resolution = validateResolution(
+					lines,
+					await options.catalog.resolveCartForCheckout(lines)
+				);
 				resolved = resolution.lines;
 				shippingRates = resolution.shippingRates;
 			} catch (error) {
@@ -197,7 +200,12 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 					destinationCountry,
 					lines: resolved.map((item) => ({
 						priceId: item.variant.priceId,
-						quantity: item.line.quantity
+						quantity: item.line.quantity,
+						unitAmount: item.variant.unitAmountCents,
+						productName: item.product.name,
+						variantLabel: item.variant.label,
+						taxCode: item.product.taxCode,
+						images: [...item.product.images]
 					})),
 					shippingRateId: shippingRate.id,
 					successUrl: `${options.productionOrigin.origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,

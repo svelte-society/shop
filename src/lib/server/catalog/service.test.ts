@@ -489,6 +489,7 @@ describe('createCatalogService', () => {
 			fit: 'Regular fit'
 		});
 		expect(product).not.toHaveProperty('providerId');
+		expect(product).not.toHaveProperty('taxCode');
 		expect(product).not.toHaveProperty('designReference');
 		expect(product).not.toHaveProperty('designPlacements');
 		expect(product.variants[0]).not.toHaveProperty('productId');
@@ -538,6 +539,22 @@ describe('createCatalogService', () => {
 		await expect(
 			service.resolveCart([{ priceId: 'price_missing', quantity: 1 }])
 		).rejects.toThrowError('CATALOG_VARIANT_UNAVAILABLE');
+	});
+
+	it('bypasses the storefront cache when resolving a cart for checkout', async () => {
+		const loadedAt = new Date(STRIPE_CATALOG_LOADED_AT);
+		const available = await validSnapshot(loadedAt);
+		const retired = { ...available, products: [], loadedAt: new Date(loadedAt.getTime() + 1) };
+		const gateway = {
+			loadMerchCatalog: vi.fn().mockResolvedValueOnce(available).mockResolvedValueOnce(retired)
+		};
+		const service = createCatalogService(gateway, { clock: () => loadedAt });
+
+		await expect(service.listPublic()).resolves.toMatchObject({ stale: false });
+		await expect(
+			service.resolveCartForCheckout([{ priceId: 'price_accessory_one', quantity: 1 }])
+		).rejects.toThrowError('CATALOG_VARIANT_UNAVAILABLE');
+		expect(gateway.loadMerchCatalog).toHaveBeenCalledTimes(2);
 	});
 
 	it('alerts a provider outage without changing unavailable or recovered catalog behavior', async () => {

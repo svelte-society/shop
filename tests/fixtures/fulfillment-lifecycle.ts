@@ -82,7 +82,7 @@ export function recordPaidOrder(database: ShopDatabase, suffix: string) {
 	const customerId = `cus_test_lifecycle_${suffix}`;
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,

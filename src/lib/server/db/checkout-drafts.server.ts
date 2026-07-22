@@ -157,7 +157,7 @@ function validateNewDraft(input: NewCheckoutDraft): {
 	if (
 		!input ||
 		!Number.isSafeInteger(input.contractVersion) ||
-		input.contractVersion !== 2 ||
+		input.contractVersion !== 3 ||
 		!isSupportedDestination(input.destinationCountry) ||
 		input.currency !== 'eur' ||
 		!Number.isSafeInteger(input.totalUnitCount) ||
@@ -237,7 +237,7 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		(row.stripe_checkout_session_id !== null &&
 			!isNonEmptyString(row.stripe_checkout_session_id)) ||
 		!Number.isSafeInteger(row.contract_version) ||
-		row.contract_version !== 2 ||
+		row.contract_version !== 3 ||
 		!isNonEmptyString(row.destination_country) ||
 		!isSupportedDestination(row.destination_country) ||
 		row.currency !== 'eur' ||

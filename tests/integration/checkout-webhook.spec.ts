@@ -65,7 +65,7 @@ function createDraft(
 ) {
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry,
 		currency: 'eur',
 		totalUnitCount: quantity,

@@ -36,6 +36,7 @@ export type ProductSizeChart = {
 
 export type CatalogProduct = {
 	providerId: string;
+	taxCode: string;
 	slug: string;
 	name: string;
 	description: string;
@@ -68,7 +69,12 @@ export type PublicCatalogVariant = Omit<
 
 export type PublicCatalogProduct = Omit<
 	CatalogProduct,
-	'providerId' | 'designReference' | 'designPlacements' | 'productionDetails' | 'variants'
+	| 'providerId'
+	| 'taxCode'
+	| 'designReference'
+	| 'designPlacements'
+	| 'productionDetails'
+	| 'variants'
 > & {
 	variants: PublicCatalogVariant[];
 };
@@ -198,6 +204,7 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 		!isRecord(input) ||
 		!hasExactKeys(input, [
 			'providerId',
+			'taxCode',
 			'slug',
 			'name',
 			'description',
@@ -215,6 +222,7 @@ function isCatalogProduct(input: unknown): input is CatalogProduct {
 			'variants'
 		]) ||
 		!isNonEmptyString(input.providerId) ||
+		!isNonEmptyString(input.taxCode) ||
 		!isNonEmptyString(input.slug) ||
 		!isNonEmptyString(input.name) ||
 		!isNonEmptyString(input.description) ||

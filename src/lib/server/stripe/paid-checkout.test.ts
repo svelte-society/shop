@@ -80,7 +80,7 @@ function checkoutDraft(
 		id: options.id ?? 'draft-paid-123',
 		checkoutSessionId:
 			options.checkoutSessionId === undefined ? 'cs_test_paid' : options.checkoutSessionId,
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount,
@@ -142,7 +142,7 @@ describe('Stripe paid Checkout normalization', () => {
 		const { snapshot, client } = await normalizedSnapshot();
 
 		expect(snapshot).toEqual({
-			contractVersion: 2,
+			contractVersion: 3,
 			checkoutSessionId: 'cs_test_paid',
 			paymentIntentId: 'pi_test_paid',
 			customerId: 'cus_test_paid',
@@ -224,6 +224,29 @@ describe('Stripe paid Checkout normalization', () => {
 				total: 3_908
 			},
 			lines: [{ priceId: 'price_dynamic', unitAmount: 2_347, retailUnitAmount: 2_793 }]
+		});
+	});
+
+	it('uses the catalog Price ID carried by an inline Checkout line', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			lines: [
+				{
+					id: 'li_inline_medium',
+					priceId: 'price_tee_medium',
+					generatedPriceId: 'price_inline_generated',
+					quantity: 1,
+					unitAmount: 2_000,
+					taxAmount: 500
+				}
+			]
+		});
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			lines: [{ priceId: 'price_tee_medium', unitAmount: 2_000 }]
 		});
 	});
 
@@ -754,7 +777,7 @@ describe('Stripe paid Checkout normalization', () => {
 		['HU', 540, 216, 2_540, 1_016, 3_556],
 		['JP', 0, 0, 2_000, 800, 2_800]
 	] as const)(
-		'normalizes the v2 exclusive %s pricing matrix',
+		'normalizes the v3 exclusive %s pricing matrix',
 		async (country, merchandiseTax, shippingTax, retailUnitAmount, shipping, total) => {
 			const fixture = paidCheckoutProviderFixture({ country });
 			const snapshot = await createStripeOrderGateway(
@@ -762,7 +785,7 @@ describe('Stripe paid Checkout normalization', () => {
 			).retrievePaidCheckout(fixture.session.id);
 
 			expect(snapshot).toMatchObject({
-				contractVersion: 2,
+				contractVersion: 3,
 				destinationCountry: country,
 				amounts: {
 					subtotal: 2_000,
@@ -849,7 +872,7 @@ describe('Stripe paid Checkout normalization', () => {
 				tax.amount -= 1;
 			}
 		]
-	])('rejects %s for v2 exclusive shipping', async (_label, mutate) => {
+	])('rejects %s for v3 exclusive shipping', async (_label, mutate) => {
 		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture);
 
@@ -894,6 +917,18 @@ describe('Stripe paid Checkout normalization', () => {
 	});
 
 	it.each([
+		[
+			'missing source Price metadata',
+			(fixture: PaidCheckoutProviderFixture) => {
+				(fixture.linePages[0].data[0] as { metadata?: unknown }).metadata = undefined;
+			}
+		],
+		[
+			'malformed source Price metadata',
+			(fixture: PaidCheckoutProviderFixture) => {
+				fixture.linePages[0].data[0].metadata = { catalog_price_id: 'not-a-price' };
+			}
+		],
 		[
 			'fractional quantity',
 			(fixture: PaidCheckoutProviderFixture) => (fixture.linePages[0].data[0].quantity = 1.5)

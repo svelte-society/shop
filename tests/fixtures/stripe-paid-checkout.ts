@@ -83,6 +83,7 @@ export type StripeFixtureLineItem = Omit<
 		| 'amount_tax'
 		| 'amount_total'
 		| 'currency'
+		| 'metadata'
 		| 'price'
 		| 'quantity'
 	>,
@@ -176,6 +177,7 @@ export type StripeFixtureCheckoutSession = Omit<
 export type PaidCheckoutFixtureLine = {
 	id: string;
 	priceId: string;
+	generatedPriceId?: string;
 	quantity: number;
 	unitAmount: number;
 	taxAmount: number;
@@ -225,8 +227,9 @@ export function stripeLineItem(
 		amount_tax: line.taxAmount,
 		amount_total: amountSubtotal - amountDiscount + line.taxAmount,
 		currency,
+		metadata: { catalog_price_id: line.priceId },
 		price: {
-			id: line.priceId,
+			id: line.generatedPriceId ?? line.priceId,
 			object: 'price',
 			currency,
 			unit_amount: line.unitAmount,
@@ -310,7 +313,7 @@ export function paidCheckoutProviderFixture(
 		providerLines.reduce((total, line) => total + line.amount_total, 0) + shippingTotal;
 	const metadata = {
 		product_type: 'merch',
-		checkout_contract_version: '2',
+		checkout_contract_version: '3',
 		checkout_draft_id: draftId,
 		destination_country: country
 	};

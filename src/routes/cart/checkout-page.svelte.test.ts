@@ -101,28 +101,36 @@ describe('cart page checkout submission state', () => {
 		expect(cart.lines).toEqual(originalLines);
 	});
 
-	it('removes a stale price only while the catalog is available', async () => {
+	it('preserves a stale price when the catalog price changes', async () => {
 		cart.clear();
 		cart.add('price_tee_medium_old');
 		render(CartPage, { data, params: {}, form: null });
 
 		await expect
-			.element(page.getByText('A product price changed. Please add the item again.'))
+			.element(page.getByText('A product changed. Your cart is preserved.'))
 			.toBeVisible();
-		expect(cart.lines).toEqual([]);
+		expect(cart.lines).toEqual([{ priceId: 'price_tee_medium_old', quantity: 1 }]);
 	});
 
-	it('keeps valid cart lines and checkout available after removing a stale price', async () => {
+	it('preserves every cart line and pauses checkout when one price is stale', async () => {
 		cart.add('price_tee_medium_old');
 		render(CartPage, { data, params: {}, form: null });
 
-		await expect.element(page.getByText('Price updated')).toBeVisible();
+		await expect
+			.element(page.getByText('A product changed. Your cart is preserved.'))
+			.toBeVisible();
+		expect(cart.lines).toEqual([
+			{ priceId: 'price_tee_medium_current', quantity: 1 },
+			{ priceId: 'price_tee_medium_old', quantity: 1 }
+		]);
+
+		await page.getByRole('button', { name: 'Remove unavailable items' }).click();
+
+		expect(cart.lines).toEqual([{ priceId: 'price_tee_medium_current', quantity: 1 }]);
 		await expect.element(page.getByRole('heading', { name: 'Your cart' })).toBeVisible();
-		await expect.element(page.getByText('Community Tee')).toBeVisible();
 		await expect
 			.element(page.getByRole('button', { name: 'Continue to secure checkout' }))
 			.toBeEnabled();
-		expect(cart.lines).toEqual([{ priceId: 'price_tee_medium_current', quantity: 1 }]);
 	});
 
 	it('preserves a stale price during a catalog outage', async () => {

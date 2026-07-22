@@ -70,4 +70,14 @@ describe('SiteHeader', () => {
 			countryControl.compareDocumentPosition(cartLink) & Node.DOCUMENT_POSITION_FOLLOWING
 		).not.toBe(0);
 	});
+
+	it('stays pinned to the viewport while the page scrolls', async () => {
+		const { container } = renderHeader();
+		const header = container.querySelector('.site-header');
+		if (!(header instanceof HTMLElement)) throw new Error('Expected the site header');
+
+		const style = getComputedStyle(header);
+		expect(style.position).toBe('sticky');
+		expect(style.top).toBe('0px');
+	});
 });

@@ -177,7 +177,7 @@ function privacyDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Services used',
 				paragraphs: [
-					'Stripe provides catalog, checkout, payment, tax, receipts, and invoices. Styria receives the details needed to manufacture and fulfill approved orders. Plunk sends operational and shipping emails. The shipping carriers receive the details needed to deliver parcels.',
+					'Stripe provides catalog, checkout, payment, tax, receipts, and invoices. Our production and fulfillment partner receives the details needed to manufacture and fulfill approved orders. Plunk sends operational and shipping emails. The shipping carriers receive the details needed to deliver parcels.',
 					'When configured, Umami measures limited storefront activity. The shop sends allowlisted route-level events and removes query parameters before analytics collection.',
 					'Encrypted S3-compatible backups protect local operational records for recovery. Information is shared with these services for the operational purposes described here; each service also handles data under its own terms and legal duties.'
 				]
@@ -254,8 +254,8 @@ function termsDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Destinations and fulfillment',
 				paragraphs: [
-					'We accept delivery addresses in the European Union except Slovenia, and in selected destinations across Asia currently supported by Styria. Availability is enforced at checkout and may change if a fulfillment or carrier route is suspended.',
-					'Paid orders enter manual review before submission to Styria for manufacture and fulfillment. Estimates are not guarantees, and we do not promise a fixed public review window. Tracking is sent when it becomes available.'
+					'We accept delivery addresses in the European Union except Slovenia, and in selected destinations across Asia currently supported by our fulfillment network. Availability is enforced at checkout and may change if a fulfillment or carrier route is suspended.',
+					'Paid orders enter manual review before submission to our production and fulfillment partner. Estimates are not guarantees, and we do not promise a fixed public review window. Tracking is sent when it becomes available.'
 				]
 			},
 			{

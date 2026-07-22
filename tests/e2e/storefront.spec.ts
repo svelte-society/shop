@@ -22,12 +22,28 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 		'href',
 		'/products/society-mug'
 	);
+	await expect(page.locator('body')).not.toContainText(/Styria/i);
 
 	const hasHorizontalOverflow = await page.evaluate(
 		() => document.documentElement.scrollWidth > window.innerWidth
 	);
 	expect(hasHorizontalOverflow).toBe(false);
 });
+
+for (const viewport of [
+	{ name: 'desktop', width: 1280, height: 800 },
+	{ name: 'mobile', width: 390, height: 844 }
+] as const) {
+	test(`header remains visible while scrolling on ${viewport.name}`, async ({ page }) => {
+		await page.setViewportSize({ width: viewport.width, height: viewport.height });
+		await page.goto('/');
+		const header = page.locator('.site-header');
+
+		await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+		await expect.poll(async () => (await header.boundingBox())?.y).toBe(0);
+		await expect(header).toBeVisible();
+	});
+}
 
 test('country picker keeps its actions visible while only the country list scrolls', async ({
 	page
@@ -130,6 +146,7 @@ test('disabled storefront keeps every information page and footer destination av
 
 		await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
 		await expect(page.getByText('The collection is getting ready.')).toHaveCount(0);
+		await expect(page.locator('body')).not.toContainText(/Styria/i);
 		const footer = page.locator('footer');
 		for (const [destination, label] of [
 			['/shipping', 'Shipping'],

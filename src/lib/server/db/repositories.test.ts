@@ -85,7 +85,7 @@ function spawnClaimContender(
 
 function draftInput(overrides: Partial<NewCheckoutDraft> = {}): NewCheckoutDraft {
 	return {
-		contractVersion: 2,
+		contractVersion: 3,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 2,
@@ -238,7 +238,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 		);
 	});
 
-	it('requires contract v2 and a valid market destination when creating or mapping drafts', () => {
+	it('requires contract v3 and a valid market destination when creating or mapping drafts', () => {
 		expect(() => drafts.create(draftInput({ contractVersion: 1 }))).toThrowError(
 			'CHECKOUT_DRAFT_INVALID'
 		);
@@ -248,7 +248,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 			)
 		).toThrowError('CHECKOUT_DRAFT_INVALID');
 		const draft = drafts.create(draftInput());
-		expect(draft).toMatchObject({ contractVersion: 2, destinationCountry: 'SE' });
+		expect(draft).toMatchObject({ contractVersion: 3, destinationCountry: 'SE' });
 		database
 			.prepare('UPDATE checkout_drafts SET destination_country = ? WHERE id = ?')
 			.run('ZZ', draft.id);

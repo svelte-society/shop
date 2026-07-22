@@ -1,8 +1,11 @@
 import type { CartLine } from '$lib/domain/cart';
 import {
+	assertCatalogSnapshot,
+	immutableCatalogSnapshot,
 	toPublicCatalogProduct,
 	type CatalogDiagnostic,
 	type CatalogProduct,
+	type CatalogSnapshot,
 	type CatalogShippingRates,
 	type CatalogVariant,
 	type PublicCatalogProduct
@@ -19,6 +22,10 @@ export interface CatalogService {
 	}>;
 	findPublicBySlug(slug: string): Promise<PublicCatalogProduct | null>;
 	resolveCart(lines: CartLine[]): Promise<{
+		lines: Array<{ line: CartLine; product: CatalogProduct; variant: CatalogVariant }>;
+		shippingRates: CatalogShippingRates;
+	}>;
+	resolveCartForCheckout(lines: CartLine[]): Promise<{
 		lines: Array<{ line: CartLine; product: CatalogProduct; variant: CatalogVariant }>;
 		shippingRates: CatalogShippingRates;
 	}>;
@@ -52,6 +59,25 @@ export function createCatalogService(
 		}
 	}
 
+	function resolveSnapshot(snapshot: CatalogSnapshot, lines: CartLine[]) {
+		const byPriceId = new Map<string, { product: CatalogProduct; variant: CatalogVariant }>();
+
+		for (const product of snapshot.products) {
+			for (const variant of product.variants) {
+				byPriceId.set(variant.priceId, { product, variant });
+			}
+		}
+
+		return {
+			lines: lines.map((line) => {
+				const resolved = byPriceId.get(line.priceId);
+				if (!resolved) throw new Error('CATALOG_VARIANT_UNAVAILABLE');
+				return { line: { ...line }, ...resolved };
+			}),
+			shippingRates: snapshot.shippingRates
+		};
+	}
+
 	return {
 		async listPublic() {
 			const snapshot = await monitoredSnapshot();
@@ -67,23 +93,13 @@ export function createCatalogService(
 			return product ? toPublicCatalogProduct(product) : null;
 		},
 		async resolveCart(lines) {
-			const snapshot = await monitoredSnapshot();
-			const byPriceId = new Map<string, { product: CatalogProduct; variant: CatalogVariant }>();
-
-			for (const product of snapshot.products) {
-				for (const variant of product.variants) {
-					byPriceId.set(variant.priceId, { product, variant });
-				}
-			}
-
-			return {
-				lines: lines.map((line) => {
-					const resolved = byPriceId.get(line.priceId);
-					if (!resolved) throw new Error('CATALOG_VARIANT_UNAVAILABLE');
-					return { line: { ...line }, ...resolved };
-				}),
-				shippingRates: snapshot.shippingRates
-			};
+			return resolveSnapshot(await monitoredSnapshot(), lines);
+		},
+		async resolveCartForCheckout(lines) {
+			const loaded = await gateway.loadMerchCatalog();
+			assertCatalogSnapshot(loaded);
+			if (loaded.stale) throw new Error('CATALOG_UNAVAILABLE');
+			return resolveSnapshot(immutableCatalogSnapshot(loaded, false), lines);
 		},
 		async diagnostics() {
 			const snapshot = await monitoredSnapshot();

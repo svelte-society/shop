@@ -104,7 +104,7 @@ describe('configured policy documents', () => {
 
 		for (const expected of [
 			'Stripe',
-			'Styria',
+			'production and fulfillment partner',
 			'Plunk',
 			'shipping carriers',
 			'Umami',
@@ -125,6 +125,7 @@ describe('configured policy documents', () => {
 		]) {
 			expect(privacy).toContain(expected);
 		}
+		expect(privacy).not.toMatch(/Styria/iu);
 		expect(privacy).toContain(
 			'SQLite does not store customer names, postal addresses, phone numbers, VAT numbers, or payment-method data'
 		);
@@ -153,13 +154,14 @@ describe('configured policy documents', () => {
 			'invoice',
 			'European Union except Slovenia',
 			'selected destinations across Asia',
-			'Styria',
+			'production and fulfillment partner',
 			'manual review',
 			'merch@sveltesociety.dev',
 			'mandatory consumer rights'
 		]) {
 			expect(terms).toContain(expected);
 		}
+		expect(terms).not.toMatch(/Styria/iu);
 		expect(terms).not.toContain('United States');
 		expect(
 			termsDocument.sections.find(

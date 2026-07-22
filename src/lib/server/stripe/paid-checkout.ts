@@ -147,7 +147,7 @@ function requireCurrency(value: unknown): void {
 
 type CheckoutMetadata = {
 	draftId: string;
-	contractVersion: 2;
+	contractVersion: 3;
 	destinationCountry: string;
 };
 
@@ -165,7 +165,7 @@ function validateMetadata(value: unknown, expected?: CheckoutMetadata): Checkout
 	) {
 		fail('STRIPE_PAID_CHECKOUT_DRAFT_INVALID');
 	}
-	return { draftId, contractVersion: 2, destinationCountry };
+	return { draftId, contractVersion: CHECKOUT_CONTRACT_VERSION, destinationCountry };
 }
 
 type NormalizedAddress = {
@@ -399,6 +399,8 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 		!isSafeNonNegativeInteger(value.amount_subtotal) ||
 		!isSafeNonNegativeInteger(value.amount_tax) ||
 		!isSafeNonNegativeInteger(value.amount_total) ||
+		!isRecord(value.metadata) ||
+		!isProviderId(value.metadata.catalog_price_id, PRICE_ID_PATTERN) ||
 		!isRecord(value.price) ||
 		value.price.object !== 'price' ||
 		!isProviderId(value.price.id, PRICE_ID_PATTERN) ||
@@ -435,7 +437,7 @@ function normalizeLine(value: unknown): NormalizedLineDetails {
 
 	return {
 		id: value.id,
-		priceId: value.price.id,
+		priceId: value.metadata.catalog_price_id,
 		quantity: value.quantity,
 		unitAmount: value.price.unit_amount,
 		retailUnitAmount: value.amount_total / value.quantity,
@@ -706,7 +708,7 @@ function normalizePaidCheckout(
 		total: session.amount_total
 	});
 	return {
-		contractVersion: 2,
+		contractVersion: CHECKOUT_CONTRACT_VERSION,
 		checkoutSessionId: session.id,
 		paymentIntentId,
 		customerId,

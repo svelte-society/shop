@@ -38,10 +38,12 @@
 
 <style>
 	.site-header {
-		position: relative;
-		z-index: 10;
+		position: sticky;
+		top: 0;
+		z-index: 40;
 		border-bottom: 1px solid var(--color-border);
 		background: color-mix(in oklch, var(--color-paper) 94%, transparent);
+		backdrop-filter: blur(0.75rem);
 	}
 
 	.header-inner {
