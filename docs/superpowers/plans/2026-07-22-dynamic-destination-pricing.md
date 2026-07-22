@@ -590,7 +590,7 @@ rtk git commit -m "feat: show destination-specific storefront prices"
 
 ---
 
-### Task 6: Durable Pricing Snapshot Schema
+### Task 6: Atomic Greenfield v2 Commerce Core
 
 **Files:**
 - Create: `migrations/0007_dynamic_destination_pricing.sql`
@@ -602,11 +602,29 @@ rtk git commit -m "feat: show destination-specific storefront prices"
 - Modify: `src/lib/server/db/repositories.test.ts`
 - Modify: `src/lib/server/health/readiness.test.ts`
 - Modify: `src/lib/server/jobs/scheduler.test.ts`
+- Modify: `src/lib/server/stripe/gateway.ts`
+- Modify: `src/lib/server/stripe/checkout.server.ts`
+- Modify: `src/lib/server/stripe/paid-checkout.ts`
+- Modify: `src/lib/server/stripe/webhook.server.ts`
+- Modify: `src/lib/server/checkout/service.server.ts`
+- Modify: `src/routes/checkout/+server.ts`
+- Modify: checkout, paid-checkout, webhook, success-page, and integration fixtures/tests named in Tasks 7 and 8.
 - Modify raw SQL fixtures identified by `rtk rg -l "INSERT INTO (checkout_drafts|orders|order_lines)" src tests`.
 
 **Interfaces:**
 - Produces: `NewCheckoutDraft.destinationCountry`, `OrderAmounts.shippingTax`, `PaidOrderLineAmount`, and `OrderLine.retailUnitAmount`.
 - Enforces: every draft is contract version 2 and has a valid market destination.
+
+**Atomic greenfield boundary:** The new required schema fields cannot be introduced while the old checkout and webhook callers remain compile-safe without fake values. Therefore this task also implements the real Task 7/8 producer plumbing in the same commit range:
+
+- `CHECKOUT_CONTRACT_VERSION = 2` only; version 1 metadata is rejected.
+- The checkout route resolves the validated request destination, the service stores it in the draft, and Stripe accepts exactly that one country.
+- Session and PaymentIntent metadata contain `checkout_contract_version=2`, `checkout_draft_id`, and `destination_country`.
+- Paid Checkout normalization is v2-only and requires EUR 20 exclusive merchandise, EUR 8/0 exclusive shipping, explicit merchandise/shipping tax reconciliation, frozen destination equality, and zero discounts.
+- Persisted `shipping` is Stripe's gross shipping total, `shippingTax` is explicit, and `retailUnitAmount` is the verified gross line total divided exactly by quantity.
+- The webhook passes the verified paid line amounts into the unit of work; no optional fields, casts, inferred placeholders, or mixed-tax compatibility branch is permitted.
+
+Tasks 7 and 8 below remain as detailed acceptance references but are satisfied by this atomic task and are not dispatched separately.
 
 - [ ] **Step 1: Write failing migration and repository tests**
 
