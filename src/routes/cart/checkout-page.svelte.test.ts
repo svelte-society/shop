@@ -53,6 +53,7 @@ describe('cart page checkout submission state', () => {
 		render(CartPage, { data, params: {}, form: null });
 
 		await expect.poll(() => track.mock.calls).toEqual([['cart_viewed']]);
+		await expect.element(page.getByText('Net subtotal (excl. VAT)')).toBeVisible();
 	});
 
 	it('keeps the button disabled and blocks a second request after navigation is assigned', async () => {

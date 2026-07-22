@@ -16,6 +16,16 @@ describe('CartSummary checkout action', () => {
 		});
 
 		await page.getByRole('button', { name: 'Continue to secure checkout' }).click();
+		await expect
+			.element(page.getByText('Net subtotal (excl. VAT)'))
+			.toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					/Prices and subtotal are shown net of VAT in EUR\. Destination VAT is confirmed from your delivery\s+and business details at checkout\./
+				)
+			)
+			.toBeVisible();
 
 		expect(enabledClicks).toBe(1);
 

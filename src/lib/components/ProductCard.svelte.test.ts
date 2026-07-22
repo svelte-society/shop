@@ -46,4 +46,10 @@ describe('ProductCard analytics', () => {
 
 		expect(track.mock.calls).toEqual([['product_viewed']]);
 	});
+
+	it('labels the catalog price as excluding VAT', async () => {
+		render(ProductCard, { product });
+
+		await expect.element(page.getByText('€20.00 excl. VAT')).toBeVisible();
+	});
 });

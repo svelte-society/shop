@@ -27,13 +27,14 @@
 	<h2 id="cart-summary-title">Order summary</h2>
 
 	<div class="subtotal">
-		<span>Reference subtotal</span>
+		<span>Net subtotal (excl. VAT)</span>
 		<strong>{formatEur(subtotalCents)}</strong>
 	</div>
 
 	<p class="shipping-message" aria-live="polite">{shippingMessage}</p>
 	<p>
-		Prices shown in EUR. Final tax is confirmed from your delivery and business details at checkout.
+		Prices and subtotal are shown net of VAT in EUR. Destination VAT is confirmed from your delivery
+		and business details at checkout.
 	</p>
 	<p>Shipping across the EU, except Slovenia, and to Styria-supported destinations in Asia.</p>
 

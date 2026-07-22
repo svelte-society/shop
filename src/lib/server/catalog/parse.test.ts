@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type Stripe from 'stripe';
+import Stripe from 'stripe';
 import {
 	STRIPE_CATALOG_LOADED_AT,
 	stripeAccessoryPrice,
@@ -252,7 +252,11 @@ describe('parseStripeCatalog', () => {
 
 	it.each([
 		['non-EUR currency', stripePrice({ currency: 'usd' }), 'PRICE_CURRENCY_INVALID'],
-		['non-approved amount', stripePrice({ unit_amount: 2_001 }), 'PRICE_AMOUNT_INVALID'],
+		[
+			'non-approved amount',
+			stripePrice({ unit_amount: 2_001, unit_amount_decimal: Stripe.Decimal.from(2_001) }),
+			'PRICE_AMOUNT_INVALID'
+		],
 		['inclusive tax behavior', stripePrice({ tax_behavior: 'inclusive' }), 'PRICE_TAX_INVALID']
 	])('excludes a Price with %s', async (_name, price, code) => {
 		const snapshot = await parse([stripeProduct()], [price]);

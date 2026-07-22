@@ -34,7 +34,9 @@
 				<p class="category">{product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 				<h4>{product.name}</h4>
 			</div>
-			<p class="price">{product.variants.length > 1 ? 'From ' : ''}{formatEur(lowestPrice)}</p>
+			<p class="price">
+				{product.variants.length > 1 ? 'From ' : ''}{formatEur(lowestPrice)} excl. VAT
+			</p>
 		</div>
 	</a>
 </article>

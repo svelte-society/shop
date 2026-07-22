@@ -73,6 +73,7 @@
 <div class="purchase-panel">
 	<div class="price-block">
 		<p class="price">{formatEur(selectedVariant.unitAmountCents)}</p>
+		<p>Excl. VAT. Destination VAT follows at checkout.</p>
 	</div>
 
 	{#key productIdentity}

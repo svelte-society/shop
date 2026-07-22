@@ -51,7 +51,7 @@ describe('catalog display components', () => {
 		await expect.element(page.getByRole('heading', { name: 'Accessories' })).toBeVisible();
 		const teeLink = page.getByRole('link', { name: /Society Tee/ });
 		await expect.element(teeLink).toHaveAttribute('href', '/products/society-tee');
-		await expect.element(teeLink).toHaveTextContent('€25.00');
+		await expect.element(teeLink).toHaveTextContent('€20.00 excl. VAT');
 	});
 
 	it('shows an actionable empty collection state', async () => {

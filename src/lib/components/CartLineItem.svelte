@@ -36,7 +36,7 @@
 		<p class="category">{product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 		<h2>{product.name}</h2>
 		<p class="variant">{variant.label}</p>
-		<p class="unit-price">{formatEur(variant.unitAmountCents)} each</p>
+		<p class="unit-price">{formatEur(variant.unitAmountCents)} each, excl. VAT</p>
 
 		<div class="line-actions">
 			<label for={`quantity-${variant.priceId}`}>Quantity</label>
@@ -59,8 +59,8 @@
 		</div>
 	</div>
 
-	<p class="line-total" aria-label={`Line total ${formatEur(lineTotalCents)}`}>
-		{formatEur(lineTotalCents)}
+	<p class="line-total" aria-label={`Line net total ${formatEur(lineTotalCents)}, excluding VAT`}>
+		{formatEur(lineTotalCents)} net, excl. VAT
 	</p>
 </article>
 

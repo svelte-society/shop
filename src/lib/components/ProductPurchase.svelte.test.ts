@@ -70,6 +70,15 @@ const nextApparel: PublicCatalogProduct = {
 };
 
 describe('ProductPurchase', () => {
+	it('explains that the selected price excludes destination VAT', async () => {
+		render(ProductPurchase, { product: apparel });
+
+		await expect.element(page.getByText('€20.00')).toBeVisible();
+		await expect
+			.element(page.getByText('Excl. VAT. Destination VAT follows at checkout.'))
+			.toBeVisible();
+	});
+
 	it('keeps apparel out of the cart until a size is selected', async () => {
 		const cartController = createCart(isolatedStorage);
 		render(ProductPurchase, { product: apparel, cartController });
