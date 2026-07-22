@@ -1,5 +1,5 @@
 import type Stripe from 'stripe';
-import { swedishReferenceGrossCents } from '$lib/domain/money';
+import { displayPriceForDestination, pricingDestination } from '$lib/domain/pricing';
 import type {
 	CatalogCategory,
 	CatalogDiagnostic,
@@ -28,6 +28,7 @@ const INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const DESIGN_KEY_PATTERN = /^design_url_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
 const MOCKUP_KEY_PATTERN = /^mockup_url_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
 const THREAD_COLORS_KEY_PATTERN = /^thread_colors_([a-z0-9]+(?:_[a-z0-9]+)*)$/;
+const SWEDEN_PRICING_DESTINATION = pricingDestination('SE');
 
 function diagnostic(providerId: string, code: string): CatalogDiagnostic {
 	return { providerId, code };
@@ -297,7 +298,10 @@ function parsePrice(source: Stripe.Price, productId: string): PriceResult {
 			sortOrder,
 			currency: 'eur',
 			unitAmountCents: source.unit_amount,
-			referenceGrossCents: swedishReferenceGrossCents(source.unit_amount),
+			referenceGrossCents: displayPriceForDestination(
+				source.unit_amount,
+				SWEDEN_PRICING_DESTINATION
+			).grossCents,
 			sku,
 			styriaProductNumber
 		},

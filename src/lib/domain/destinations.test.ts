@@ -87,6 +87,8 @@ describe('Styria-supported destinations', () => {
 	it('exports the reviewed regional lists', () => {
 		expect(EU_DESTINATIONS).toEqual(expectedDestinations.slice(0, 26));
 		expect(ASIA_DESTINATIONS).toEqual(expectedDestinations.slice(26));
+		expect(Object.isFrozen(EU_DESTINATIONS)).toBe(true);
+		expect(Object.isFrozen(ASIA_DESTINATIONS)).toBe(true);
 	});
 
 	it('freezes the exact reviewed initial allowlist without Slovenia or the United States', () => {

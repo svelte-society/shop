@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	displayCartPrice,
 	displayPriceForDestination,
+	pricingDisclosure,
 	pricingDestination,
 	VAT_TABLE_REVIEWED_AT
 } from './pricing';
@@ -35,4 +36,52 @@ describe('destination pricing', () => {
 	});
 
 	it('records the VAT review date', () => expect(VAT_TABLE_REVIEWED_AT).toBe('2026-07-22'));
+
+	it('rejects market countries outside the supported pricing regions', () => {
+		expect(() => pricingDestination('US')).toThrowError('PRICING_DESTINATION_INVALID');
+	});
+
+	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		'rejects invalid cart quantity %s',
+		(quantity) => {
+			expect(() =>
+				displayCartPrice([{ netUnitCents: 2_000, quantity }], pricingDestination('SE'))
+			).toThrowError('INVALID_CENTS');
+		}
+	);
+
+	it('rejects cart merchandise that exceeds safe integer cents', () => {
+		expect(() =>
+			displayCartPrice(
+				[{ netUnitCents: Number.MAX_SAFE_INTEGER, quantity: 2 }],
+				pricingDestination('JP')
+			)
+		).toThrowError('INVALID_CENTS');
+	});
+
+	it('projects EU and Asia destination metadata', () => {
+		expect(pricingDestination('SE')).toMatchObject({
+			countryCode: 'SE',
+			displayName: 'Sweden',
+			region: 'eu',
+			vatBasisPoints: 2_500,
+			requiresImportChargeCopy: false
+		});
+		expect(pricingDestination('JP')).toMatchObject({
+			countryCode: 'JP',
+			displayName: 'Japan',
+			region: 'asia',
+			vatBasisPoints: 0,
+			requiresImportChargeCopy: true
+		});
+	});
+
+	it('discloses Swedish VAT and Japanese import charges exactly', () => {
+		expect(pricingDisclosure(pricingDestination('SE'))).toBe(
+			'Includes 25% Sweden VAT. Exact tax is confirmed from your delivery address at checkout.'
+		);
+		expect(pricingDisclosure(pricingDestination('JP'))).toBe(
+			'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
+		);
+	});
 });

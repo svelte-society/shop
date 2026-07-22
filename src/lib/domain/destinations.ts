@@ -1,4 +1,4 @@
-export const EU_DESTINATIONS = [
+export const EU_DESTINATIONS = Object.freeze([
 	'AT',
 	'BE',
 	'BG',
@@ -25,9 +25,9 @@ export const EU_DESTINATIONS = [
 	'SK',
 	'ES',
 	'SE'
-] as const;
+] as const);
 
-export const ASIA_DESTINATIONS = [
+export const ASIA_DESTINATIONS = Object.freeze([
 	'AE',
 	'AF',
 	'AM',
@@ -75,7 +75,7 @@ export const ASIA_DESTINATIONS = [
 	'UZ',
 	'VN',
 	'YE'
-] as const;
+] as const);
 
 export type MarketDestination =
 	(typeof EU_DESTINATIONS)[number] | (typeof ASIA_DESTINATIONS)[number] | 'US';
