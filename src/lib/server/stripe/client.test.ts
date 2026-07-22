@@ -208,13 +208,6 @@ describe('Stripe fulfillment details', () => {
 			'postcode',
 			(session: ReturnType<typeof sessionFixture>) =>
 				(session.customer.shipping.address.postal_code = '')
-		],
-		[
-			'US state',
-			(session: ReturnType<typeof sessionFixture>) => {
-				session.customer.shipping.address.country = 'US';
-				session.customer.shipping.address.state = '';
-			}
 		]
 	])('rejects a missing %s with a stable error', async (_label, mutate) => {
 		const session = sessionFixture();

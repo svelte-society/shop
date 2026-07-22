@@ -21,10 +21,7 @@ import { createStripeClient } from '$lib/server/stripe/client.server';
 import type { RequestHandler } from './$types';
 
 type RuntimeEnvironment = Record<string, string | undefined>;
-type CheckoutServiceFactory = (
-	config: PrivateConfig,
-	runtimeEnv: RuntimeEnvironment
-) => CheckoutService;
+type CheckoutServiceFactory = (config: PrivateConfig) => CheckoutService;
 type ReadinessCheck = () => Promise<{ ready: boolean }>;
 
 type Problem = {
@@ -133,7 +130,7 @@ export function _createCheckoutPost(
 			}
 
 			try {
-				service ??= createService(privateConfig, runtimeEnv);
+				service ??= createService(privateConfig);
 			} catch {
 				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');
 			}

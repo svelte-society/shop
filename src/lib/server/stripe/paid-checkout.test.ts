@@ -607,17 +607,9 @@ describe('Stripe paid Checkout normalization', () => {
 				if (!shipping) throw new Error();
 				shipping.address.postal_code = null;
 			}
-		],
-		[
-			'missing US recipient state',
-			(fixture: PaidCheckoutProviderFixture) => {
-				const shipping = fixture.session.collected_information?.shipping_details;
-				if (!shipping) throw new Error();
-				shipping.address.state = null;
-			}
 		]
-	])('rejects %s even when provider identity copies agree', async (label, mutate) => {
-		const fixture = paidCheckoutProviderFixture({ country: label.includes('US') ? 'US' : 'SE' });
+	])('rejects %s even when provider identity copies agree', async (_label, mutate) => {
+		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture);
 
 		await expectStableCode(

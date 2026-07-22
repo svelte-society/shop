@@ -429,7 +429,7 @@ function seedRealOrder(database: ShopDatabase): void {
 				updated_at
 			) VALUES (
 				'order_prepare', 'cs_test_prepare', 'pi_test_prepare', 'cus_test_prepare',
-				'draft_prepare', 'eur', 5598, 0, 0, 0, 1400, 6998, 'SE', 'paid', 'pending_review', ?
+				'draft_prepare', 'eur', 4000, 0, 0, 0, 1000, 5000, 'SE', 'paid', 'pending_review', ?
 			)`
 		)
 		.run('2026-07-17T09:30:00.000Z');
@@ -443,7 +443,7 @@ function seedRealOrder(database: ShopDatabase): void {
 				'order_prepare', 0, 'prod_community_tee', 'price_community_tee_m',
 				'Community Tee', 'M', 'SS-TEE-M', 'STYRIA-TEE-M', 'society-community-v1',
 				'{"back":"https://cdn.example.test/designs/community-back.svg","front":"https://cdn.example.test/designs/community-front.svg"}',
-				2, 2799, 'eur', 3499
+				2, 2000, 'eur', 2500
 			)`
 		)
 		.run();
@@ -455,6 +455,36 @@ describe('preparation privacy boundary', () => {
 	afterEach(() => {
 		database?.close();
 		database = undefined;
+	});
+
+	it('seeds an exact two-unit free-shipping v2 snapshot', () => {
+		database = new Database(':memory:');
+		database.pragma('foreign_keys = ON');
+		migrate(database, migrationsDirectory);
+		seedRealOrder(database);
+
+		expect(
+			database
+				.prepare(
+					`SELECT subtotal_amount, shipping_amount, shipping_tax_amount, tax_amount, total_amount
+					FROM orders WHERE id = 'order_prepare'`
+				)
+				.get()
+		).toEqual({
+			subtotal_amount: 4_000,
+			shipping_amount: 0,
+			shipping_tax_amount: 0,
+			tax_amount: 1_000,
+			total_amount: 5_000
+		});
+		expect(
+			database
+				.prepare(
+					`SELECT quantity, unit_amount, retail_unit_amount
+					FROM order_lines WHERE order_id = 'order_prepare'`
+				)
+				.get()
+		).toEqual({ quantity: 2, unit_amount: 2_000, retail_unit_amount: 2_500 });
 	});
 
 	it('writes only approval metadata to SQLite and never mutates fulfillment status', async () => {

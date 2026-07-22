@@ -107,9 +107,6 @@ function normalizeFulfillmentDetails(
 	}
 	const line2 = optionalString(address.line2, 500);
 	const state = optionalString(address.state, 200);
-	if (address.country === 'US' && state === '') {
-		fail('STRIPE_FULFILLMENT_DETAILS_INVALID');
-	}
 	if (!isSupportedDestination(address.country)) {
 		fail('STRIPE_FULFILLMENT_DESTINATION_UNSUPPORTED');
 	}

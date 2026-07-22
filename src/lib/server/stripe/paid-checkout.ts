@@ -202,9 +202,6 @@ function normalizeShippingAddress(value: unknown): NormalizedAddress {
 	}
 	const line2 = optionalExactString(value.line2);
 	const state = optionalExactString(value.state);
-	if (value.country === 'US' && state === null) {
-		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
-	}
 	return {
 		city: value.city,
 		country: value.country,

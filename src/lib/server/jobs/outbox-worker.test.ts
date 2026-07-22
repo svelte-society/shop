@@ -40,20 +40,19 @@ function insertOrder(
 	database: ShopDatabase,
 	input: {
 		id: string;
-		totalAmount?: number;
-		destinationCountry?: string;
 		quantities?: number[];
 		fulfillmentStatus?: 'pending_review' | 'shipped';
 		trackingNumber?: string | null;
 	}
 ): void {
-	const destinationCountry = input.destinationCountry ?? 'SE';
 	const quantities = input.quantities ?? [2, 1];
 	const totalUnitCount = quantities.reduce((sum, quantity) => sum + quantity, 0);
-	const subtotalAmount = totalUnitCount * 1000;
-	const totalAmount = input.totalAmount ?? totalUnitCount * 1250;
-	const taxAmount = totalAmount - subtotalAmount;
-	const retailUnitAmount = totalAmount / totalUnitCount;
+	const shippingMode = totalUnitCount === 1 ? 'paid' : 'free';
+	const subtotalAmount = totalUnitCount * 2_000;
+	const shippingAmount = shippingMode === 'paid' ? 1_000 : 0;
+	const shippingTaxAmount = shippingMode === 'paid' ? 200 : 0;
+	const taxAmount = totalUnitCount * 500 + shippingTaxAmount;
+	const totalAmount = totalUnitCount * 2_500 + shippingAmount;
 	const fulfillmentStatus = input.fulfillmentStatus ?? 'pending_review';
 	const trackingNumber = input.trackingNumber ?? null;
 	const draftId = `draft_${input.id}`;
@@ -62,16 +61,16 @@ function insertOrder(
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
 				shipping_mode, created_at, expires_at, completed_at, destination_country
-			) VALUES (?, ?, 2, 'eur', ?, 'free', ?, ?, ?, ?)`
+			) VALUES (?, ?, 2, 'eur', ?, ?, ?, ?, ?, 'SE')`
 		)
 		.run(
 			draftId,
 			`cs_${input.id}`,
 			totalUnitCount,
+			shippingMode,
 			now.toISOString(),
 			new Date(now.getTime() + 60_000).toISOString(),
-			now.toISOString(),
-			destinationCountry
+			now.toISOString()
 		);
 	database
 		.prepare(
@@ -80,7 +79,7 @@ function insertOrder(
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
 				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				tracking_number, shipped_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, ?, ?, ?, 'paid', ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, ?, ?, ?, ?, 'SE', 'paid', ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
@@ -89,9 +88,10 @@ function insertOrder(
 			`cus_${input.id}`,
 			draftId,
 			subtotalAmount,
+			shippingAmount,
+			shippingTaxAmount,
 			taxAmount,
 			totalAmount,
-			destinationCountry,
 			fulfillmentStatus,
 			trackingNumber,
 			fulfillmentStatus === 'shipped' ? now.toISOString() : null,
@@ -117,8 +117,8 @@ function insertOrder(
 			`design_${input.id}_${index}`,
 			'{}',
 			quantity,
-			1000,
-			retailUnitAmount
+			2_000,
+			2_500
 		);
 	});
 }
@@ -146,6 +146,62 @@ afterEach(() => {
 });
 
 describe('PaidOrderAlertOutboxWorker', () => {
+	it.each([
+		{
+			label: 'one-unit paid shipping',
+			quantities: [1],
+			shippingMode: 'paid',
+			amounts: {
+				subtotal_amount: 2_000,
+				shipping_amount: 1_000,
+				shipping_tax_amount: 200,
+				tax_amount: 700,
+				total_amount: 3_500
+			}
+		},
+		{
+			label: 'multi-unit free shipping',
+			quantities: [2, 1],
+			shippingMode: 'free',
+			amounts: {
+				subtotal_amount: 6_000,
+				shipping_amount: 0,
+				shipping_tax_amount: 0,
+				tax_amount: 1_500,
+				total_amount: 7_500
+			}
+		}
+	] as const)('seeds exact v2 pricing for $label', ({ quantities, shippingMode, amounts }) => {
+		insertOrder(database, { id: 'order_exact_snapshot', quantities: [...quantities] });
+
+		expect(
+			database
+				.prepare('SELECT total_unit_count, shipping_mode FROM checkout_drafts WHERE id = ?')
+				.get('draft_order_exact_snapshot')
+		).toEqual({
+			total_unit_count: quantities.reduce((sum, quantity) => sum + quantity, 0),
+			shipping_mode: shippingMode
+		});
+		expect(
+			database
+				.prepare(
+					`SELECT subtotal_amount, shipping_amount, shipping_tax_amount, tax_amount, total_amount
+					FROM orders WHERE id = ?`
+				)
+				.get('order_exact_snapshot')
+		).toEqual(amounts);
+		expect(
+			database
+				.prepare(
+					`SELECT quantity, unit_amount, retail_unit_amount
+					FROM order_lines WHERE order_id = ? ORDER BY line_index`
+				)
+				.all('order_exact_snapshot')
+		).toEqual(
+			quantities.map((quantity) => ({ quantity, unit_amount: 2_000, retail_unit_amount: 2_500 }))
+		);
+	});
+
 	it('sends fixed operational mail only to the configured admin and completes the alert', async () => {
 		new SqliteAlertService(outbox).enqueueAlert(
 			'BACKUP_FAILED',
@@ -202,7 +258,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			body:
 				'<p>Internal order ID: order_internal_123</p>' +
 				'<p>Unit count: 3</p>' +
-				'<p>Total: EUR 37.50</p>' +
+				'<p>Total: EUR 75.00</p>' +
 				'<p>Destination country: SE</p>' +
 				'<p>Open Codex and use list_pending_orders.</p>'
 		});
@@ -227,7 +283,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 
 	it('reschedules a transient Plunk failure without blocking the rest of the claimed batch', async () => {
 		insertOrder(database, { id: 'order_first_fails' });
-		insertOrder(database, { id: 'order_second_succeeds', totalAmount: 2500, quantities: [2] });
+		insertOrder(database, { id: 'order_second_succeeds', quantities: [2] });
 		enqueueAlert(outbox, 'order_first_fails');
 		enqueueAlert(outbox, 'order_second_succeeds');
 		const requestedOrders: string[] = [];
