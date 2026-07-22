@@ -3,9 +3,9 @@ import { _createDestinationPreferencePost } from './+server';
 
 const runtimeEnv = { STYRIA_SUPPORTED_COUNTRIES: 'SE,DE,JP' };
 
-function fixture(production = false) {
+function fixture(secure = false, environment: Record<string, string | undefined> = runtimeEnv) {
 	const sets: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
-	const handler = _createDestinationPreferencePost(runtimeEnv, production);
+	const handler = _createDestinationPreferencePost(environment, secure);
 	return {
 		handler,
 		sets,
@@ -17,8 +17,15 @@ function fixture(production = false) {
 	};
 }
 
-async function post(body: string, options: { production?: boolean; contentLength?: string } = {}) {
-	const current = fixture(options.production);
+async function post(
+	body: string,
+	options: {
+		secure?: boolean;
+		contentLength?: string;
+		environment?: Record<string, string | undefined>;
+	} = {}
+) {
+	const current = fixture(options.secure, options.environment);
 	const headers = new Headers({ 'content-type': 'application/x-www-form-urlencoded' });
 	if (options.contentLength !== undefined) headers.set('content-length', options.contentLength);
 	const response = await current.handler({
@@ -34,7 +41,7 @@ async function post(body: string, options: { production?: boolean; contentLength
 
 describe('POST /preferences/destination', () => {
 	it('stores a valid country then redirects to the supplied local return path', async () => {
-		const { response, sets } = await post('country=DE&returnTo=%2Fcart', { production: true });
+		const { response, sets } = await post('country=DE&returnTo=%2Fcart', { secure: true });
 
 		expect(response.status).toBe(303);
 		expect(response.headers.get('location')).toBe('/cart');
@@ -51,6 +58,16 @@ describe('POST /preferences/destination', () => {
 				}
 			}
 		]);
+	});
+
+	it('uses the injected secure setting instead of runtime NODE_ENV', async () => {
+		const { response, sets } = await post('country=DE&returnTo=%2Fcart', {
+			secure: false,
+			environment: { ...runtimeEnv, NODE_ENV: 'production' }
+		});
+
+		expect(response.status).toBe(303);
+		expect(sets[0]?.options.secure).toBe(false);
 	});
 
 	it.each([
@@ -76,5 +93,20 @@ describe('POST /preferences/destination', () => {
 
 		expect(response.status).toBe(400);
 		expect(sets).toEqual([]);
+	});
+
+	it('propagates malformed runtime allowlist configuration as a server failure', async () => {
+		const { handler, cookies } = fixture(false, { STYRIA_SUPPORTED_COUNTRIES: 'SE,invalid' });
+
+		await expect(
+			handler({
+				request: new Request('https://shop.sveltesociety.dev/preferences/destination', {
+					method: 'POST',
+					headers: { 'content-type': 'application/x-www-form-urlencoded' },
+					body: 'country=DE&returnTo=%2Fcart'
+				}),
+				cookies
+			} as unknown as Parameters<typeof handler>[0])
+		).rejects.toThrowError('STYRIA_SUPPORTED_COUNTRIES_INVALID');
 	});
 });

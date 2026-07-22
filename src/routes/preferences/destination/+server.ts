@@ -1,4 +1,5 @@
 import { env } from '$env/dynamic/private';
+import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 import { readBoundedFormData } from '$lib/server/security/bounded-form.server';
@@ -40,9 +41,10 @@ function strictFields(data: FormData): { country: string; returnTo: string } | n
 
 export function _createDestinationPreferencePost(
 	runtimeEnv: Record<string, string | undefined>,
-	production = runtimeEnv.NODE_ENV === 'production'
+	secure = !dev
 ): RequestHandler {
 	return async ({ request, cookies }) => {
+		const allowedCountries = parseStyriaSupportedCountries(runtimeEnv.STYRIA_SUPPORTED_COUNTRIES);
 		let data: FormData;
 		try {
 			data = await readBoundedFormData(request, FORM_LIMIT_BYTES);
@@ -55,12 +57,6 @@ export function _createDestinationPreferencePost(
 			return new Response(null, { status: 400 });
 		}
 
-		let allowedCountries;
-		try {
-			allowedCountries = parseStyriaSupportedCountries(runtimeEnv.STYRIA_SUPPORTED_COUNTRIES);
-		} catch {
-			return new Response(null, { status: 400 });
-		}
 		if (!allowedCountries.includes(fields.country as (typeof allowedCountries)[number])) {
 			return new Response(null, { status: 400 });
 		}
@@ -73,7 +69,7 @@ export function _createDestinationPreferencePost(
 			maxAge: COOKIE_MAX_AGE_SECONDS,
 			httpOnly: true,
 			sameSite: 'lax',
-			secure: production
+			secure
 		});
 		return new Response(null, { status: 303, headers: { location: returnTo } });
 	};
