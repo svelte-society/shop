@@ -279,6 +279,42 @@ describe('Styria submission reconciliation', () => {
 		);
 	});
 
+	it('accepts provider-copied design URLs when the reference and placement names still match', async () => {
+		const state = setup();
+		const copiedItems = structuredClone(expectedItems);
+		copiedItems[0].designs = {
+			back: 'https://styriashirts.eu/copied/community-back-77142.svg',
+			front: 'https://styriashirts.eu/copied/community-front-77143.svg'
+		};
+		state.styria.matches = [remoteOrder({ items: copiedItems })];
+
+		await expect(state.service.reconcile('order_reconcile', now)).resolves.toEqual({
+			outcome: 'reconciled',
+			matches: 1,
+			fulfillmentStatus: 'awaiting_vendor_payment'
+		});
+
+		expect(state.fulfillment.calls).toEqual(['inspect', 'recordSubmitted']);
+	});
+
+	it('rejects a provider order with different design placement names', async () => {
+		const state = setup();
+		const changedItems = structuredClone(expectedItems);
+		changedItems[0].designs = {
+			back: changedItems[0].designs.back,
+			left_chest: changedItems[0].designs.front
+		};
+		state.styria.matches = [remoteOrder({ items: changedItems })];
+
+		await expect(state.service.reconcile('order_reconcile', now)).resolves.toEqual({
+			outcome: 'ambiguous',
+			matches: 1,
+			fulfillmentStatus: 'review_required'
+		});
+
+		expect(state.fulfillment.calls).toEqual(['inspect']);
+	});
+
 	it('moves submitting to review when recording one consistent match fails', async () => {
 		const state = setup('submitting');
 		state.styria.matches = [remoteOrder()];

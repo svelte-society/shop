@@ -201,6 +201,18 @@ describe('Styria detail/create adapter', () => {
 
 		await expect(client.get('1042')).resolves.toEqual(styriaOrderFixture());
 	});
+
+	it('normalizes the live fixed-scale price and decorated design-reference description', async () => {
+		const expected = styriaOrderFixture();
+		const live = liveProviderOrderFixture(expected);
+		live.items[0].retailPrice = '27.99000';
+		live.items[0].description =
+			'\t<ul>\r\n\t\t<li data-note="instructions">Note: Design reference: society-community-v1</li>\r\n\t</ul>\r\n';
+		const fetch: typeof globalThis.fetch = async () => successJson({ order: live });
+		const client = createStyriaClient({ ...credentials, fetch });
+
+		await expect(client.get('1042')).resolves.toEqual(expected);
+	});
 });
 
 describe('Styria client failures', () => {

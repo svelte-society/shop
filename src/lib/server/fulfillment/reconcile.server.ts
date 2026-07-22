@@ -110,7 +110,7 @@ function submissionEvidenceTimestamp(order: OrderWithLinesAndEvents): Date {
 function itemSummary(item: StyriaOrder['items'][number]): string {
 	return canonicalJson({
 		description: item.description,
-		designs: item.designs,
+		designPositions: Object.keys(item.designs).sort(),
 		pn: item.pn,
 		quantity: item.quantity,
 		retailPrice: item.retailPrice

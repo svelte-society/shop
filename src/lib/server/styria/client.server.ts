@@ -51,11 +51,36 @@ function normalizedPositiveInteger(value: unknown): number | null {
 
 function normalizedMoney(value: unknown): number | null {
 	if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
-	if (typeof value === 'string' && /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value)) {
+	if (typeof value === 'string' && /^(?:0|[1-9]\d*)(?:\.\d{1,5})?$/.test(value)) {
 		const parsed = Number(value);
 		if (Number.isFinite(parsed)) return parsed;
 	}
 	return null;
+}
+
+function decodeHtmlText(value: string): string | null {
+	try {
+		const decoded = value.replace(
+			/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|amp|lt|gt|quot|apos);/gi,
+			(entity, decimal: string | undefined, hexadecimal: string | undefined) => {
+				if (decimal) return String.fromCodePoint(Number(decimal));
+				if (hexadecimal) return String.fromCodePoint(Number.parseInt(hexadecimal, 16));
+				const named = entity.slice(1, -1).toLowerCase();
+				return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[named] ?? entity;
+			}
+		);
+		return isExactString(decoded, 500) ? decoded : null;
+	} catch {
+		return null;
+	}
+}
+
+function normalizedDescription(value: unknown): string | null {
+	if (typeof value !== 'string' || value.length > 2_000) return null;
+	const instructions = value.match(
+		/<li\s+data-note=(?:"instructions"|'instructions')>Note:\s*([^<]{1,500})<\/li>/i
+	);
+	return instructions ? decodeHtmlText(instructions[1]) : value;
 }
 
 function normalizedBoolean(value: unknown): boolean | null {
@@ -136,13 +161,13 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 		if (!isRecord(item)) return null;
 		const quantity = normalizedPositiveInteger(item.quantity);
 		const retailPrice = normalizedMoney(item.retailPrice);
+		const description = normalizedDescription(item.description);
 		const designs = normalizeDesigns(item.designs);
 		if (
 			!isExactString(item.pn, 200) ||
 			quantity === null ||
 			retailPrice === null ||
-			typeof item.description !== 'string' ||
-			item.description.length > 2_000 ||
+			description === null ||
 			designs === null
 		) {
 			return null;
@@ -151,7 +176,7 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 			pn: item.pn,
 			quantity,
 			retailPrice,
-			description: item.description,
+			description,
 			designs
 		});
 	}
