@@ -4,10 +4,26 @@ import {
 	displayPriceForDestination,
 	pricingDisclosure,
 	pricingDestination,
+	pricePublicProduct,
 	VAT_TABLE_REVIEWED_AT
 } from './pricing';
+import type { PublicCatalogProduct } from './catalog';
+
+const product: PublicCatalogProduct = {
+	slug: 'community-tee', name: 'Community Tee', description: 'A community tee.',
+	images: ['https://cdn.example.com/tee.png'], sortOrder: 1, category: 'apparel',
+	materials: 'Cotton', care: 'Wash at 30°C', fit: null, sizeGuideUrl: null, sizeChart: null,
+	variants: [
+		{ priceId: 'price_tee', label: 'M', sortOrder: 1, currency: 'eur', unitAmountCents: 2_000 }
+	]
+};
 
 describe('destination pricing', () => {
+	it('projects public catalog variants through the selected destination', () => {
+		expect(pricePublicProduct(product, pricingDestination('DE')).variants[0].displayPrice).toMatchObject({
+			netCents: 2_000, vatCents: 380, grossCents: 2_380
+		});
+	});
 	it.each([
 		['SE', 2_500, 1_000, 3_500],
 		['DE', 2_380, 952, 3_332],

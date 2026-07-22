@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
+import { pricingDestination } from '$lib/domain/pricing';
 import ProductPage from './+page.svelte';
 
 const communityTee: PublicCatalogProduct = {
@@ -51,7 +52,7 @@ const communityTee: PublicCatalogProduct = {
 
 function renderCommunityTee(): void {
 	render(ProductPage, {
-		data: { product: communityTee, catalogUnavailable: false },
+		data: { product: communityTee, catalogUnavailable: false, pricingDestination: pricingDestination('SE') },
 		params: { slug: communityTee.slug },
 		form: null
 	});
@@ -72,7 +73,8 @@ describe('product details', () => {
 						]
 					}
 				},
-				catalogUnavailable: false
+				catalogUnavailable: false,
+				pricingDestination: pricingDestination('SE')
 			},
 			params: { slug: communityTee.slug },
 			form: null
@@ -110,5 +112,22 @@ describe('product details', () => {
 		expect(page.getByRole('heading', { name: 'Care' }).element()).toBeTruthy();
 		expect(page.getByRole('heading', { name: 'Delivery' }).query()).toBeNull();
 		expect(page.getByRole('heading', { name: 'Returns' }).query()).toBeNull();
+	});
+
+	it('projects the item price and import-charge copy for the selected Asian destination', async () => {
+		render(ProductPage, {
+			data: { product: communityTee, catalogUnavailable: false, pricingDestination: pricingDestination('JP') },
+			params: { slug: communityTee.slug },
+			form: null
+		});
+
+		await expect.element(page.getByText('€20.00')).toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
+				)
+			)
+			.toBeVisible();
 	});
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
+import { pricingDestination } from '$lib/domain/pricing';
 import CatalogUnavailable from './CatalogUnavailable.svelte';
 import ProductGallery from './ProductGallery.svelte';
 import ProductGrid from './ProductGrid.svelte';
@@ -42,20 +43,21 @@ const accessory: PublicCatalogProduct = {
 	images: ['https://cdn.example.com/society-mug.jpg'],
 	variants: [{ ...apparel.variants[0], priceId: 'price_mug', label: 'One size' }]
 };
+const destination = pricingDestination('SE');
 
 describe('catalog display components', () => {
 	it('groups a mixed collection and exposes each product as a labelled link', async () => {
-		render(ProductGrid, { products: [apparel, accessory] });
+		render(ProductGrid, { products: [apparel, accessory], destination });
 
 		await expect.element(page.getByRole('heading', { name: 'Apparel' })).toBeVisible();
 		await expect.element(page.getByRole('heading', { name: 'Accessories' })).toBeVisible();
 		const teeLink = page.getByRole('link', { name: /Society Tee/ });
 		await expect.element(teeLink).toHaveAttribute('href', '/products/society-tee');
-		await expect.element(teeLink).toHaveTextContent('€20.00 excl. VAT');
+		await expect.element(teeLink).toHaveTextContent('€25.00');
 	});
 
 	it('shows an actionable empty collection state', async () => {
-		render(ProductGrid, { products: [] });
+		render(ProductGrid, { products: [], destination });
 
 		await expect
 			.element(page.getByRole('status'))

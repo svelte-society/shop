@@ -3,6 +3,7 @@ import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
 import { cart } from '$lib/stores/cart.svelte';
+import { pricingDestination } from '$lib/domain/pricing';
 
 const beginCheckout = vi.hoisted(() => vi.fn<(lines: unknown) => Promise<void>>());
 const track = vi.hoisted(() => vi.fn());
@@ -38,7 +39,8 @@ const product: PublicCatalogProduct = {
 const data = {
 	products: [product],
 	catalogUnavailable: false,
-	checkoutEnabled: true
+	checkoutEnabled: true,
+	pricingDestination: pricingDestination('DE')
 };
 
 describe('cart page checkout submission state', () => {
@@ -53,7 +55,12 @@ describe('cart page checkout submission state', () => {
 		render(CartPage, { data, params: {}, form: null });
 
 		await expect.poll(() => track.mock.calls).toEqual([['cart_viewed']]);
-		await expect.element(page.getByText('Net subtotal (excl. VAT)')).toBeVisible();
+		await expect.element(page.getByText('Merchandise')).toBeVisible();
+		const summary = page.getByRole('complementary', { name: 'Order summary' });
+		await expect.element(summary.getByText('€23.80')).toBeVisible();
+		await expect.element(summary.getByText('€9.52')).toBeVisible();
+		await expect.element(summary.getByText('€5.32')).toBeVisible();
+		await expect.element(summary.getByText('€33.32')).toBeVisible();
 	});
 
 	it('keeps the button disabled and blocks a second request after navigation is assigned', async () => {
@@ -91,5 +98,25 @@ describe('cart page checkout submission state', () => {
 				'Checkout is temporarily unavailable. Your cart is safe. Try again shortly.'
 			);
 		expect(cart.lines).toEqual(originalLines);
+	});
+
+	it('removes a stale price only while the catalog is available', async () => {
+		cart.clear();
+		cart.add('price_tee_medium_old');
+		render(CartPage, { data, params: {}, form: null });
+
+		await expect
+			.element(page.getByText('A product price changed. Please add the item again.'))
+			.toBeVisible();
+		expect(cart.lines).toEqual([]);
+	});
+
+	it('preserves a stale price during a catalog outage', async () => {
+		cart.clear();
+		cart.add('price_tee_medium_old');
+		render(CartPage, { data: { ...data, catalogUnavailable: true }, params: {}, form: null });
+
+		await expect.element(page.getByText('Collection temporarily unavailable.')).toBeVisible();
+		expect(cart.lines).toEqual([{ priceId: 'price_tee_medium_old', quantity: 1 }]);
 	});
 });

@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { formatEur } from '$lib/domain/money';
+	import { pricingDisclosure, type CartDisplayPrice, type PricingDestination } from '$lib/domain/pricing';
 
 	type Props = {
 		totalUnits: number;
-		subtotalCents: number;
+		cartDisplayPrice: CartDisplayPrice;
+		destination: PricingDestination;
 		checkoutEnabled: boolean;
 		checkoutPending?: boolean;
 		checkoutError?: string | null;
@@ -12,7 +14,8 @@
 
 	let {
 		totalUnits,
-		subtotalCents,
+		cartDisplayPrice,
+		destination,
 		checkoutEnabled,
 		checkoutPending = false,
 		checkoutError = null,
@@ -26,17 +29,16 @@
 <aside class="summary" aria-labelledby="cart-summary-title">
 	<h2 id="cart-summary-title">Order summary</h2>
 
-	<div class="subtotal">
-		<span>Net subtotal (excl. VAT)</span>
-		<strong>{formatEur(subtotalCents)}</strong>
+	<div class="price-rows">
+		<div class="price-row"><span>Merchandise</span><strong>{formatEur(cartDisplayPrice.merchandise.grossCents)}</strong></div>
+		<div class="price-row"><span>Shipping</span><strong>{formatEur(cartDisplayPrice.shipping.grossCents)}</strong></div>
+		<div class="price-row"><span>{destination.region === 'eu' ? 'VAT' : 'EU VAT'}</span><strong>{formatEur(cartDisplayPrice.totalVatCents)}</strong></div>
+		<div class="price-row estimated-total"><span>Estimated total</span><strong>{formatEur(cartDisplayPrice.totalGrossCents)}</strong></div>
 	</div>
 
 	<p class="shipping-message" aria-live="polite">{shippingMessage}</p>
-	<p>
-		Prices and subtotal are shown net of VAT in EUR. Destination VAT is confirmed from your delivery
-		and business details at checkout.
-	</p>
-	<p>Shipping across the EU, except Slovenia, and to Styria-supported destinations in Asia.</p>
+	<p>{pricingDisclosure(destination)}</p>
+	<p>Estimated for delivery to {destination.displayName}. Checkout confirms the final amount from your delivery address.</p>
 
 	<button type="button" disabled={!checkoutEnabled || checkoutPending} onclick={onCheckout}>
 		{checkoutPending
@@ -66,12 +68,23 @@
 		font-size: clamp(1.25rem, 3vw, 1.6rem);
 	}
 
-	.subtotal {
+	.price-rows {
+		display: grid;
+		gap: 0.7rem;
+		padding-block: 1rem;
+		border-block: 1px solid oklch(86% 0.035 35);
+	}
+
+	.price-row {
 		display: flex;
 		justify-content: space-between;
 		gap: 1rem;
-		padding-block: 1rem;
-		border-block: 1px solid oklch(86% 0.035 35);
+	}
+
+	.estimated-total {
+		padding-top: 0.7rem;
+		border-top: 1px solid oklch(86% 0.035 35);
+		font-size: 1.05rem;
 	}
 
 	.shipping-message {

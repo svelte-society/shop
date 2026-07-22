@@ -1,16 +1,21 @@
 <script lang="ts">
 	import type { PublicCatalogProduct } from '$lib/domain/catalog';
+	import {
+		pricePublicProduct,
+		type PricingDestination
+	} from '$lib/domain/pricing';
 	import ProductCard from './ProductCard.svelte';
 
-	type Props = { products: PublicCatalogProduct[] };
+	type Props = { products: PublicCatalogProduct[]; destination: PricingDestination };
 
-	let { products }: Props = $props();
-	let apparel = $derived(products.filter((product) => product.category === 'apparel'));
-	let accessories = $derived(products.filter((product) => product.category === 'accessory'));
+	let { products, destination }: Props = $props();
+	let pricedProducts = $derived(products.map((product) => pricePublicProduct(product, destination)));
+	let apparel = $derived(pricedProducts.filter((product) => product.category === 'apparel'));
+	let accessories = $derived(pricedProducts.filter((product) => product.category === 'accessory'));
 	let mixedCollection = $derived(apparel.length > 0 && accessories.length > 0);
 </script>
 
-{#if products.length === 0}
+{#if pricedProducts.length === 0}
 	<div class="empty-collection" role="status">
 		<p class="empty-title">The collection is being arranged.</p>
 		<p>Check back shortly.</p>
@@ -33,7 +38,7 @@
 	</div>
 {:else}
 	<div class="product-grid">
-		{#each products as product (product.slug)}<ProductCard {product} />{/each}
+		{#each pricedProducts as product (product.slug)}<ProductCard {product} />{/each}
 	</div>
 {/if}
 

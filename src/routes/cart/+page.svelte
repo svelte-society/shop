@@ -8,13 +8,20 @@
 	import CartSummary from '$lib/components/CartSummary.svelte';
 	import type { CartLine } from '$lib/domain/cart';
 	import type { PublicCatalogProduct, PublicCatalogVariant } from '$lib/domain/catalog';
+	import {
+		displayCartPrice,
+		displayPriceForDestination,
+		type PricedPublicCatalogVariant
+	} from '$lib/domain/pricing';
 	import { cart } from '$lib/stores/cart.svelte';
 	import type { PageProps } from './$types';
 
 	type ResolvedLine = {
 		line: CartLine;
 		product: PublicCatalogProduct;
-		variant: PublicCatalogVariant;
+		variant: PricedPublicCatalogVariant;
+		unitDisplayPrice: ReturnType<typeof displayPriceForDestination>;
+		lineDisplayPrice: ReturnType<typeof displayPriceForDestination>;
 	};
 
 	let { data }: PageProps = $props();
@@ -42,19 +49,38 @@
 
 		return cart.lines.flatMap((line) => {
 			const resolved = catalogByPriceId.get(line.priceId);
-			return resolved ? [{ line, ...resolved }] : [];
+			if (!resolved) return [];
+
+			const unitDisplayPrice = displayPriceForDestination(
+				resolved.variant.unitAmountCents,
+				data.pricingDestination
+			);
+			return [{
+				line,
+				product: resolved.product,
+				variant: { ...resolved.variant, displayPrice: unitDisplayPrice },
+				unitDisplayPrice,
+				lineDisplayPrice: displayPriceForDestination(
+					resolved.variant.unitAmountCents * line.quantity,
+					data.pricingDestination
+				)
+			}];
 		});
 	});
 
 	let hasUnavailableLines = $derived(
 		ready && cart.lines.some((line) => !catalogByPriceId.has(line.priceId))
 	);
-	let subtotalCents = $derived(
-		resolvedLines.reduce(
-			(total, { line, variant }) => total + line.quantity * variant.unitAmountCents,
-			0
+	let cartDisplayPrice = $derived(
+		displayCartPrice(
+			resolvedLines.map(({ line, variant }) => ({
+				netUnitCents: variant.unitAmountCents,
+				quantity: line.quantity
+			})),
+			data.pricingDestination
 		)
 	);
+	let removedStaleLines = $state(false);
 
 	async function startCheckout(): Promise<void> {
 		if (!data.checkoutEnabled || checkoutPending) return;
@@ -72,6 +98,14 @@
 
 	onMount(() => {
 		track('cart_viewed');
+		if (!data.catalogUnavailable) {
+			for (const line of cart.lines) {
+				if (!catalogByPriceId.has(line.priceId)) {
+					cart.remove(line.priceId);
+					removedStaleLines = true;
+				}
+			}
+		}
 		ready = true;
 	});
 </script>
@@ -88,6 +122,12 @@
 	{#if !ready}
 		<section class="status-card" aria-busy="true">
 			<p role="status">Loading your cart…</p>
+		</section>
+	{:else if removedStaleLines}
+		<section class="status-card" role="status">
+			<p class="eyebrow">Price updated</p>
+			<h1>A product price changed. Please add the item again.</h1>
+			<a class="primary-link" href={resolve('/#collection')}>Browse the collection</a>
 		</section>
 	{:else if cart.lines.length === 0}
 		<section class="empty-state">
@@ -112,11 +152,13 @@
 		<div class="cart-layout">
 			<section aria-label="Cart items">
 				<ul class="line-list">
-					{#each resolvedLines as { line, product, variant } (line.priceId)}
+					{#each resolvedLines as { line, product, variant, unitDisplayPrice, lineDisplayPrice } (line.priceId)}
 						<li>
 							<CartLineItem
 								{product}
 								{variant}
+								{unitDisplayPrice}
+								{lineDisplayPrice}
 								quantity={line.quantity}
 								maxQuantity={20 - cart.totalUnits + line.quantity}
 								onQuantityChange={(quantity) => cart.setQuantity(line.priceId, quantity)}
@@ -129,7 +171,8 @@
 
 			<CartSummary
 				totalUnits={cart.totalUnits}
-				{subtotalCents}
+				{cartDisplayPrice}
+				destination={data.pricingDestination}
 				checkoutEnabled={data.checkoutEnabled}
 				{checkoutPending}
 				{checkoutError}

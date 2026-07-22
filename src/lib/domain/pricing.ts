@@ -1,4 +1,5 @@
 import { ASIA_DESTINATIONS, EU_DESTINATIONS, type MarketDestination } from './destinations';
+import type { PublicCatalogProduct, PublicCatalogVariant } from './catalog';
 
 export const PAID_SHIPPING_NET_CENTS = 800;
 export const VAT_TABLE_REVIEWED_AT = '2026-07-22';
@@ -21,6 +22,10 @@ export type CartDisplayPrice = {
 	totalNetCents: number;
 	totalVatCents: number;
 	totalGrossCents: number;
+};
+export type PricedPublicCatalogVariant = PublicCatalogVariant & { displayPrice: DisplayPrice };
+export type PricedPublicCatalogProduct = Omit<PublicCatalogProduct, 'variants'> & {
+	variants: PricedPublicCatalogVariant[];
 };
 
 const EU_VAT_BASIS_POINTS = Object.freeze({
@@ -77,6 +82,19 @@ export function displayPriceForDestination(
 	if (gross > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('INVALID_CENTS');
 	const grossCents = Number(gross);
 	return { netCents, vatCents: grossCents - netCents, grossCents };
+}
+
+export function pricePublicProduct(
+	product: PublicCatalogProduct,
+	destination: PricingDestination
+): PricedPublicCatalogProduct {
+	return {
+		...product,
+		variants: product.variants.map((variant) => ({
+			...variant,
+			displayPrice: displayPriceForDestination(variant.unitAmountCents, destination)
+		}))
+	};
 }
 
 function safeCents(value: bigint): number {

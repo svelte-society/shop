@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { track } from '$lib/analytics/events';
-	import type { PublicCatalogProduct } from '$lib/domain/catalog';
+	import type { PricedPublicCatalogProduct } from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
 
-	type Props = { product: PublicCatalogProduct };
+	type Props = { product: PricedPublicCatalogProduct };
 
 	let { product }: Props = $props();
 	let imageReady = $state(false);
 	let lowestPrice = $derived(
-		Math.min(...product.variants.map((variant) => variant.unitAmountCents))
+		Math.min(...product.variants.map((variant) => variant.displayPrice.grossCents))
 	);
 </script>
 
@@ -35,7 +35,7 @@
 				<h4>{product.name}</h4>
 			</div>
 			<p class="price">
-				{product.variants.length > 1 ? 'From ' : ''}{formatEur(lowestPrice)} excl. VAT
+				{product.variants.length > 1 ? 'From ' : ''}{formatEur(lowestPrice)}
 			</p>
 		</div>
 	</a>

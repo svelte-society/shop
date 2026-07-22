@@ -3,10 +3,12 @@
 	import CatalogUnavailable from '$lib/components/CatalogUnavailable.svelte';
 	import ProductGallery from '$lib/components/ProductGallery.svelte';
 	import ProductPurchase from '$lib/components/ProductPurchase.svelte';
+	import { pricePublicProduct } from '$lib/domain/pricing';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 	let sizeGuide = $derived(data.product?.sizeChart ?? null);
+	let pricedProduct = $derived(data.product ? pricePublicProduct(data.product, data.pricingDestination) : null);
 </script>
 
 <svelte:head>
@@ -31,7 +33,7 @@
 				<p class="eyebrow">{data.product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 				<h1>{data.product.name}</h1>
 				<p class="description">{data.product.description}</p>
-				<ProductPurchase product={data.product} />
+				{#if pricedProduct}<ProductPurchase product={pricedProduct} destination={data.pricingDestination} />{/if}
 			</div>
 		</div>
 

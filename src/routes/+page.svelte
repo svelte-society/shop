@@ -2,9 +2,18 @@
 	import { resolve } from '$app/paths';
 	import CatalogUnavailable from '$lib/components/CatalogUnavailable.svelte';
 	import ProductGrid from '$lib/components/ProductGrid.svelte';
+	import {
+		displayPriceForDestination,
+		PAID_SHIPPING_NET_CENTS,
+		pricingDisclosure
+	} from '$lib/domain/pricing';
+	import { formatEur } from '$lib/domain/money';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
+	let projectedShipping = $derived(
+		displayPriceForDestination(PAID_SHIPPING_NET_CENTS, data.pricingDestination)
+	);
 </script>
 
 <svelte:head>
@@ -45,7 +54,7 @@
 			{#if data.stale}
 				<p class="stale-note" role="status">Showing the most recent available collection.</p>
 			{/if}
-			<ProductGrid products={data.products} />
+			<ProductGrid products={data.products} destination={data.pricingDestination} />
 		{/if}
 	</section>
 
@@ -57,7 +66,10 @@
 		<div class="commerce-grid">
 			<article>
 				<h3>Shipping</h3>
-				<p>€10 for one item. Free shipping when you pick two or more.</p>
+				<p>
+					{formatEur(projectedShipping.grossCents)} for one item. Free shipping when you pick two or
+					more.
+				</p>
 			</article>
 			<article>
 				<h3>Regions</h3>
@@ -67,10 +79,7 @@
 			</article>
 			<article>
 				<h3>Tax</h3>
-				<p>
-					Prices shown in EUR. Final tax is confirmed from your delivery and business details at
-					checkout.
-				</p>
+				<p>{pricingDisclosure(data.pricingDestination)}</p>
 			</article>
 			<article>
 				<h3>Support</h3>

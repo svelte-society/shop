@@ -1,18 +1,20 @@
 <script lang="ts">
-	import type { PublicCatalogProduct, PublicCatalogVariant } from '$lib/domain/catalog';
+	import type { PublicCatalogProduct } from '$lib/domain/catalog';
 	import { formatEur } from '$lib/domain/money';
+	import type { DisplayPrice, PricedPublicCatalogVariant } from '$lib/domain/pricing';
 
 	type Props = {
 		product: PublicCatalogProduct;
-		variant: PublicCatalogVariant;
+		variant: PricedPublicCatalogVariant;
+		unitDisplayPrice: DisplayPrice;
+		lineDisplayPrice: DisplayPrice;
 		quantity: number;
 		maxQuantity: number;
 		onQuantityChange: (quantity: number) => void;
 		onRemove: () => void;
 	};
 
-	let { product, variant, quantity, maxQuantity, onQuantityChange, onRemove }: Props = $props();
-	let lineTotalCents = $derived(variant.unitAmountCents * quantity);
+	let { product, variant, unitDisplayPrice, lineDisplayPrice, quantity, maxQuantity, onQuantityChange, onRemove }: Props = $props();
 
 	function handleQuantityChange(event: Event): void {
 		const input = event.currentTarget as HTMLInputElement;
@@ -36,7 +38,7 @@
 		<p class="category">{product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 		<h2>{product.name}</h2>
 		<p class="variant">{variant.label}</p>
-		<p class="unit-price">{formatEur(variant.unitAmountCents)} each, excl. VAT</p>
+		<p class="unit-price">{formatEur(unitDisplayPrice.grossCents)} each</p>
 
 		<div class="line-actions">
 			<label for={`quantity-${variant.priceId}`}>Quantity</label>
@@ -59,8 +61,8 @@
 		</div>
 	</div>
 
-	<p class="line-total" aria-label={`Line net total ${formatEur(lineTotalCents)}, excluding VAT`}>
-		{formatEur(lineTotalCents)} net, excl. VAT
+	<p class="line-total" aria-label={`Line total ${formatEur(lineDisplayPrice.grossCents)}`}>
+		{formatEur(lineDisplayPrice.grossCents)}
 	</p>
 </article>
 

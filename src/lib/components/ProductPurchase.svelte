@@ -1,15 +1,20 @@
 <script lang="ts">
-	import type { PublicCatalogProduct } from '$lib/domain/catalog';
+	import {
+		pricingDisclosure,
+		type PricingDestination,
+		type PricedPublicCatalogProduct
+	} from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
 	import { cart, type CartController } from '$lib/stores/cart.svelte';
 	import VariantPicker from './VariantPicker.svelte';
 
 	type Props = {
-		product: PublicCatalogProduct;
+		product: PricedPublicCatalogProduct;
+		destination: PricingDestination;
 		cartController?: CartController;
 	};
 
-	let { product, cartController = cart }: Props = $props();
+	let { product, destination, cartController = cart }: Props = $props();
 	let selectedPriceId = $state<string | null>(null);
 	let validationMessage = $state('');
 	let cartMessage = $state('');
@@ -72,8 +77,8 @@
 
 <div class="purchase-panel">
 	<div class="price-block">
-		<p class="price">{formatEur(selectedVariant.unitAmountCents)}</p>
-		<p>Excl. VAT. Destination VAT follows at checkout.</p>
+		<p class="price">{formatEur(selectedVariant.displayPrice.grossCents)}</p>
+		<p>{pricingDisclosure(destination)}</p>
 	</div>
 
 	{#key productIdentity}

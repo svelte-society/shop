@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
+import { pricePublicProduct, pricingDestination } from '$lib/domain/pricing';
 import { createCart } from '$lib/stores/cart.svelte';
 import ProductPurchase from './ProductPurchase.svelte';
 
@@ -68,20 +69,48 @@ const nextApparel: PublicCatalogProduct = {
 		{ ...apparel.variants[1], priceId: 'price_hoodie_xl', label: 'XL' }
 	]
 };
+const destination = pricingDestination('SE');
+const priced = (product: PublicCatalogProduct) => pricePublicProduct(product, destination);
 
 describe('ProductPurchase', () => {
-	it('explains that the selected price excludes destination VAT', async () => {
-		render(ProductPurchase, { product: apparel });
+	it('shows the destination-projected price and selected-country disclosure', async () => {
+		render(ProductPurchase, {
+			product: {
+				...apparel,
+				variants: apparel.variants.map((variant) => ({
+					...variant,
+					displayPrice: { netCents: 2_000, vatCents: 380, grossCents: 2_380 }
+				}))
+			} as never,
+			destination: {
+				countryCode: 'DE', displayName: 'Germany', region: 'eu', vatBasisPoints: 1900,
+				requiresImportChargeCopy: false
+			} as never
+		});
+
+		await expect.element(page.getByText('€23.80')).toBeVisible();
+		await expect
+			.element(page.getByText('Includes 19% Germany VAT. Exact tax is confirmed from your delivery address at checkout.'))
+			.toBeVisible();
+	});
+
+	it('shows zero EU VAT and import-charge copy for Japan', async () => {
+		const japan = pricingDestination('JP');
+		render(ProductPurchase, { product: pricePublicProduct(apparel, japan), destination: japan });
 
 		await expect.element(page.getByText('€20.00')).toBeVisible();
 		await expect
-			.element(page.getByText('Excl. VAT. Destination VAT follows at checkout.'))
+			.element(
+				page.getByText(
+					'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
+				)
+			)
 			.toBeVisible();
 	});
 
 	it('keeps apparel out of the cart until a size is selected', async () => {
 		const cartController = createCart(isolatedStorage);
-		render(ProductPurchase, { product: apparel, cartController });
+		render(ProductPurchase, { product: priced(apparel), destination, cartController });
 
 		await page.getByRole('button', { name: 'Add to cart' }).click();
 
@@ -101,7 +130,7 @@ describe('ProductPurchase', () => {
 
 	it('adds the automatically selected accessory variant', async () => {
 		const cartController = createCart(isolatedStorage);
-		render(ProductPurchase, { product: accessory, cartController });
+		render(ProductPurchase, { product: priced(accessory), destination, cartController });
 
 		await page.getByRole('button', { name: 'Add to cart' }).click();
 
@@ -132,7 +161,7 @@ describe('ProductPurchase', () => {
 			const cartController = createCart(isolatedStorage);
 			fill(cartController);
 			const initialLines = cartController.lines;
-			render(ProductPurchase, { product: accessory, cartController });
+			render(ProductPurchase, { product: priced(accessory), destination, cartController });
 
 			await page.getByRole('button', { name: 'Add to cart' }).click();
 
@@ -147,13 +176,14 @@ describe('ProductPurchase', () => {
 	it('uses option wording for an unselected multi-variant accessory', async () => {
 		const cartController = createCart(isolatedStorage);
 		render(ProductPurchase, {
-			product: {
+			product: priced({
 				...accessory,
 				variants: [
 					{ ...accessory.variants[0], priceId: 'price_mug_white', label: 'White' },
 					{ ...accessory.variants[0], priceId: 'price_mug_navy', label: 'Navy' }
 				]
-			},
+			}),
+			destination,
 			cartController
 		});
 
@@ -166,14 +196,14 @@ describe('ProductPurchase', () => {
 
 	it('clears selection and feedback when reused for another product', async () => {
 		const cartController = createCart(isolatedStorage);
-		const view = render(ProductPurchase, { product: apparel, cartController });
+		const view = render(ProductPurchase, { product: priced(apparel), destination, cartController });
 		await page.getByText('M', { exact: true }).click();
 		await page.getByRole('button', { name: 'Add to cart' }).click();
 		await expect
 			.element(page.getByRole('status', { name: 'Cart status' }))
 			.toHaveTextContent('Society Tee, M added to cart.');
 
-		await view.rerender({ product: nextApparel, cartController });
+		await view.rerender({ product: priced(nextApparel), destination, cartController });
 
 		await expect.element(page.getByRole('radio', { name: 'XS' })).not.toBeChecked();
 		await expect.element(page.getByRole('radio', { name: 'XL' })).not.toBeChecked();

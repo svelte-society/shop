@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
+import { pricePublicProduct, pricingDestination } from '$lib/domain/pricing';
 import { createCart } from '$lib/stores/cart.svelte';
 import CartLineItem from './CartLineItem.svelte';
 import ProductCard from './ProductCard.svelte';
@@ -37,6 +38,8 @@ const isolatedStorage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = {
 	setItem: () => undefined,
 	removeItem: () => undefined
 };
+const destination = pricingDestination('SE');
+const pricedProduct = pricePublicProduct(product, destination);
 
 function rgb(color: string): [number, number, number] {
 	const canvas = document.createElement('canvas');
@@ -70,8 +73,8 @@ function contrast(foreground: string, background: string): number {
 
 describe('storefront contrast semantics', () => {
 	it('keeps action text and small orange labels at 4.5:1 or better', () => {
-		render(ProductPurchase, { product, cartController: createCart(isolatedStorage) });
-		render(ProductCard, { product });
+		render(ProductPurchase, { product: pricedProduct, destination, cartController: createCart(isolatedStorage) });
+		render(ProductCard, { product: pricedProduct });
 
 		const buttonStyle = getComputedStyle(
 			page.getByRole('button', { name: 'Add to cart' }).element()
@@ -123,7 +126,9 @@ describe('storefront contrast semantics', () => {
 	it('keeps the cart quantity boundary at 3:1 against white and paper', () => {
 		render(CartLineItem, {
 			product,
-			variant: product.variants[0],
+			variant: pricedProduct.variants[0],
+			unitDisplayPrice: pricedProduct.variants[0].displayPrice,
+			lineDisplayPrice: pricedProduct.variants[0].displayPrice,
 			quantity: 1,
 			maxQuantity: 20,
 			onQuantityChange: () => undefined,

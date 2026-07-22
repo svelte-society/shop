@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
+import { pricePublicProduct, pricingDestination } from '$lib/domain/pricing';
 
 const track = vi.hoisted(() => vi.fn());
 
@@ -31,6 +32,7 @@ const product: PublicCatalogProduct = {
 		}
 	]
 };
+const destination = pricingDestination('SE');
 
 describe('ProductCard analytics', () => {
 	beforeEach(() => {
@@ -38,7 +40,7 @@ describe('ProductCard analytics', () => {
 	});
 
 	it('reports the product navigation once without product data', async () => {
-		render(ProductCard, { product });
+		render(ProductCard, { product: pricePublicProduct(product, destination) });
 		const link = page.getByRole('link', { name: /Community Tee/ });
 		link.element().addEventListener('click', (event) => event.preventDefault());
 
@@ -47,9 +49,12 @@ describe('ProductCard analytics', () => {
 		expect(track.mock.calls).toEqual([['product_viewed']]);
 	});
 
-	it('labels the catalog price as excluding VAT', async () => {
-		render(ProductCard, { product });
-
-		await expect.element(page.getByText('€20.00 excl. VAT')).toBeVisible();
+	it.each([
+		['SE', '€25.00'],
+		['DE', '€23.80'],
+		['JP', '€20.00']
+	] as const)('projects a net catalog price for %s', async (country, amount) => {
+		render(ProductCard, { product: pricePublicProduct(product, pricingDestination(country)) });
+		await expect.element(page.getByText(amount)).toBeVisible();
 	});
 });
