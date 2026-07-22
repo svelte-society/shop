@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto, invalidate } from '$app/navigation';
+	import { recoverPricingDestination } from '$lib/client/pricing-destination-navigation';
 	import type { DestinationOption, PricingDestination } from '$lib/domain/pricing';
 
 	type Props = {
@@ -9,8 +9,8 @@
 	};
 
 	let { destination, destinations, returnTo }: Props = $props();
-	let dialog: HTMLDialogElement;
-	let trigger: HTMLButtonElement;
+	let dialog = $state<HTMLDialogElement | null>(null);
+	let trigger = $state<HTMLButtonElement | null>(null);
 	let query = $state('');
 	let pending = $state(false);
 	let announcement = $state('');
@@ -37,13 +37,13 @@
 	function open(): void {
 		announcement = '';
 		error = '';
-		dialog.showModal();
+		dialog?.showModal();
 	}
 
 	function close(): void {
 		query = '';
 		error = '';
-		trigger.focus();
+		trigger?.focus();
 	}
 
 	async function submit(event: SubmitEvent): Promise<void> {
@@ -66,17 +66,8 @@
 				error = 'We couldn’t update your delivery country. Please try again.';
 				return;
 			}
-			try {
-				await invalidate('app:pricing-destination');
-			} catch {
-				try {
-					await goto(returnTo, { invalidateAll: true });
-				} catch {
-					globalThis.location.assign(returnTo);
-				}
-				return;
-			}
-			dialog.close();
+			if (!(await recoverPricingDestination(returnTo))) return;
+			dialog?.close();
 			announcement = `Prices updated for ${selected.displayName}.`;
 		} catch {
 			error = 'We couldn’t update your delivery country. Please try again.';
@@ -105,89 +96,89 @@
 			<input type="hidden" name="returnTo" value={returnTo} />
 			<button type="submit">Update country</button>
 		</form>
+	{:else}
+		<button
+			bind:this={trigger}
+			class="destination-trigger"
+			type="button"
+			aria-label={`Choose delivery country, currently ${destination.displayName}`}
+			onclick={open}
+		>
+			<span class="trigger-label">Deliver to:</span>
+			<span>{destination.displayName}</span>
+			<span aria-hidden="true">⌄</span>
+		</button>
+
+		<dialog bind:this={dialog} aria-labelledby="destination-title" onclose={close}>
+			<form method="POST" action="/preferences/destination" onsubmit={submit} aria-busy={pending}>
+				<header class="dialog-heading">
+					<p class="eyebrow">Pricing destination</p>
+					<h2 id="destination-title">Choose delivery country</h2>
+					<p>We’ll show your local tax treatment before checkout.</p>
+				</header>
+
+				<label class="search-field">
+					<span>Search delivery countries</span>
+					<input type="search" bind:value={query} placeholder="Search countries" />
+				</label>
+
+				<div class="destination-groups">
+					<fieldset>
+						<legend>EU countries</legend>
+						{#each europeanDestinations as option (option.countryCode)}
+							<label class:filtered-out={!matchesQuery(option)} class="destination-option">
+								<input
+									type="radio"
+									name="country"
+									value={option.countryCode}
+									checked={option.countryCode === destination.countryCode}
+									required
+								/>
+								<span>{option.displayName}</span>
+							</label>
+						{/each}
+						{#if !filteredEuropeanDestinations.length}
+							<p class="empty-result">No EU countries match your search.</p>
+						{/if}
+					</fieldset>
+
+					<fieldset>
+						<legend>Asia countries</legend>
+						{#each asianDestinations as option (option.countryCode)}
+							<label class:filtered-out={!matchesQuery(option)} class="destination-option">
+								<input
+									type="radio"
+									name="country"
+									value={option.countryCode}
+									checked={option.countryCode === destination.countryCode}
+									required
+								/>
+								<span>{option.displayName}</span>
+							</label>
+						{/each}
+						{#if !filteredAsianDestinations.length}
+							<p class="empty-result">No Asian countries match your search.</p>
+						{/if}
+					</fieldset>
+				</div>
+
+				{#if error}
+					<p class="form-error" role="alert">{error}</p>
+				{/if}
+
+				<input type="hidden" name="returnTo" value={returnTo} aria-label="Return to" />
+
+				<footer class="dialog-actions">
+					<button type="button" class="cancel" onclick={() => dialog?.close()} disabled={pending}>
+						Cancel
+					</button>
+					<button type="submit" class="update" disabled={pending}>
+						{pending ? 'Updating…' : 'Update country'}
+					</button>
+				</footer>
+			</form>
+		</dialog>
 	{/if}
-
-	<button
-		bind:this={trigger}
-		class="destination-trigger"
-		type="button"
-		aria-label={`Choose delivery country, currently ${destination.displayName}`}
-		onclick={open}
-	>
-		<span class="trigger-label">Deliver to:</span>
-		<span>{destination.displayName}</span>
-		<span aria-hidden="true">⌄</span>
-	</button>
-
-	<dialog bind:this={dialog} aria-labelledby="destination-title" onclose={close}>
-		<form method="POST" action="/preferences/destination" onsubmit={submit} aria-busy={pending}>
-			<header class="dialog-heading">
-				<p class="eyebrow">Pricing destination</p>
-				<h2 id="destination-title">Choose delivery country</h2>
-				<p>We’ll show your local tax treatment before checkout.</p>
-			</header>
-
-			<label class="search-field">
-				<span>Search delivery countries</span>
-				<input type="search" bind:value={query} placeholder="Search countries" />
-			</label>
-
-			<div class="destination-groups">
-				<fieldset>
-					<legend>EU countries</legend>
-					{#each europeanDestinations as option (option.countryCode)}
-						<label class:filtered-out={!matchesQuery(option)} class="destination-option">
-							<input
-								type="radio"
-								name="country"
-								value={option.countryCode}
-								checked={option.countryCode === destination.countryCode}
-								required
-							/>
-							<span>{option.displayName}</span>
-						</label>
-					{/each}
-					{#if !filteredEuropeanDestinations.length}
-						<p class="empty-result">No EU countries match your search.</p>
-					{/if}
-				</fieldset>
-
-				<fieldset>
-					<legend>Asia countries</legend>
-					{#each asianDestinations as option (option.countryCode)}
-						<label class:filtered-out={!matchesQuery(option)} class="destination-option">
-							<input
-								type="radio"
-								name="country"
-								value={option.countryCode}
-								checked={option.countryCode === destination.countryCode}
-								required
-							/>
-							<span>{option.displayName}</span>
-						</label>
-					{/each}
-					{#if !filteredAsianDestinations.length}
-						<p class="empty-result">No Asian countries match your search.</p>
-					{/if}
-				</fieldset>
-			</div>
-
-			{#if error}
-				<p class="form-error" role="alert">{error}</p>
-			{/if}
-
-			<input type="hidden" name="returnTo" value={returnTo} aria-label="Return to" />
-
-			<footer class="dialog-actions">
-				<button type="button" class="cancel" onclick={() => dialog.close()} disabled={pending}>
-					Cancel
-				</button>
-				<button type="submit" class="update" disabled={pending}>
-					{pending ? 'Updating…' : 'Update country'}
-				</button>
-			</footer>
-		</form>
-	</dialog>
 </div>
 
 <p class="visually-hidden" role="status" aria-atomic="true">{announcement}</p>

@@ -17,16 +17,24 @@ const destinations = [
 ];
 
 describe('DestinationPicker no-JS fallback', () => {
-	it('server-renders a native country form with only approved endpoint fields', () => {
+	it('server-renders only a complete native fallback before hydration', () => {
 		const { body } = render(DestinationPicker, {
 			props: { destination, destinations, returnTo: '/products/society-tee?size=m' }
 		});
 		const fallback =
 			body.match(/<form class="no-script-destination[^>]*>([\s\S]*?)<\/form>/)?.[0] ?? '';
+		const formTag = fallback.match(/^<form\b[^>]*>/)?.[0] ?? '';
+		const successfulControlNames = [
+			...fallback.matchAll(/<(?:input|select)\b[^>]*\bname="([^"]+)"[^>]*>/g)
+		].map((match) => match[1]);
 
-		expect(fallback).toContain('action="/preferences/destination"');
-		expect(fallback).toContain('name="country"');
-		expect(fallback).toContain('name="returnTo"');
-		expect(fallback).not.toContain('name="query"');
+		expect(formTag).toContain('method="POST"');
+		expect(formTag).toContain('action="/preferences/destination"');
+		expect(fallback).toMatch(
+			/<option\b(?=[^>]*\bvalue="SE")(?=[^>]*\bselected)[^>]*>Sweden<\/option>/
+		);
+		expect(successfulControlNames).toEqual(['country', 'returnTo']);
+		expect(body).not.toContain('destination-trigger');
+		expect(body).not.toContain('<dialog');
 	});
 });
