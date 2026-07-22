@@ -2,6 +2,12 @@ import { env } from '$env/dynamic/private';
 import { createPolicyDocuments, type PolicyDocuments } from '$lib/content/policies';
 import { parseSellerPolicyConfig } from '$lib/config/private.server';
 import { parsePublicConfig } from '$lib/config/public';
+import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
+import {
+	destinationOptions,
+	resolvePricingDestination,
+	DESTINATION_COOKIE
+} from '$lib/server/storefront/destination.server';
 import type { LayoutServerLoad } from './$types';
 
 type UmamiConfig = {
@@ -92,8 +98,15 @@ function umamiConfig(runtimeEnv: Record<string, string | undefined>): UmamiConfi
 export function _createLayoutServerLoad(
 	runtimeEnv: Record<string, string | undefined>
 ): LayoutServerLoad {
-	return ({ route }) => {
+	return ({ route, cookies, request, depends }) => {
 		const config = parsePublicConfig(runtimeEnv);
+		const allowedCountries = parseStyriaSupportedCountries(runtimeEnv.STYRIA_SUPPORTED_COUNTRIES);
+		const resolvedPricingDestination = resolvePricingDestination({
+			cookieValue: cookies.get(DESTINATION_COOKIE),
+			cloudflareCountry: request.headers.get('cf-ipcountry'),
+			allowedCountries
+		});
+		depends('app:pricing-destination');
 		const requestedPolicy = policyRoute(route.id);
 		const policyDocument = requestedPolicy
 			? createPolicyDocuments({
@@ -107,7 +120,15 @@ export function _createLayoutServerLoad(
 			checkoutEnabled: config.checkoutEnabled,
 			showOpeningSoon: !config.storefrontEnabled && isCommerceRoute(route.id),
 			policyDocument,
-			umami: umamiConfig(runtimeEnv)
+			umami: umamiConfig(runtimeEnv),
+			pricingDestination: {
+				countryCode: resolvedPricingDestination.countryCode,
+				displayName: resolvedPricingDestination.displayName,
+				region: resolvedPricingDestination.region,
+				vatBasisPoints: resolvedPricingDestination.vatBasisPoints,
+				requiresImportChargeCopy: resolvedPricingDestination.requiresImportChargeCopy
+			},
+			destinationOptions: destinationOptions(allowedCountries)
 		};
 	};
 }

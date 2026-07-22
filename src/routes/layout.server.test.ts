@@ -16,7 +16,8 @@ const disabledStorefrontEnv = {
 	SELLER_EMAIL: 'merchant@example.com',
 	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
 	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
-	POLICY_EFFECTIVE_DATE: '2026-07-17'
+	POLICY_EFFECTIVE_DATE: '2026-07-17',
+	STYRIA_SUPPORTED_COUNTRIES: 'SE,DE,JP'
 };
 
 async function loadRoute(routeId: string, storefrontEnabled = false) {
@@ -25,7 +26,12 @@ async function loadRoute(routeId: string, storefrontEnabled = false) {
 		STOREFRONT_ENABLED: storefrontEnabled ? 'true' : 'false'
 	});
 
-	return load({ route: { id: routeId } } as Parameters<typeof load>[0]);
+	return load({
+		route: { id: routeId },
+		cookies: { get: () => undefined },
+		request: { headers: new Headers() },
+		depends: () => undefined
+	} as unknown as Parameters<typeof load>[0]);
 }
 
 describe('public layout feature gate', () => {
@@ -37,7 +43,19 @@ describe('public layout feature gate', () => {
 				checkoutEnabled: false,
 				showOpeningSoon: true,
 				policyDocument: null,
-				umami: null
+				umami: null,
+				pricingDestination: {
+					countryCode: 'SE',
+					displayName: 'Sweden',
+					region: 'eu',
+					vatBasisPoints: 2500,
+					requiresImportChargeCopy: false
+				},
+				destinationOptions: [
+					{ countryCode: 'DE', displayName: 'Germany', region: 'eu' },
+					{ countryCode: 'SE', displayName: 'Sweden', region: 'eu' },
+					{ countryCode: 'JP', displayName: 'Japan', region: 'asia' }
+				]
 			});
 		}
 	);
@@ -55,7 +73,19 @@ describe('public layout feature gate', () => {
 			checkoutEnabled: false,
 			showOpeningSoon: false,
 			policyDocument: null,
-			umami: null
+			umami: null,
+			pricingDestination: {
+				countryCode: 'SE',
+				displayName: 'Sweden',
+				region: 'eu',
+				vatBasisPoints: 2500,
+				requiresImportChargeCopy: false
+			},
+			destinationOptions: [
+				{ countryCode: 'DE', displayName: 'Germany', region: 'eu' },
+				{ countryCode: 'SE', displayName: 'Sweden', region: 'eu' },
+				{ countryCode: 'JP', displayName: 'Japan', region: 'asia' }
+			]
 		});
 	});
 
@@ -67,7 +97,12 @@ describe('public layout feature gate', () => {
 			UMAMI_WEBSITE_ID: 'society-storefront'
 		});
 
-		const result = await load({ route: { id: '/' } } as Parameters<typeof load>[0]);
+		const result = await load({
+			route: { id: '/' },
+			cookies: { get: () => undefined },
+			request: { headers: new Headers() },
+			depends: () => undefined
+		} as unknown as Parameters<typeof load>[0]);
 
 		expect(result).toMatchObject({
 			umami: {
@@ -95,7 +130,12 @@ describe('public layout feature gate', () => {
 			...override
 		});
 
-		const result = await load({ route: { id: '/' } } as Parameters<typeof load>[0]);
+		const result = await load({
+			route: { id: '/' },
+			cookies: { get: () => undefined },
+			request: { headers: new Headers() },
+			depends: () => undefined
+		} as unknown as Parameters<typeof load>[0]);
 
 		expect(result).toMatchObject({ umami: null });
 	});
@@ -108,7 +148,12 @@ describe('public layout feature gate', () => {
 			UMAMI_WEBSITE_ID: 'society-storefront'
 		});
 
-		const result = await load({ route: { id: '/' } } as Parameters<typeof load>[0]);
+		const result = await load({
+			route: { id: '/' },
+			cookies: { get: () => undefined },
+			request: { headers: new Headers() },
+			depends: () => undefined
+		} as unknown as Parameters<typeof load>[0]);
 
 		expect(result).toMatchObject({
 			umami: {
