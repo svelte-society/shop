@@ -616,7 +616,7 @@ Test that migration:
 - adds non-null `orders.shipping_tax_amount` and backfills a historical SE row correctly;
 - adds non-null `order_lines.retail_unit_amount` and backfills it from `unit_amount`;
 - aborts on a historical row whose merchandise/shipping tax relationship is negative;
-- requires new v2 drafts to contain an allowed destination;
+- requires new v2 drafts to contain a valid market destination (the checkout service enforces the runtime Styria allowlist in Task 7);
 - round-trips explicit shipping tax and retail unit amounts.
 
 - [ ] **Step 2: Run database tests and verify red**
@@ -724,7 +724,7 @@ if (merchandiseTax < 0n || shippingTax > shipping || expectedTotal !== BigInt(to
 }
 ```
 
-Require a v2 draft destination, map v1 null rows without inventing a frozen country, and insert every new amount explicitly rather than relying on defaults. Reject a new v2 draft when its destination is absent from the runtime Styria allowlist.
+Require a v2 draft destination, map v1 null rows without inventing a frozen country, and insert every new amount explicitly rather than relying on defaults. Reject a new v2 draft when its destination is not a valid market destination; Task 7 owns validation against the runtime Styria allowlist before draft creation.
 
 - [ ] **Step 5: Update raw fixtures deliberately**
 
