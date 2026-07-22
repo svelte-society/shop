@@ -62,14 +62,15 @@ async function expectStableCode(promise: Promise<unknown>, code: string): Promis
 }
 
 describe('Stripe fulfillment details', () => {
-	it('rejects a current address omitted from the injected Styria allowlist', async () => {
+	it('rejects a US address outside the source-controlled destination policy', async () => {
 		const session = sessionFixture();
-		session.customer.shipping.address.country = 'JP';
+		session.customer.shipping.address.country = 'US';
+		session.customer.shipping.address.state = 'CA';
 
 		await expectStableCode(
-			createStripeFulfillmentGateway(new ContractStripeClient(session), [
-				'SE'
-			]).retrieveFulfillmentDetails('cs_test_fulfillment'),
+			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(
+				'cs_test_fulfillment'
+			),
 			'STRIPE_FULFILLMENT_DESTINATION_UNSUPPORTED'
 		);
 	});

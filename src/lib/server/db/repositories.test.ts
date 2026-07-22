@@ -235,6 +235,11 @@ describe('SqliteCheckoutDraftRepository', () => {
 		expect(() => drafts.create(draftInput({ contractVersion: 1 }))).toThrowError(
 			'CHECKOUT_DRAFT_INVALID'
 		);
+		expect(() =>
+			drafts.create(
+				draftInput({ destinationCountry: 'US' as NewCheckoutDraft['destinationCountry'] })
+			)
+		).toThrowError('CHECKOUT_DRAFT_INVALID');
 		const draft = drafts.create(draftInput());
 		expect(draft).toMatchObject({ contractVersion: 2, destinationCountry: 'SE' });
 		database
@@ -552,7 +557,7 @@ describe('SqliteOrderRepository', () => {
 				lines: [{ ...input.lines[0], retailUnitAmount: input.lines[0].retailUnitAmount - 1 }]
 			})
 		).toThrowError('PAID_ORDER_INVALID');
-		expect(() => orders.createPaidOrder({ ...input, destinationCountry: 'SI' })).toThrowError(
+		expect(() => orders.createPaidOrder({ ...input, destinationCountry: 'US' })).toThrowError(
 			'PAID_ORDER_INVALID'
 		);
 		expect(() =>

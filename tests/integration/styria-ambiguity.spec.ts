@@ -13,7 +13,6 @@ import {
 
 const environment = {
 	STRIPE_SECRET_KEY: 'sk_test_ambiguity',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	STYRIA_APP_ID: 'app-ambiguity',
 	STYRIA_SECRET_KEY: 'secret-ambiguity',
 	STYRIA_BRAND_NAME: 'Svelte Society',

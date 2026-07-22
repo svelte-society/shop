@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	ASIA_DESTINATIONS,
 	EU_DESTINATIONS,
-	INITIAL_STYRIA_SUPPORTED_DESTINATIONS,
-	isMarketDestination,
-	parseStyriaSupportedCountries
+	SUPPORTED_DESTINATIONS,
+	isSupportedDestination
 } from './destinations';
 
 const expectedDestinations = [
@@ -91,32 +90,18 @@ describe('Styria-supported destinations', () => {
 		expect(Object.isFrozen(ASIA_DESTINATIONS)).toBe(true);
 	});
 
-	it('freezes the exact reviewed initial allowlist without Slovenia or the United States', () => {
-		expect(INITIAL_STYRIA_SUPPORTED_DESTINATIONS).toEqual(expectedDestinations);
-		expect(Object.isFrozen(INITIAL_STYRIA_SUPPORTED_DESTINATIONS)).toBe(true);
-		expect(INITIAL_STYRIA_SUPPORTED_DESTINATIONS).not.toContain('SI');
-		expect(INITIAL_STYRIA_SUPPORTED_DESTINATIONS).not.toContain('US');
+	it('freezes the exact source-controlled policy without Slovenia or the United States', () => {
+		expect(SUPPORTED_DESTINATIONS).toEqual(expectedDestinations);
+		expect(Object.isFrozen(SUPPORTED_DESTINATIONS)).toBe(true);
+		expect(SUPPORTED_DESTINATIONS).not.toContain('SI');
+		expect(SUPPORTED_DESTINATIONS).not.toContain('US');
 	});
 
-	it('parses a trimmed provider allowlist and returns an immutable copy', () => {
-		const parsed = parseStyriaSupportedCountries(' SE, JP, TW ');
-
-		expect(parsed).toEqual(['SE', 'JP', 'TW']);
-		expect(Object.isFrozen(parsed)).toBe(true);
-	});
-
-	it.each([undefined, '', ' ', 'se,JP', 'SE,JP,SE', 'SI', 'US,SI', 'GB', 'SE,ZZ', 'SE,JP,'])(
-		'rejects an invalid provider allowlist %j',
-		(value) => {
-			expect(() => parseStyriaSupportedCountries(value)).toThrowError(
-				'STYRIA_SUPPORTED_COUNTRIES_INVALID'
-			);
-		}
-	);
-
-	it('keeps the United States inside the market ceiling for a future reviewed re-enable', () => {
-		expect(isMarketDestination('US')).toBe(true);
-		expect(isMarketDestination('SI')).toBe(false);
-		expect(isMarketDestination('GB')).toBe(false);
+	it('recognizes only members of the source-controlled policy', () => {
+		expect(isSupportedDestination('SE')).toBe(true);
+		expect(isSupportedDestination('JP')).toBe(true);
+		expect(isSupportedDestination('US')).toBe(false);
+		expect(isSupportedDestination('SI')).toBe(false);
+		expect(isSupportedDestination('GB')).toBe(false);
 	});
 });

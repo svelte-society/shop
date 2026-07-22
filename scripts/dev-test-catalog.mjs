@@ -15,8 +15,7 @@ export const TEST_CATALOG_PREVIEW_ENV = Object.freeze({
 	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
 });
 
 /**

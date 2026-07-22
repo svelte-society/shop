@@ -163,7 +163,6 @@ function service(
 		order?: OrderWithLines | null;
 		stripe?: CurrentStripeFulfillment;
 		approvals?: ApprovalRepository;
-		allowedCountries?: readonly string[];
 	} = {}
 ): {
 	service: FulfillmentPreparationService;
@@ -180,8 +179,7 @@ function service(
 			stripe,
 			approvals,
 			brandName: 'Svelte Society',
-			comment: 'Approved Svelte Society fulfillment',
-			allowedCountries: overrides.allowedCountries
+			comment: 'Approved Svelte Society fulfillment'
 		}),
 		stripe,
 		approvals
@@ -358,27 +356,18 @@ describe('fulfillment preparation', () => {
 		expect((setup.approvals as CapturingApprovals).creates).toEqual([]);
 	});
 
-	it('blocks an unsupported local destination before Stripe and creates no approval', async () => {
-		const setup = service({ order: orderFixture({ destinationCountry: 'GB' }) });
+	it.each(['GB', 'US'])(
+		'blocks unsupported local destination %s before Stripe',
+		async (country) => {
+			const setup = service({ order: orderFixture({ destinationCountry: country }) });
 
-		const result = await setup.service.prepare('order_prepare', now);
+			const result = await setup.service.prepare('order_prepare', now);
 
-		expectBlocked(result, 'DESTINATION_COUNTRY_UNSUPPORTED');
-		expect(setup.stripe.calls).toEqual([]);
-		expect((setup.approvals as CapturingApprovals).creates).toEqual([]);
-	});
-
-	it('blocks a market destination omitted from the current Styria allowlist before Stripe', async () => {
-		const setup = service({
-			order: orderFixture({ destinationCountry: 'JP' }),
-			allowedCountries: ['SE']
-		});
-
-		const result = await setup.service.prepare('order_prepare', now);
-
-		expectBlocked(result, 'DESTINATION_COUNTRY_UNSUPPORTED');
-		expect(setup.stripe.calls).toEqual([]);
-	});
+			expectBlocked(result, 'DESTINATION_COUNTRY_UNSUPPORTED');
+			expect(setup.stripe.calls).toEqual([]);
+			expect((setup.approvals as CapturingApprovals).creates).toEqual([]);
+		}
+	);
 
 	it('blocks a current Stripe destination mismatch and creates no approval', async () => {
 		const details = fulfillmentFixture();

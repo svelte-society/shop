@@ -8,11 +8,20 @@ import {
 	VAT_TABLE_REVIEWED_AT
 } from './pricing';
 import type { PublicCatalogProduct } from './catalog';
+import type { MarketDestination } from './destinations';
 
 const product: PublicCatalogProduct = {
-	slug: 'community-tee', name: 'Community Tee', description: 'A community tee.',
-	images: ['https://cdn.example.com/tee.png'], sortOrder: 1, category: 'apparel',
-	materials: 'Cotton', care: 'Wash at 30°C', fit: null, sizeGuideUrl: null, sizeChart: null,
+	slug: 'community-tee',
+	name: 'Community Tee',
+	description: 'A community tee.',
+	images: ['https://cdn.example.com/tee.png'],
+	sortOrder: 1,
+	category: 'apparel',
+	materials: 'Cotton',
+	care: 'Wash at 30°C',
+	fit: null,
+	sizeGuideUrl: null,
+	sizeChart: null,
 	variants: [
 		{ priceId: 'price_tee', label: 'M', sortOrder: 1, currency: 'eur', unitAmountCents: 2_000 }
 	]
@@ -20,8 +29,12 @@ const product: PublicCatalogProduct = {
 
 describe('destination pricing', () => {
 	it('projects public catalog variants through the selected destination', () => {
-		expect(pricePublicProduct(product, pricingDestination('DE')).variants[0].displayPrice).toMatchObject({
-			netCents: 2_000, vatCents: 380, grossCents: 2_380
+		expect(
+			pricePublicProduct(product, pricingDestination('DE')).variants[0].displayPrice
+		).toMatchObject({
+			netCents: 2_000,
+			vatCents: 380,
+			grossCents: 2_380
 		});
 	});
 	it.each([
@@ -54,7 +67,9 @@ describe('destination pricing', () => {
 	it('records the VAT review date', () => expect(VAT_TABLE_REVIEWED_AT).toBe('2026-07-22'));
 
 	it('rejects market countries outside the supported pricing regions', () => {
-		expect(() => pricingDestination('US')).toThrowError('PRICING_DESTINATION_INVALID');
+		expect(() => pricingDestination('US' as unknown as MarketDestination)).toThrowError(
+			'PRICING_DESTINATION_INVALID'
+		);
 	});
 
 	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(

@@ -34,7 +34,7 @@ function insertOrder(input: {
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
 				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				tracking_number, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', 1000, 0, 500, 0, 250, 1750, 'SE', 'paid', ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 200, 700, 3500, 'SE', 'paid', ?, ?, ?)`
 		)
 		.run(
 			input.id,

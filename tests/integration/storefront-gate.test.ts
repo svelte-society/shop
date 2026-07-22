@@ -43,7 +43,6 @@ function disabledStorefrontEnvironment(): NodeJS.ProcessEnv {
 		SELLER_EMAIL: 'merchant@example.com',
 		DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
 		DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
-		STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 		POLICY_EFFECTIVE_DATE: '2026-07-17'
 	};
 

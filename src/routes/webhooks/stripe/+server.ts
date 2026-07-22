@@ -69,7 +69,7 @@ export function _createDefaultStripeWebhookServiceFactory(
 			return {
 				stripeEvents: new SqliteStripeEventRepository(database),
 				drafts: new SqliteCheckoutDraftRepository(database),
-				stripeOrders: createStripeOrderGateway(stripeClient, config.styriaSupportedCountries),
+				stripeOrders: createStripeOrderGateway(stripeClient),
 				paidOrders: new SqlitePaidOrderUnitOfWork(database),
 				refunds: new SqliteRefundOrderUnitOfWork(database)
 			};

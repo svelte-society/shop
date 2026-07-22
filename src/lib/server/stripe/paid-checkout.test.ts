@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { MarketDestination } from '$lib/domain/destinations';
 import type { CheckoutDraftWithLines } from '$lib/domain/orders';
 import type { PaidCheckoutSnapshot } from './gateway';
 import {
@@ -131,17 +132,6 @@ function expandedCustomer(fixture: PaidCheckoutProviderFixture): StripeFixtureCu
 }
 
 describe('Stripe paid Checkout normalization', () => {
-	it('rejects a paid destination omitted from the injected Styria allowlist', async () => {
-		const fixture = paidCheckoutProviderFixture({ country: 'JP' });
-
-		await expectStableCode(
-			createStripeOrderGateway(new ContractStripeClient(fixture), ['SE']).retrievePaidCheckout(
-				fixture.session.id
-			),
-			'STRIPE_PAID_CHECKOUT_DESTINATION_INVALID'
-		);
-	});
-
 	it('normalizes a complete paid EU Checkout without retaining customer data', async () => {
 		const { snapshot, client } = await normalizedSnapshot();
 
@@ -210,32 +200,15 @@ describe('Stripe paid Checkout normalization', () => {
 		).resolves.toMatchObject({ customerId: customer.id, destinationCountry: 'SE' });
 	});
 
-	it('normalizes a valid US Checkout with zero automatic tax', async () => {
+	it('rejects a US Checkout because it is outside the source-controlled policy', async () => {
 		const fixture = paidCheckoutProviderFixture({ country: 'US' });
 
-		await expect(
-			createStripeOrderGateway(new ContractStripeClient(fixture), ['US']).retrievePaidCheckout(
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
-			)
-		).resolves.toMatchObject({
-			destinationCountry: 'US',
-			amounts: { subtotal: 2_000, shipping: 800, tax: 0, total: 2_800 }
-		});
-	});
-
-	it('accepts an omitted shipping-tax breakdown when the US shipping tax is zero', async () => {
-		const fixture = paidCheckoutProviderFixture({ country: 'US' });
-		if (!fixture.session.shipping_cost) throw new Error();
-		delete fixture.session.shipping_cost.taxes;
-
-		await expect(
-			createStripeOrderGateway(new ContractStripeClient(fixture), ['US']).retrievePaidCheckout(
-				fixture.session.id
-			)
-		).resolves.toMatchObject({
-			destinationCountry: 'US',
-			amounts: { shipping: 800, tax: 0, total: 2_800 }
-		});
+			),
+			'STRIPE_PAID_CHECKOUT_DESTINATION_INVALID'
+		);
 	});
 
 	it('accepts reverse-charge tax details without comparing tax to a Swedish display price', async () => {
@@ -259,6 +232,42 @@ describe('Stripe paid Checkout normalization', () => {
 				fixture.session.id
 			)
 		).resolves.toMatchObject({ amounts: { tax: 0, total: 2_800 } });
+	});
+
+	it('accepts an exempt customer only when merchandise and shipping tax are both zero', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			taxExempt: 'exempt',
+			lines: [
+				{
+					id: 'li_exempt',
+					priceId: 'price_tee_medium',
+					quantity: 1,
+					unitAmount: 2_000,
+					taxAmount: 0
+				}
+			],
+			shippingTaxAmount: 0
+		});
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({ amounts: { tax: 0, total: 2_800 } });
+	});
+
+	it.each([
+		['exempt', []],
+		['reverse', [{ type: 'eu_vat' as const, value: 'SE123456789001' }]]
+	] as const)('rejects positive provider tax for a %s customer', async (taxExempt, taxIds) => {
+		const fixture = paidCheckoutProviderFixture({ taxExempt, taxIds: [...taxIds] });
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_TAX_INVALID'
+		);
 	});
 
 	it.each([
@@ -683,8 +692,8 @@ describe('Stripe paid Checkout normalization', () => {
 		);
 	});
 
-	it('rejects an unsupported shipping destination', async () => {
-		const fixture = paidCheckoutProviderFixture({ country: 'SI' });
+	it.each(['SI', 'US'])('rejects unsupported shipping destination %s', async (country) => {
+		const fixture = paidCheckoutProviderFixture({ country });
 
 		await expectStableCode(
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
@@ -716,9 +725,9 @@ describe('Stripe paid Checkout normalization', () => {
 		'normalizes the v2 exclusive %s pricing matrix',
 		async (country, merchandiseTax, shippingTax, retailUnitAmount, shipping, total) => {
 			const fixture = paidCheckoutProviderFixture({ country });
-			const snapshot = await createStripeOrderGateway(new ContractStripeClient(fixture), [
-				country
-			]).retrievePaidCheckout(fixture.session.id);
+			const snapshot = await createStripeOrderGateway(
+				new ContractStripeClient(fixture)
+			).retrievePaidCheckout(fixture.session.id);
 
 			expect(snapshot).toMatchObject({
 				contractVersion: 2,
@@ -796,7 +805,7 @@ describe('Stripe paid Checkout normalization', () => {
 				taxes.push({
 					...structuredClone(taxes[0]),
 					amount: 100,
-					rate: { ...taxes[0].rate, id: 'txr_shipping_inclusive', inclusive: true }
+					rate: { ...taxes[0].rate, id: 'txr_shipping_mutated_inclusive', inclusive: true }
 				});
 			}
 		],
@@ -1137,6 +1146,18 @@ describe('paid Checkout comparison', () => {
 		expectComparisonCode(
 			() => comparePaidCheckout(draft, snapshot),
 			'PAID_CHECKOUT_DRAFT_MISMATCH'
+		);
+	});
+
+	it('rejects the United States even when both snapshots claim the same destination', async () => {
+		const { snapshot } = await normalizedSnapshot();
+		const draft = checkoutDraft();
+		draft.destinationCountry = 'US' as unknown as MarketDestination;
+		snapshot.destinationCountry = 'US';
+
+		expectComparisonCode(
+			() => comparePaidCheckout(draft, snapshot),
+			'PAID_CHECKOUT_TOTALS_MISMATCH'
 		);
 	});
 

@@ -1,7 +1,6 @@
-import { env } from '$env/dynamic/private';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
-import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
+import { isSupportedDestination } from '$lib/domain/destinations';
 import { readBoundedFormData } from '$lib/server/security/bounded-form.server';
 import { DESTINATION_COOKIE } from '$lib/server/storefront/destination.server';
 
@@ -39,12 +38,8 @@ function strictFields(data: FormData): { country: string; returnTo: string } | n
 	return { country: country[0], returnTo: returnTo[0] };
 }
 
-export function _createDestinationPreferencePost(
-	runtimeEnv: Record<string, string | undefined>,
-	secure = !dev
-): RequestHandler {
+export function _createDestinationPreferencePost(secure = !dev): RequestHandler {
 	return async ({ request, cookies }) => {
-		const allowedCountries = parseStyriaSupportedCountries(runtimeEnv.STYRIA_SUPPORTED_COUNTRIES);
 		let data: FormData;
 		try {
 			data = await readBoundedFormData(request, FORM_LIMIT_BYTES);
@@ -57,7 +52,7 @@ export function _createDestinationPreferencePost(
 			return new Response(null, { status: 400 });
 		}
 
-		if (!allowedCountries.includes(fields.country as (typeof allowedCountries)[number])) {
+		if (!isSupportedDestination(fields.country)) {
 			return new Response(null, { status: 400 });
 		}
 
@@ -75,4 +70,4 @@ export function _createDestinationPreferencePost(
 	};
 }
 
-export const POST: RequestHandler = _createDestinationPreferencePost(env);
+export const POST: RequestHandler = _createDestinationPreferencePost();

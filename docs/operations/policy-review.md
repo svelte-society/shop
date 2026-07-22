@@ -98,7 +98,6 @@ production checkout refuses to start when any value is missing:
 - `SUPPORT_EMAIL=merch@sveltesociety.dev`
 - `DELIVERY_ESTIMATE_EU`
 - `DELIVERY_ESTIMATE_ASIA`
-- `STYRIA_SUPPORTED_COUNTRIES`
 - `POLICY_EFFECTIVE_DATE`
 
 ## Official sources consulted for the draft

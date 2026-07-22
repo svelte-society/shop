@@ -34,8 +34,7 @@ const validPrivateEnv = {
 	STRIPE_SECRET_KEY: 'sk_test_private_value',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_private_value',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
 };
 
 describe('parseWithdrawalConfig', () => {
@@ -243,19 +242,9 @@ describe('parsePrivateConfig', () => {
 			stripeSecretKey: 'sk_test_private_value',
 			stripeWebhookSecret: 'whsec_test_private_value',
 			stripePaidShippingRateId: 'shr_paid',
-			stripeFreeShippingRateId: 'shr_free',
-			styriaSupportedCountries: ['SE', 'JP', 'TW']
+			stripeFreeShippingRateId: 'shr_free'
 		});
 	});
-
-	it.each([undefined, '', 'se,JP', 'SE,JP,SE', 'SI', 'GB'])(
-		'%j is not a valid Styria destination allowlist',
-		(value) => {
-			expect(() =>
-				parsePrivateConfig({ ...validPrivateEnv, STYRIA_SUPPORTED_COUNTRIES: value })
-			).toThrowError('CONFIG_PRIVATE_INVALID');
-		}
-	);
 
 	it.each([
 		'STRIPE_SECRET_KEY',

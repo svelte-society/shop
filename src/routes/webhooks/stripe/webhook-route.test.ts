@@ -86,7 +86,6 @@ function runtimeEnvironment(databasePath: string, bootstrap: 'true' | 'false') {
 		DELIVERY_ESTIMATE_ASIA: '7–15 business days',
 		POLICY_EFFECTIVE_DATE: '2026-07-17',
 		STRIPE_WEBHOOK_SECRET: 'whsec_runtime_readiness',
-		STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 		DATABASE_PATH: databasePath
 	};
 }
@@ -170,7 +169,6 @@ describe('POST /webhooks/stripe', () => {
 			STRIPE_WEBHOOK_SECRET: webhookSecret,
 			STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 			STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
-			STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 			DATABASE_PATH: databasePath
 		};
 

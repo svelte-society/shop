@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type Stripe from 'stripe';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isMarketDestination, type MarketDestination } from '../../src/lib/domain/destinations';
+import { isSupportedDestination, type MarketDestination } from '../../src/lib/domain/destinations';
 import { SqliteCheckoutDraftRepository } from '../../src/lib/server/db/checkout-drafts.server';
 import { closeDatabase, openDatabase } from '../../src/lib/server/db/connection.server';
 import { migrate } from '../../src/lib/server/db/migrate.server';
@@ -111,12 +111,12 @@ function webhookService(fixture: ReturnType<typeof paidCheckoutProviderFixture>)
 	});
 }
 
-async function intakePaidOrder(
+function paidOrderAttempt(
 	eventId: string,
 	options: PaidCheckoutFixtureOptions & { quantity: number; taxAmount: number }
 ) {
 	const destinationCountry = options.country ?? 'SE';
-	if (!isMarketDestination(destinationCountry)) throw new Error('TEST_DESTINATION_INVALID');
+	if (!isSupportedDestination(destinationCountry)) throw new Error('TEST_DESTINATION_INVALID');
 	const draft = createDraft(options.quantity, SESSION_ID, destinationCountry);
 	const fixture = paidCheckoutProviderFixture({
 		...options,
@@ -133,8 +133,16 @@ async function intakePaidOrder(
 		]
 	});
 	const event = checkoutEvent(eventId);
+	return { draft, fixture, event, service: webhookService(fixture) };
+}
 
-	await expect(webhookService(fixture).handle(JSON.stringify(event), 'sig_test')).resolves.toEqual({
+async function intakePaidOrder(
+	eventId: string,
+	options: PaidCheckoutFixtureOptions & { quantity: number; taxAmount: number }
+) {
+	const { draft, fixture, event, service } = paidOrderAttempt(eventId, options);
+
+	await expect(service.handle(JSON.stringify(event), 'sig_test')).resolves.toEqual({
 		duplicate: false
 	});
 
@@ -208,6 +216,45 @@ describe('checkout to Stripe webhook intake', () => {
 		});
 		expect(JSON.stringify(order)).not.toContain('SE123456789001');
 	});
+
+	it('records an exempt order only when the provider tax is zero', async () => {
+		const { order } = await intakePaidOrder('evt_test_exempt', {
+			quantity: 1,
+			country: 'SE',
+			shippingSubtotal: 800,
+			shippingTaxAmount: 0,
+			taxExempt: 'exempt',
+			taxAmount: 0
+		});
+
+		expect(order).toMatchObject({
+			destinationCountry: 'SE',
+			amounts: { shipping: 800, shippingTax: 0, tax: 0, total: 2_800 },
+			paymentStatus: 'paid'
+		});
+	});
+
+	it.each(['exempt', 'reverse'] as const)(
+		'rejects a %s checkout whose provider snapshot contains positive tax',
+		async (taxExempt) => {
+			const { event, service } = paidOrderAttempt(`evt_test_${taxExempt}_positive_tax`, {
+				quantity: 1,
+				country: 'SE',
+				shippingSubtotal: 800,
+				taxExempt,
+				taxIds: taxExempt === 'reverse' ? [{ type: 'eu_vat', value: 'SE123456789001' }] : [],
+				taxAmount: 500
+			});
+
+			await expect(service.handle(JSON.stringify(event), 'sig_test')).rejects.toMatchObject({
+				code: 'STRIPE_PAID_CHECKOUT_TAX_INVALID',
+				retryable: false
+			});
+			expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({
+				count: 0
+			});
+		}
+	);
 
 	it('keeps paid shipping for a one-unit checkout', async () => {
 		const { draft, order } = await intakePaidOrder('evt_test_one_unit_shipping', {

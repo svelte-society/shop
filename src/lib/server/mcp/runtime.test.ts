@@ -20,7 +20,6 @@ const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => i
 const environment = {
 	PRODUCTION_ORIGIN: 'https://shop.runtime.test',
 	STRIPE_SECRET_KEY: 'sk_test_runtime',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	STYRIA_APP_ID: 'runtime-app',
 	STYRIA_SECRET_KEY: 'runtime-secret',
 	STYRIA_BASE_URL: 'https://styria.runtime.test',
@@ -59,7 +58,7 @@ function seedPendingOrder(database: ShopDatabase): void {
 				styria_order_id, styria_status, tracking_number, submitted_at, shipped_at,
 				updated_at, last_error_code
 			) VALUES ('order_runtime', 'cs_runtime', 'pi_runtime', 'cus_runtime', 'draft_runtime',
-				'eur', 2799, 0, 1000, 0, 950, 4749, 'SE', 'paid', 'pending_review',
+				'eur', 2000, 0, 1000, 200, 700, 3500, 'SE', 'paid', 'pending_review',
 				'styria-secret-runtime', 'provider-secret-runtime', 'tracking-secret-runtime',
 				NULL, NULL, '2026-07-16T08:30:00.000Z', NULL)`
 		)
@@ -72,7 +71,7 @@ function seedPendingOrder(database: ShopDatabase): void {
 				quantity, unit_amount, currency, retail_unit_amount
 			) VALUES ('order_runtime', 0, 'prod_runtime', 'price_runtime', 'Community Tee',
 				'M', 'SS-TEE-M', 'STYRIA-TEE-M', 'community-v1',
-				'{"front":"https://cdn.example.test/front.svg"}', 1, 2799, 'eur', 3749)`
+				'{"front":"https://cdn.example.test/front.svg"}', 1, 2000, 'eur', 2500)`
 		)
 		.run();
 }
@@ -263,7 +262,7 @@ describe('runtime MCP composition', () => {
 		expect(composed?.status).toBeDefined();
 		expect(composed?.shipping).toBeDefined();
 		expect(composed?.withdrawals).toBeDefined();
-		expect(createStripeGateway).toHaveBeenCalledWith('sk_test_runtime', ['SE', 'JP', 'TW']);
+		expect(createStripeGateway).toHaveBeenCalledWith('sk_test_runtime');
 		expect(createStyriaGateway).toHaveBeenCalledWith({
 			appId: 'runtime-app',
 			secretKey: 'runtime-secret',

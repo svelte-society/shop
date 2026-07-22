@@ -1,7 +1,6 @@
 import { env } from '$env/dynamic/private';
 import { json } from '@sveltejs/kit';
 import { parsePrivateConfig, type PrivateConfig } from '$lib/config/private.server';
-import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 import { createCatalogGateway } from '$lib/server/catalog/runtime-gateway.server';
 import { createCatalogService } from '$lib/server/catalog/service.server';
 import {
@@ -66,8 +65,7 @@ function defaultCheckoutServiceFactory(config: PrivateConfig): CheckoutService {
 		stripe,
 		paidShippingRateId: config.stripePaidShippingRateId,
 		freeShippingRateId: config.stripeFreeShippingRateId,
-		productionOrigin: config.productionOrigin,
-		allowedCountries: config.styriaSupportedCountries
+		productionOrigin: config.productionOrigin
 	});
 }
 
@@ -141,13 +139,9 @@ export function _createCheckoutPost(
 			}
 			let destinationCountry;
 			try {
-				const allowedCountries = parseStyriaSupportedCountries(
-					runtimeEnv.STYRIA_SUPPORTED_COUNTRIES
-				);
 				destinationCountry = resolvePricingDestination({
 					cookieValue: cookies.get(DESTINATION_COOKIE),
-					cloudflareCountry: request.headers.get('cf-ipcountry'),
-					allowedCountries
+					cloudflareCountry: request.headers.get('cf-ipcountry')
 				}).countryCode;
 			} catch {
 				return problem(503, 'Checkout unavailable', 'SERVICE_NOT_READY');

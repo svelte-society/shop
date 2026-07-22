@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { _createDestinationPreferencePost } from './+server';
 
-const runtimeEnv = { STYRIA_SUPPORTED_COUNTRIES: 'SE,DE,JP' };
-
 afterEach(() => {
 	vi.doUnmock('$app/environment');
 	vi.resetModules();
 });
 
-function fixture(secure = false, environment: Record<string, string | undefined> = runtimeEnv) {
+function fixture(secure = false) {
 	const sets: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
-	const handler = _createDestinationPreferencePost(environment, secure);
+	const handler = _createDestinationPreferencePost(secure);
 	return {
 		handler,
 		sets,
@@ -27,10 +25,9 @@ async function post(
 	options: {
 		secure?: boolean;
 		contentLength?: string;
-		environment?: Record<string, string | undefined>;
 	} = {}
 ) {
-	const current = fixture(options.secure, options.environment);
+	const current = fixture(options.secure);
 	const headers = new Headers({ 'content-type': 'application/x-www-form-urlencoded' });
 	if (options.contentLength !== undefined) headers.set('content-length', options.contentLength);
 	const response = await current.handler({
@@ -65,10 +62,9 @@ describe('POST /preferences/destination', () => {
 		]);
 	});
 
-	it('uses the injected secure setting instead of runtime NODE_ENV', async () => {
+	it('uses the injected secure cookie setting', async () => {
 		const { response, sets } = await post('country=DE&returnTo=%2Fcart', {
-			secure: false,
-			environment: { ...runtimeEnv, NODE_ENV: 'production' }
+			secure: false
 		});
 
 		expect(response.status).toBe(303);
@@ -80,7 +76,7 @@ describe('POST /preferences/destination', () => {
 		vi.doMock('$app/environment', () => ({ dev: false }));
 		const { _createDestinationPreferencePost: createPost } = await import('./+server');
 		const sets: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
-		const handler = createPost(runtimeEnv);
+		const handler = createPost();
 
 		const response = await handler({
 			request: new Request('https://shop.sveltesociety.dev/preferences/destination', {
@@ -122,20 +118,5 @@ describe('POST /preferences/destination', () => {
 
 		expect(response.status).toBe(400);
 		expect(sets).toEqual([]);
-	});
-
-	it('propagates malformed runtime allowlist configuration as a server failure', async () => {
-		const { handler, cookies } = fixture(false, { STYRIA_SUPPORTED_COUNTRIES: 'SE,invalid' });
-
-		await expect(
-			handler({
-				request: new Request('https://shop.sveltesociety.dev/preferences/destination', {
-					method: 'POST',
-					headers: { 'content-type': 'application/x-www-form-urlencoded' },
-					body: 'country=DE&returnTo=%2Fcart'
-				}),
-				cookies
-			} as unknown as Parameters<typeof handler>[0])
-		).rejects.toThrowError('STYRIA_SUPPORTED_COUNTRIES_INVALID');
 	});
 });

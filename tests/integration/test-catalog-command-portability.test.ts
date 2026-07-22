@@ -12,8 +12,14 @@ const SHARED_FIXTURE_ENV = {
 	STRIPE_SECRET_KEY: 'sk_test_catalog_fixture',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
+} as const;
+const APPLICATION_FIXTURE_ENV = {
+	SCHEDULER_ENABLED: 'false',
+	DATABASE_BOOTSTRAP: 'true',
+	PLUNK_SECRET_KEY: 'plunk-test-fixture',
+	PLUNK_FROM_NAME: 'Svelte Society Shop',
+	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev'
 } as const;
 const POLICY_FIXTURE_ENV = {
 	SELLER_LEGAL_NAME: 'Svelte School AB',
@@ -84,10 +90,16 @@ describe('test catalog command portability', () => {
 			expect(server?.command).not.toMatch(INLINE_ENV_ASSIGNMENT);
 			expect(server?.env).toEqual({
 				...SHARED_FIXTURE_ENV,
+				...APPLICATION_FIXTURE_ENV,
 				...POLICY_FIXTURE_ENV,
+				NODE_ENV: 'development',
 				HOST: '127.0.0.1',
 				PORT: String(expected.port),
 				ORIGIN: `http://127.0.0.1:${expected.port}`,
+				DATABASE_PATH: expect.stringMatching(
+					new RegExp(`svelte-society-e2e-\\d+-${expected.port}\\.sqlite$`, 'u')
+				),
+				WITHDRAWAL_DATA_KEY: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/u),
 				CHECKOUT_ENABLED: expected.checkout,
 				STOREFRONT_ENABLED: expected.storefront,
 				TEST_CATALOG_SCENARIO: expected.scenario,
@@ -114,7 +126,6 @@ describe('test catalog command portability', () => {
 			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
 			PLUNK_BASE_URL: 'https://127.0.0.1:1',
 			WITHDRAWAL_DATA_KEY: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/u),
-			STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 			...POLICY_FIXTURE_ENV
 		});
 	});

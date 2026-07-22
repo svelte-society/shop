@@ -78,49 +78,15 @@ export const ASIA_DESTINATIONS = Object.freeze([
 ] as const);
 
 export type MarketDestination =
-	(typeof EU_DESTINATIONS)[number] | (typeof ASIA_DESTINATIONS)[number] | 'US';
+	(typeof EU_DESTINATIONS)[number] | (typeof ASIA_DESTINATIONS)[number];
 
-export const MARKET_CEILING_DESTINATIONS: readonly MarketDestination[] = Object.freeze([
-	...EU_DESTINATIONS,
-	...ASIA_DESTINATIONS,
-	'US'
-]);
-
-export const INITIAL_STYRIA_SUPPORTED_DESTINATIONS: readonly MarketDestination[] = Object.freeze([
+export const SUPPORTED_DESTINATIONS: readonly MarketDestination[] = Object.freeze([
 	...EU_DESTINATIONS,
 	...ASIA_DESTINATIONS
 ]);
 
-// Compatibility alias for code paths that are migrated to injected runtime policy incrementally.
-export const ALLOWED_DESTINATIONS = INITIAL_STYRIA_SUPPORTED_DESTINATIONS;
+const supportedDestinationSet: ReadonlySet<string> = new Set(SUPPORTED_DESTINATIONS);
 
-const marketDestinationSet: ReadonlySet<string> = new Set(MARKET_CEILING_DESTINATIONS);
-const initialDestinationSet: ReadonlySet<string> = new Set(INITIAL_STYRIA_SUPPORTED_DESTINATIONS);
-
-export function isMarketDestination(countryCode: string): countryCode is MarketDestination {
-	return marketDestinationSet.has(countryCode);
-}
-
-export function isAllowedDestination(countryCode: string): countryCode is MarketDestination {
-	return initialDestinationSet.has(countryCode);
-}
-
-export function parseStyriaSupportedCountries(
-	value: string | undefined
-): readonly MarketDestination[] {
-	if (typeof value !== 'string' || value.trim().length === 0) {
-		throw new Error('STYRIA_SUPPORTED_COUNTRIES_INVALID');
-	}
-
-	const countries = value.split(',').map((country) => country.trim());
-	const unique = new Set<string>();
-	for (const country of countries) {
-		if (!/^[A-Z]{2}$/u.test(country) || !isMarketDestination(country) || unique.has(country)) {
-			throw new Error('STYRIA_SUPPORTED_COUNTRIES_INVALID');
-		}
-		unique.add(country);
-	}
-
-	if (unique.size === 0) throw new Error('STYRIA_SUPPORTED_COUNTRIES_INVALID');
-	return Object.freeze([...unique] as MarketDestination[]);
+export function isSupportedDestination(countryCode: string): countryCode is MarketDestination {
+	return supportedDestinationSet.has(countryCode);
 }

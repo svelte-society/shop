@@ -407,7 +407,7 @@ export function paidCheckoutProviderFixture(
 								{
 									amount: shippingTaxAmount,
 									rate: {
-										id: 'txr_shipping_inclusive',
+										id: 'txr_shipping_exclusive',
 										object: 'tax_rate',
 										inclusive: false
 									},

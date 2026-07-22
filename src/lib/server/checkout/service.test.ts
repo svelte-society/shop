@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type Stripe from 'stripe';
 import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
 import type { CheckoutDraft, CheckoutDraftWithLines, NewCheckoutDraft } from '$lib/domain/orders';
-import { ALLOWED_DESTINATIONS, type MarketDestination } from '$lib/domain/destinations';
+import type { MarketDestination } from '$lib/domain/destinations';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import type { CheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
 import {
@@ -140,7 +140,6 @@ function serviceFixture(
 		drafts?: RecordingDraftRepository;
 		stripe?: RecordingStripeGateway;
 		alerts?: AlertService;
-		allowedCountries?: readonly MarketDestination[];
 	} = {}
 ) {
 	const resolveInputs: Array<Array<{ priceId: string; quantity: number }>> = [];
@@ -160,7 +159,6 @@ function serviceFixture(
 		paidShippingRateId: 'shr_paid_10_eur',
 		freeShippingRateId: 'shr_free',
 		productionOrigin: ORIGIN,
-		allowedCountries: options.allowedCountries ?? ALLOWED_DESTINATIONS,
 		clock: () => new Date(NOW),
 		alerts: options.alerts
 	});
@@ -174,11 +172,26 @@ async function expectCheckoutCode(promise: Promise<unknown>, code: string): Prom
 
 describe('createCheckoutService', () => {
 	it('freezes the request-resolved destination in the draft and Stripe request', async () => {
-		const { service, stripe } = serviceFixture({ allowedCountries: ['SE', 'JP', 'TW'] });
+		const { service, stripe } = serviceFixture();
 
 		await service.start([{ priceId: medium.priceId, quantity: 1 }], 'JP');
 
 		expect(stripe.creations[0]?.destinationCountry).toBe('JP');
+	});
+
+	it('rejects the United States before catalog, draft, or provider work', async () => {
+		const { service, resolveInputs, drafts, stripe } = serviceFixture();
+
+		await expectCheckoutCode(
+			service.start(
+				[{ priceId: medium.priceId, quantity: 1 }],
+				'US' as unknown as MarketDestination
+			),
+			'CHECKOUT_DESTINATION_INVALID'
+		);
+		expect(resolveInputs).toEqual([]);
+		expect(drafts.creates).toEqual([]);
+		expect(stripe.creations).toEqual([]);
 	});
 
 	it.each([
@@ -407,7 +420,6 @@ describe('createCheckoutService', () => {
 			paidShippingRateId: 'shr_paid_10_eur',
 			freeShippingRateId: 'shr_free',
 			productionOrigin: ORIGIN,
-			allowedCountries: ALLOWED_DESTINATIONS,
 			clock: () => new Date(NOW)
 		});
 

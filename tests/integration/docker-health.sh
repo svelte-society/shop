@@ -118,7 +118,6 @@ start_container() {
 		--env STRIPE_WEBHOOK_SECRET=whsec_docker_health
 		--env STYRIA_APP_ID=docker-health
 		--env STYRIA_SECRET_KEY=docker-health
-		--env STYRIA_SUPPORTED_COUNTRIES=SE,JP,TW
 		--env STYRIA_BASE_URL=https://styriashirts.eu
 		--env STYRIA_BRAND_NAME='Svelte Society'
 		--env PLUNK_SECRET_KEY=docker-health
@@ -640,7 +639,7 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 			fulfillment_status, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
 			"ord_docker_persist", "cs_docker_persist", "pi_docker_persist", "cus_docker_persist",
-			"draft_docker_persist", "eur", 2500, 0, 500, 0, 625, 3625, "SE", "paid",
+			"draft_docker_persist", "eur", 2000, 0, 1000, 200, 700, 3500, "SE", "paid",
 			"pending_review", now
 		);
 		database.prepare(`INSERT INTO order_lines (
@@ -649,7 +648,7 @@ docker exec "$BOOTSTRAP_CONTAINER" node --input-type=module --eval '
 			quantity, unit_amount, currency, retail_unit_amount
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
 			"ord_docker_persist", 0, "prod_docker", "price_docker", "Svelte Society Tee",
-			"M", "TEE-M", "STYRIA-TEE", "design-docker", "{}", 1, 2500, "eur", 3125
+			"M", "TEE-M", "STYRIA-TEE", "design-docker", "{}", 1, 2000, "eur", 2500
 		);
 	});
 	insert.immediate();

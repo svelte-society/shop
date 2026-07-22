@@ -104,12 +104,12 @@ function prepareDatabase(databasePath) {
 				'cus_process_shutdown',
 				'draft_process_shutdown',
 				'eur',
-				2500,
+				2000,
 				0,
-				500,
-				0,
-				625,
-				3625,
+				1000,
+				200,
+				700,
+				3500,
 				'SE',
 				'paid',
 				'pending_review',
@@ -135,9 +135,9 @@ function prepareDatabase(databasePath) {
 				'design-process-shutdown',
 				'{}',
 				1,
-				2500,
+				2000,
 				'eur',
-				3125
+				2500
 			);
 		database
 			.prepare(
@@ -285,7 +285,6 @@ try {
 			STRIPE_SECRET_KEY: 'sk_test_process_shutdown',
 			STYRIA_APP_ID: 'process-shutdown',
 			STYRIA_SECRET_KEY: 'process-shutdown',
-			STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 			STYRIA_BASE_URL: `https://127.0.0.1:${providerAddress.port}`,
 			PLUNK_SECRET_KEY: 'process-shutdown',
 			PLUNK_BASE_URL: `https://127.0.0.1:${providerAddress.port}`,

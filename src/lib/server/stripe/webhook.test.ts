@@ -446,14 +446,31 @@ describe('Stripe webhook service', () => {
 		});
 	});
 
-	it('returns a completed duplicate without repeating provider or commercial work', async () => {
+	it('revalidates a completed duplicate without repeating commercial writes', async () => {
 		const route = fixture();
 
 		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
 		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: true });
 
-		expect(route.paidCalls).toEqual(['cs_paid']);
+		expect(route.paidCalls).toEqual(['cs_paid', 'cs_paid']);
 		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
+		expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
+			count: 1
+		});
+	});
+
+	it('rejects a completed replay when the persisted paid line snapshot is corrupted', async () => {
+		const route = fixture();
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({ duplicate: false });
+		database.prepare('UPDATE order_lines SET retail_unit_amount = 2499').run();
+
+		await expect(route.service.handle(RAW_BODY, SIGNATURE)).rejects.toEqual(
+			new StripeWebhookError('ORDER_LINE_CONFLICT', false)
+		);
+		expect(route.paidCalls).toEqual(['cs_paid', 'cs_paid']);
+		expect(database.prepare('SELECT processing_status FROM stripe_events').get()).toEqual({
+			processing_status: 'completed'
+		});
 		expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
 			count: 1
 		});

@@ -1,6 +1,5 @@
 import * as v from 'valibot';
 import { Buffer } from 'node:buffer';
-import { parseStyriaSupportedCountries, type MarketDestination } from '$lib/domain/destinations';
 import { parseWithdrawalDataKey } from '$lib/server/withdrawals/crypto.server';
 import { parsePublicConfig, type PublicConfig } from './public';
 
@@ -9,7 +8,6 @@ export type PrivateConfig = PublicConfig & {
 	stripeWebhookSecret: string;
 	stripePaidShippingRateId: string;
 	stripeFreeShippingRateId: string;
-	styriaSupportedCountries: readonly MarketDestination[];
 };
 
 export type SellerPolicyConfig = {
@@ -149,13 +147,6 @@ export function parsePrivateConfig(env: Record<string, string | undefined>): Pri
 	if (!result.success) {
 		throw new Error('CONFIG_PRIVATE_INVALID');
 	}
-	let styriaSupportedCountries: readonly MarketDestination[];
-	try {
-		styriaSupportedCountries = parseStyriaSupportedCountries(env.STYRIA_SUPPORTED_COUNTRIES);
-	} catch {
-		throw new Error('CONFIG_PRIVATE_INVALID');
-	}
-
 	if (env.NODE_ENV === 'production' && publicConfig.checkoutEnabled) {
 		if (publicConfig.supportEmail !== 'merch@sveltesociety.dev') {
 			throw new Error('CONFIG_PRIVATE_INVALID');
@@ -172,7 +163,6 @@ export function parsePrivateConfig(env: Record<string, string | undefined>): Pri
 		stripeSecretKey: result.output.STRIPE_SECRET_KEY,
 		stripeWebhookSecret: result.output.STRIPE_WEBHOOK_SECRET,
 		stripePaidShippingRateId: result.output.STRIPE_PAID_SHIPPING_RATE_ID,
-		stripeFreeShippingRateId: result.output.STRIPE_FREE_SHIPPING_RATE_ID,
-		styriaSupportedCountries
+		stripeFreeShippingRateId: result.output.STRIPE_FREE_SHIPPING_RATE_ID
 	};
 }

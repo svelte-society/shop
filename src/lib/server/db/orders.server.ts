@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isMarketDestination } from '$lib/domain/destinations';
+import { isSupportedDestination } from '$lib/domain/destinations';
 import type {
 	CheckoutDraftLine,
 	FulfillmentStatus,
@@ -236,7 +236,7 @@ function validatePaidOrder(input: PaidOrderInput): string {
 		!isNonEmptyString(input.checkoutDraftId) ||
 		input.currency !== 'eur' ||
 		!input.amounts ||
-		!isMarketDestination(input.destinationCountry)
+		!isSupportedDestination(input.destinationCountry)
 	) {
 		fail('PAID_ORDER_INVALID');
 	}
@@ -260,7 +260,7 @@ function mapOrder(row: OrderRow): Order {
 		!isCents(row.tax_amount) ||
 		!isCents(row.total_amount) ||
 		!isNonEmptyString(row.destination_country) ||
-		!isMarketDestination(row.destination_country) ||
+		!isSupportedDestination(row.destination_country) ||
 		!isPaymentStatus(row.payment_status) ||
 		!isNonEmptyString(row.fulfillment_status) ||
 		!fulfillmentStatuses.has(row.fulfillment_status) ||

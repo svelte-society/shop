@@ -215,7 +215,7 @@ export function createStripeWebhookService(
 			const details = errorDetails(error);
 			throw new StripeWebhookError(details.code, details.retryable);
 		}
-		if (claim === 'completed') return { duplicate: true };
+		const duplicate = claim === 'completed';
 
 		try {
 			if (sessionId !== null) {
@@ -233,7 +233,7 @@ export function createStripeWebhookService(
 								{ checkoutSessionId: sessionId, paymentIntentId: null },
 								processedAt
 							);
-							return { duplicate: false };
+							return { duplicate };
 						}
 						throw new StripeWebhookError(error.code, true);
 					}
@@ -270,13 +270,15 @@ export function createStripeWebhookService(
 				}
 				processing.refunds.commitRefund(intentId, status, eventInput(event, processedAt));
 			}
-			return { duplicate: false };
+			return { duplicate };
 		} catch (error) {
 			const details = errorDetails(error);
-			try {
-				processing.stripeEvents.fail(event.id, details.code);
-			} catch {
-				throw new StripeWebhookError('STRIPE_WEBHOOK_EVENT_FAILURE_FAILED', true);
+			if (!duplicate) {
+				try {
+					processing.stripeEvents.fail(event.id, details.code);
+				} catch {
+					throw new StripeWebhookError('STRIPE_WEBHOOK_EVENT_FAILURE_FAILED', true);
+				}
 			}
 			throw new StripeWebhookError(details.code, details.retryable);
 		}

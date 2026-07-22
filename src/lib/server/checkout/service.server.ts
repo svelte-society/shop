@@ -1,6 +1,6 @@
 import { parseCart, selectShippingMode, totalUnits, type CartLine } from '$lib/domain/cart';
 import type { CatalogProduct, CatalogVariant } from '$lib/domain/catalog';
-import type { MarketDestination } from '$lib/domain/destinations';
+import { isSupportedDestination, type MarketDestination } from '$lib/domain/destinations';
 import type { NewCheckoutDraftLine } from '$lib/domain/orders';
 import type { CatalogService } from '$lib/server/catalog/service.server';
 import type { CheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
@@ -47,7 +47,6 @@ export type CheckoutServiceOptions = {
 	paidShippingRateId: string;
 	freeShippingRateId: string;
 	productionOrigin: URL;
-	allowedCountries: readonly MarketDestination[];
 	clock?: () => Date;
 	alerts?: AlertService;
 };
@@ -126,7 +125,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 			input: unknown,
 			destinationCountry: MarketDestination
 		): Promise<{ redirectUrl: string }> {
-			if (!options.allowedCountries.includes(destinationCountry)) {
+			if (!isSupportedDestination(destinationCountry)) {
 				throw new CheckoutError('CHECKOUT_DESTINATION_INVALID');
 			}
 			const lines = parseCheckoutCart(input);

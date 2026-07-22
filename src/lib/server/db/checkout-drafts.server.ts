@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isMarketDestination } from '$lib/domain/destinations';
+import { isSupportedDestination } from '$lib/domain/destinations';
 import type {
 	CheckoutDraft,
 	CheckoutDraftLine,
@@ -155,7 +155,7 @@ function validateNewDraft(input: NewCheckoutDraft): {
 		!input ||
 		!Number.isSafeInteger(input.contractVersion) ||
 		input.contractVersion !== 2 ||
-		!isMarketDestination(input.destinationCountry) ||
+		!isSupportedDestination(input.destinationCountry) ||
 		input.currency !== 'eur' ||
 		!Number.isSafeInteger(input.totalUnitCount) ||
 		input.totalUnitCount < 1 ||
@@ -230,7 +230,7 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		!Number.isSafeInteger(row.contract_version) ||
 		row.contract_version !== 2 ||
 		!isNonEmptyString(row.destination_country) ||
-		!isMarketDestination(row.destination_country) ||
+		!isSupportedDestination(row.destination_country) ||
 		row.currency !== 'eur' ||
 		!Number.isSafeInteger(row.total_unit_count) ||
 		(row.total_unit_count as number) < 1 ||

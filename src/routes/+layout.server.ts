@@ -2,7 +2,6 @@ import { env } from '$env/dynamic/private';
 import { createPolicyDocuments, type PolicyDocuments } from '$lib/content/policies';
 import { parseSellerPolicyConfig } from '$lib/config/private.server';
 import { parsePublicConfig } from '$lib/config/public';
-import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 import {
 	destinationOptions,
 	resolvePricingDestination,
@@ -100,11 +99,9 @@ export function _createLayoutServerLoad(
 ): LayoutServerLoad {
 	return ({ route, cookies, request, depends }) => {
 		const config = parsePublicConfig(runtimeEnv);
-		const allowedCountries = parseStyriaSupportedCountries(runtimeEnv.STYRIA_SUPPORTED_COUNTRIES);
 		const resolvedPricingDestination = resolvePricingDestination({
 			cookieValue: cookies.get(DESTINATION_COOKIE),
-			cloudflareCountry: request.headers.get('cf-ipcountry'),
-			allowedCountries
+			cloudflareCountry: request.headers.get('cf-ipcountry')
 		});
 		depends('app:pricing-destination');
 		const requestedPolicy = policyRoute(route.id);
@@ -128,7 +125,7 @@ export function _createLayoutServerLoad(
 				vatBasisPoints: resolvedPricingDestination.vatBasisPoints,
 				requiresImportChargeCopy: resolvedPricingDestination.requiresImportChargeCopy
 			},
-			destinationOptions: destinationOptions(allowedCountries)
+			destinationOptions: destinationOptions()
 		};
 	};
 }

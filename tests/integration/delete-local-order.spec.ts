@@ -107,7 +107,7 @@ function seedOrder(
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
 				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status,
 				fulfillment_status, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 0, 500, 3500, 'SE', 'paid', 'pending_review', ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 200, 700, 3500, 'SE', 'paid', 'pending_review', ?)`
 		)
 		.run(
 			orderId,

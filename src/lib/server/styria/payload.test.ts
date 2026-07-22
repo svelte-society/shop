@@ -83,15 +83,13 @@ function build(
 		fulfillment?: StyriaFulfillmentDetails;
 		brandName?: string;
 		comment?: string;
-		allowedCountries?: readonly string[];
 	} = {}
 ) {
 	return buildStyriaPayload({
 		order: overrides.order ?? orderFixture(),
 		fulfillment: overrides.fulfillment ?? fulfillmentFixture(),
 		brandName: overrides.brandName ?? 'Svelte Society',
-		comment: overrides.comment ?? 'Approved Svelte Society fulfillment',
-		allowedCountries: overrides.allowedCountries
+		comment: overrides.comment ?? 'Approved Svelte Society fulfillment'
 	});
 }
 
@@ -165,7 +163,7 @@ describe('buildStyriaPayload', () => {
 		});
 	});
 
-	it('converts a US address and preserves its required state as county', () => {
+	it('rejects a US address outside the source-controlled destination policy', () => {
 		const fulfillment = fulfillmentFixture();
 		fulfillment.recipient.company = '';
 		fulfillment.address = {
@@ -179,21 +177,12 @@ describe('buildStyriaPayload', () => {
 
 		const order = orderFixture();
 		order.destinationCountry = 'US';
-		expect(build({ order, fulfillment, allowedCountries: ['US'] }).shipping_address).toEqual({
-			firstName: 'Ada',
-			lastName: 'Lovelace',
-			company: '',
-			address1: '123 Broadway',
-			address2: '',
-			city: 'New York',
-			county: 'NY',
-			postcode: '10001',
-			country: 'United States',
-			phone1: '+46 70 123 45 67'
-		});
+		expect(() => build({ order, fulfillment })).toThrowError(
+			expect.objectContaining({ code: 'STYRIA_COUNTRY_UNSUPPORTED' })
+		);
 	});
 
-	it('converts an enabled Asian destination and rejects it when omitted from the provider allowlist', () => {
+	it('converts a supported Asian destination', () => {
 		const fulfillment = fulfillmentFixture();
 		fulfillment.address.countryCode = 'JP';
 		fulfillment.address.city = 'Tokyo';
@@ -202,12 +191,7 @@ describe('buildStyriaPayload', () => {
 		const order = orderFixture();
 		order.destinationCountry = 'JP';
 
-		expect(
-			build({ order, fulfillment, allowedCountries: ['SE', 'JP'] }).shipping_address.country
-		).toBe('Japan');
-		expect(() => build({ order, fulfillment, allowedCountries: ['SE'] })).toThrowError(
-			expect.objectContaining({ code: 'STYRIA_COUNTRY_UNSUPPORTED' })
-		);
+		expect(build({ order, fulfillment }).shipping_address.country).toBe('Japan');
 	});
 
 	it('copies checkout design placements and binds the immutable design reference', () => {

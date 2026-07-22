@@ -1,5 +1,5 @@
 import type Stripe from 'stripe';
-import { ALLOWED_DESTINATIONS } from '$lib/domain/destinations';
+import { isSupportedDestination } from '$lib/domain/destinations';
 import type { CheckoutDraftWithLines, PaymentStatus } from '$lib/domain/orders';
 import {
 	CHECKOUT_CONTRACT_VERSION,
@@ -29,7 +29,8 @@ const SESSION_EXPANSIONS = [
 ] as const;
 const LINE_ITEM_EXPANSIONS = ['data.price'] as const;
 const PAYMENT_INTENT_EXPANSIONS = ['latest_charge'] as const;
-const TAX_EXEMPT_VALUES = new Set(['none', 'exempt', 'reverse']);
+type TaxExempt = 'none' | 'exempt' | 'reverse';
+const TAX_EXEMPT_VALUES: ReadonlySet<string> = new Set<TaxExempt>(['none', 'exempt', 'reverse']);
 const SUPPORTED_TAX_ID_TYPES = [
 	'bg_uic',
 	'de_stn',
@@ -289,12 +290,10 @@ function taxIdKey(taxId: { type: string; value: string }): string {
 	return `${taxId.type}\u0000${taxId.value}`;
 }
 
-function validateCustomer(
-	session: UnknownRecord,
-	allowedDestinations: ReadonlySet<string>
-): {
+function validateCustomer(session: UnknownRecord): {
 	customerId: string;
 	destinationCountry: string;
+	taxExempt: TaxExempt;
 } {
 	const customer = session.customer;
 	if (
@@ -371,13 +370,14 @@ function validateCustomer(
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
 	const destinationCountry = sessionShipping.address.country;
-	if (!allowedDestinations.has(destinationCountry)) {
+	if (!isSupportedDestination(destinationCountry)) {
 		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
 	}
-	if (customer.tax_exempt === 'reverse' && destinationCountry === 'US') {
-		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
-	}
-	return { customerId: customer.id, destinationCountry };
+	return {
+		customerId: customer.id,
+		destinationCountry,
+		taxExempt: customer.tax_exempt as TaxExempt
+	};
 }
 
 type NormalizedLineDetails = {
@@ -593,8 +593,7 @@ function validateExclusiveShipping(value: UnknownRecord, expectedSubtotal: 0 | 8
 function normalizePaidCheckout(
 	requestedSessionId: string,
 	session: unknown,
-	lines: NormalizedLineDetails[],
-	allowedDestinations: ReadonlySet<string>
+	lines: NormalizedLineDetails[]
 ): PaidCheckoutSnapshot {
 	if (
 		!isRecord(session) ||
@@ -611,7 +610,7 @@ function normalizePaidCheckout(
 
 	const metadata = validateMetadata(session.metadata);
 	if (session.client_reference_id !== metadata.draftId) fail('STRIPE_PAID_CHECKOUT_DRAFT_INVALID');
-	const { customerId, destinationCountry } = validateCustomer(session, allowedDestinations);
+	const { customerId, destinationCountry, taxExempt } = validateCustomer(session);
 	if (destinationCountry !== metadata.destinationCountry) {
 		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
 	}
@@ -664,6 +663,9 @@ function normalizePaidCheckout(
 		[lineTax, session.shipping_cost.amount_tax],
 		'STRIPE_PAID_CHECKOUT_TAX_INVALID'
 	);
+	if (taxExempt !== 'none' && providerTax !== 0) {
+		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+	}
 	const merchandiseTotal = safeSum(
 		lines.map((line) => line.total),
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -769,11 +771,7 @@ function normalizeRefundStatus(requestedPaymentIntentId: string, value: unknown)
 	return 'partially_refunded';
 }
 
-export function createStripeOrderGateway(
-	client: StripeOrderClient,
-	allowedCountries: readonly string[] = ALLOWED_DESTINATIONS
-): StripeOrderGateway {
-	const allowedDestinations: ReadonlySet<string> = new Set(allowedCountries);
+export function createStripeOrderGateway(client: StripeOrderClient): StripeOrderGateway {
 	return {
 		async retrievePaidCheckout(sessionId: string): Promise<PaidCheckoutSnapshot> {
 			if (!isProviderId(sessionId, CHECKOUT_SESSION_ID_PATTERN)) {
@@ -784,7 +782,7 @@ export function createStripeOrderGateway(
 					expand: [...SESSION_EXPANSIONS]
 				});
 				const lines = await retrieveLines(client, sessionId);
-				return normalizePaidCheckout(sessionId, session, lines, allowedDestinations);
+				return normalizePaidCheckout(sessionId, session, lines);
 			} catch (error) {
 				if (error instanceof PaidCheckoutError) throw error;
 				fail('STRIPE_PAID_CHECKOUT_RETRIEVAL_FAILED');
@@ -856,10 +854,8 @@ function hasValidPaidAmountBounds(amounts: PaidCheckoutSnapshot['amounts']): boo
 
 export function comparePaidCheckout(
 	draft: CheckoutDraftWithLines,
-	paid: PaidCheckoutSnapshot,
-	allowedCountries: readonly string[] = ALLOWED_DESTINATIONS
+	paid: PaidCheckoutSnapshot
 ): void {
-	const allowedDestinations: ReadonlySet<string> = new Set(allowedCountries);
 	if (
 		!draft ||
 		!paid ||
@@ -935,7 +931,7 @@ export function comparePaidCheckout(
 	if (
 		paid.paymentStatus !== 'paid' ||
 		paid.destinationCountry !== draft.destinationCountry ||
-		!allowedDestinations.has(paid.destinationCountry) ||
+		!isSupportedDestination(paid.destinationCountry) ||
 		!isProviderId(paid.paymentIntentId, PAYMENT_INTENT_ID_PATTERN) ||
 		!isProviderId(paid.customerId, CUSTOMER_ID_PATTERN) ||
 		!hasValidPaidAmountBounds(paid.amounts)

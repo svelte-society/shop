@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { CheckoutDraftWithLines } from '$lib/domain/orders';
 import type { PaidCheckoutSnapshot, StripeOrderGateway } from '$lib/server/stripe/gateway';
 import { _createSuccessPageServerLoad } from './+page.server';
 
@@ -10,8 +11,7 @@ const PRIVATE_ENV = {
 	STRIPE_SECRET_KEY: 'sk_test_success',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_success',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_test_paid',
-	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW'
+	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_test_free'
 } as const;
 
 const PAID_CHECKOUT: PaidCheckoutSnapshot = {
@@ -41,8 +41,51 @@ const PAID_CHECKOUT: PaidCheckoutSnapshot = {
 	]
 };
 
-function loadWith(gateway: StripeOrderGateway) {
-	return _createSuccessPageServerLoad(PRIVATE_ENV, () => gateway);
+function draftFixture(overrides: Partial<CheckoutDraftWithLines> = {}): CheckoutDraftWithLines {
+	return {
+		id: 'draft-test-verified',
+		checkoutSessionId: 'cs_test_verified',
+		contractVersion: 2,
+		destinationCountry: 'SE',
+		currency: 'eur',
+		totalUnitCount: 1,
+		shippingMode: 'paid',
+		createdAt: new Date('2026-07-22T09:00:00.000Z'),
+		expiresAt: new Date('2026-07-23T09:00:00.000Z'),
+		completedAt: null,
+		lines: [
+			{
+				lineIndex: 0,
+				stripeProductId: 'prod_accessory',
+				stripePriceId: 'price_accessory_one',
+				productName: 'Svelte Society Accessory',
+				variantLabel: 'One size',
+				sku: 'ACCESSORY-ONE',
+				styriaProductNumber: 'STYRIA-ACCESSORY-ONE',
+				designReference: 'accessory-v1',
+				designPlacements: { front: 'https://cdn.example.test/accessory.svg' },
+				quantity: 1,
+				unitAmount: 2_000,
+				currency: 'eur'
+			}
+		],
+		...overrides
+	};
+}
+
+function loadWith(
+	gateway: StripeOrderGateway,
+	draft: CheckoutDraftWithLines | null = draftFixture()
+) {
+	const findById = vi.fn(() => draft);
+	return {
+		load: _createSuccessPageServerLoad(
+			PRIVATE_ENV,
+			() => gateway,
+			() => ({ findById })
+		),
+		findById
+	};
 }
 
 function loadEvent(
@@ -56,7 +99,7 @@ function loadEvent(
 describe('checkout success loader', () => {
 	it('returns only a verified marker after server-side paid merch verification', async () => {
 		const retrievePaidCheckout = vi.fn(async () => PAID_CHECKOUT);
-		const load = loadWith({
+		const { load, findById } = loadWith({
 			retrievePaidCheckout,
 			async retrieveRefundStatus() {
 				return 'paid';
@@ -74,6 +117,7 @@ describe('checkout success loader', () => {
 			)
 		).resolves.toEqual({ verified: true });
 		expect(retrievePaidCheckout).toHaveBeenCalledExactlyOnceWith('cs_test_verified');
+		expect(findById).toHaveBeenCalledExactlyOnceWith('draft-test-verified');
 		expect(setHeaders).toHaveBeenCalledExactlyOnceWith({ 'cache-control': 'no-store' });
 	});
 
@@ -95,14 +139,16 @@ describe('checkout success loader', () => {
 		const createGateway = vi.fn(() => {
 			throw new Error('PROVIDER_MUST_NOT_BE_REACHED');
 		});
-		const load = _createSuccessPageServerLoad(PRIVATE_ENV, createGateway);
+		const createDrafts = vi.fn(() => ({ findById: vi.fn() }));
+		const load = _createSuccessPageServerLoad(PRIVATE_ENV, createGateway, createDrafts);
 
 		await expect(load(loadEvent(load, href))).rejects.toMatchObject({ status: 404 });
 		expect(createGateway).not.toHaveBeenCalled();
+		expect(createDrafts).not.toHaveBeenCalled();
 	});
 
 	it('maps failed paid-merch verification to a non-disclosing not-found response', async () => {
-		const load = loadWith({
+		const { load } = loadWith({
 			async retrievePaidCheckout() {
 				throw new Error('STRIPE_PAID_CHECKOUT_SESSION_UNPAID');
 			},
@@ -114,6 +160,61 @@ describe('checkout success loader', () => {
 		await expect(
 			load(
 				loadEvent(load, 'https://shop.sveltesociety.dev/checkout/success?session_id=cs_test_unpaid')
+			)
+		).rejects.toMatchObject({ status: 404, body: { message: 'Not found' } });
+	});
+
+	it.each([
+		['destination', draftFixture({ destinationCountry: 'JP' })],
+		[
+			'line',
+			draftFixture({
+				lines: [{ ...draftFixture().lines[0], stripePriceId: 'price_other' }]
+			})
+		],
+		['Session', draftFixture({ checkoutSessionId: 'cs_test_other' })]
+	] as const)('fails closed for a frozen-draft %s mismatch', async (_label, draft) => {
+		const { load } = loadWith(
+			{
+				async retrievePaidCheckout() {
+					return structuredClone(PAID_CHECKOUT);
+				},
+				async retrieveRefundStatus() {
+					return 'paid';
+				}
+			},
+			draft
+		);
+
+		await expect(
+			load(
+				loadEvent(
+					load,
+					'https://shop.sveltesociety.dev/checkout/success?session_id=cs_test_verified'
+				)
+			)
+		).rejects.toMatchObject({ status: 404, body: { message: 'Not found' } });
+	});
+
+	it('fails closed when the frozen draft is missing', async () => {
+		const { load } = loadWith(
+			{
+				async retrievePaidCheckout() {
+					return PAID_CHECKOUT;
+				},
+				async retrieveRefundStatus() {
+					return 'paid';
+				}
+			},
+			null
+		);
+
+		await expect(
+			load(
+				loadEvent(
+					load,
+					'https://shop.sveltesociety.dev/checkout/success?session_id=cs_test_verified'
+				)
 			)
 		).rejects.toMatchObject({ status: 404, body: { message: 'Not found' } });
 	});

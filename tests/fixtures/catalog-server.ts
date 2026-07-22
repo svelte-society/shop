@@ -3,6 +3,8 @@ import type { CatalogGateway } from '$lib/server/catalog/gateway';
 import { parseStripeCatalog } from '$lib/server/catalog/parse';
 import type { StripeCheckoutClient } from '$lib/server/stripe/checkout.server';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
+import { SqliteCheckoutDraftRepository } from '$lib/server/db/checkout-drafts.server';
+import { openDatabase } from '$lib/server/db/connection.server';
 import type { StripeOrderClient } from '$lib/server/stripe/paid-checkout';
 import {
 	STRIPE_CATALOG_LOADED_AT,
@@ -17,6 +19,45 @@ import {
 } from './stripe-paid-checkout';
 
 type CatalogScenario = 'available' | 'unavailable' | 'guard-proof';
+const VERIFIED_SESSION_ID = 'cs_test_browser_verified';
+
+function ensureVerifiedDraft(): string {
+	const databasePath = process.env.DATABASE_PATH;
+	if (!databasePath) throw new Error('TEST_DATABASE_PATH_MISSING');
+	const database = openDatabase(databasePath, { fileMustExist: true });
+	const existing = database
+		.prepare('SELECT id FROM checkout_drafts WHERE stripe_checkout_session_id = ?')
+		.get(VERIFIED_SESSION_ID) as { id: string } | undefined;
+	if (existing) return existing.id;
+
+	const drafts = new SqliteCheckoutDraftRepository(database);
+	const draft = drafts.create({
+		contractVersion: 2,
+		destinationCountry: 'SE',
+		currency: 'eur',
+		totalUnitCount: 1,
+		shippingMode: 'paid',
+		createdAt: new Date('2026-07-22T09:00:00.000Z'),
+		expiresAt: new Date('2026-07-23T09:00:00.000Z'),
+		lines: [
+			{
+				stripeProductId: 'prod_accessory',
+				stripePriceId: 'price_accessory_one',
+				productName: 'Society Mug',
+				variantLabel: 'One size',
+				sku: 'SS-MUG',
+				styriaProductNumber: 'STYRIA-MUG',
+				designReference: 'society-mug-v1',
+				designPlacements: { wrap: 'https://cdn.example.com/designs/mug-wrap.svg' },
+				quantity: 1,
+				unitAmount: 2_000,
+				currency: 'eur'
+			}
+		]
+	});
+	drafts.attachSession(draft.id, VERIFIED_SESSION_ID);
+	return draft.id;
+}
 
 export class StripeFulfillmentError extends Error {
 	constructor(readonly code: string) {
@@ -99,8 +140,8 @@ export function createStripeClient(
 	stripeSecretKey: string
 ): StripeCheckoutClient & StripeOrderClient {
 	void stripeSecretKey;
-	const fixture = paidCheckoutProviderFixture({
-		sessionId: 'cs_test_browser_verified',
+	let fixture = paidCheckoutProviderFixture({
+		sessionId: VERIFIED_SESSION_ID,
 		draftId: 'draft-test-browser-verified',
 		shippingSubtotal: 800,
 		lines: [
@@ -113,10 +154,29 @@ export function createStripeClient(
 			}
 		]
 	});
-	const orderClient = createStripeFixtureClient(fixture);
 	const verified = process.env.TEST_STRIPE_SCENARIO === 'verified';
 	const unavailable = async (): Promise<never> => {
 		throw new Error('STRIPE_FIXTURE_UNAVAILABLE');
+	};
+	const verifiedFixture = (): PaidCheckoutProviderFixture => {
+		const draftId = ensureVerifiedDraft();
+		if (fixture.session.metadata?.checkout_draft_id !== draftId) {
+			fixture = paidCheckoutProviderFixture({
+				sessionId: VERIFIED_SESSION_ID,
+				draftId,
+				shippingSubtotal: 800,
+				lines: [
+					{
+						id: 'li_browser_mug',
+						priceId: 'price_accessory_one',
+						quantity: 1,
+						unitAmount: 2_000,
+						taxAmount: 500
+					}
+				]
+			});
+		}
+		return fixture;
 	};
 
 	return {
@@ -129,12 +189,23 @@ export function createStripeClient(
 						})
 					: unavailable,
 				expire: verified ? async (sessionId) => ({ id: sessionId }) : unavailable,
-				retrieve: verified ? orderClient.checkout.sessions.retrieve : unavailable,
-				listLineItems: verified ? orderClient.checkout.sessions.listLineItems : unavailable
+				retrieve: verified ? async () => structuredClone(verifiedFixture().session) : unavailable,
+				listLineItems: verified
+					? async (_sessionId, parameters) => {
+							const activeFixture = verifiedFixture();
+							const cursor = parameters?.starting_after;
+							const pageIndex = cursor
+								? activeFixture.linePages.findIndex((page) => page.data.at(-1)?.id === cursor) + 1
+								: 0;
+							return structuredClone(activeFixture.linePages[pageIndex]);
+						}
+					: unavailable
 			}
 		},
 		paymentIntents: {
-			retrieve: verified ? orderClient.paymentIntents.retrieve : unavailable
+			retrieve: verified
+				? async () => structuredClone(verifiedFixture().refundPaymentIntent)
+				: unavailable
 		}
 	};
 }

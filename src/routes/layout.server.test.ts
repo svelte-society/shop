@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { destinationOptions } from '$lib/server/storefront/destination.server';
 import { _createLayoutServerLoad } from './+layout.server';
 
 const disabledStorefrontEnv = {
@@ -16,8 +17,7 @@ const disabledStorefrontEnv = {
 	SELLER_EMAIL: 'merchant@example.com',
 	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
 	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
-	POLICY_EFFECTIVE_DATE: '2026-07-17',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,DE,JP'
+	POLICY_EFFECTIVE_DATE: '2026-07-17'
 };
 
 async function loadRoute(routeId: string, storefrontEnabled = false) {
@@ -51,11 +51,7 @@ describe('public layout feature gate', () => {
 					vatBasisPoints: 2500,
 					requiresImportChargeCopy: false
 				},
-				destinationOptions: [
-					{ countryCode: 'DE', displayName: 'Germany', region: 'eu' },
-					{ countryCode: 'SE', displayName: 'Sweden', region: 'eu' },
-					{ countryCode: 'JP', displayName: 'Japan', region: 'asia' }
-				]
+				destinationOptions: destinationOptions()
 			});
 		}
 	);
@@ -81,11 +77,7 @@ describe('public layout feature gate', () => {
 				vatBasisPoints: 2500,
 				requiresImportChargeCopy: false
 			},
-			destinationOptions: [
-				{ countryCode: 'DE', displayName: 'Germany', region: 'eu' },
-				{ countryCode: 'SE', displayName: 'Sweden', region: 'eu' },
-				{ countryCode: 'JP', displayName: 'Japan', region: 'asia' }
-			]
+			destinationOptions: destinationOptions()
 		});
 	});
 

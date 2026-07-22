@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { ALLOWED_DESTINATIONS } from '$lib/domain/destinations';
+import { isSupportedDestination } from '$lib/domain/destinations';
 import type { OrderWithLines } from '$lib/domain/orders';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { StripeFulfillmentError } from '$lib/server/stripe/client.server';
@@ -50,7 +50,6 @@ export type PreparationDependencies = {
 	approvals: ApprovalRepository;
 	brandName: string;
 	comment: string;
-	allowedCountries?: readonly string[];
 };
 
 export class PreparationError extends Error {
@@ -124,10 +123,7 @@ function hasImmutableDesign(order: OrderWithLines): boolean {
 	);
 }
 
-function localBlockers(
-	order: OrderWithLines,
-	allowedDestinations: ReadonlySet<string>
-): PreparationNotice[] {
+function localBlockers(order: OrderWithLines): PreparationNotice[] {
 	const blockers: PreparationNotice[] = [];
 	if (order.fulfillmentStatus !== 'pending_review') {
 		blockers.push({
@@ -141,7 +137,7 @@ function localBlockers(
 			message: 'An immutable checkout design snapshot is missing or invalid.'
 		});
 	}
-	if (!allowedDestinations.has(order.destinationCountry)) {
+	if (!isSupportedDestination(order.destinationCountry)) {
 		blockers.push({
 			code: 'DESTINATION_COUNTRY_UNSUPPORTED',
 			message: 'The destination country is not supported for fulfillment.'
@@ -204,10 +200,7 @@ export class FulfillmentPreparationService implements PreparationService {
 		if (!inspected) fail('FULFILLMENT_ORDER_NOT_FOUND');
 		const order: OrderWithLines = inspected;
 		const warnings = warningNotices(order);
-		const blockers = localBlockers(
-			order,
-			new Set(this.dependencies.allowedCountries ?? ALLOWED_DESTINATIONS)
-		);
+		const blockers = localBlockers(order);
 		if (blockers.length > 0) return blockedResult(orderId, warnings, blockers);
 
 		let details;
@@ -231,8 +224,7 @@ export class FulfillmentPreparationService implements PreparationService {
 				order,
 				fulfillment: { recipient: details.recipient, address: details.address },
 				brandName: this.dependencies.brandName,
-				comment: this.dependencies.comment,
-				allowedCountries: this.dependencies.allowedCountries
+				comment: this.dependencies.comment
 			});
 		} catch (error) {
 			if (error instanceof StyriaPayloadError) {

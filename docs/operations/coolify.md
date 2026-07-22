@@ -176,12 +176,10 @@ STYRIA_SECRET_KEY=<secret>
 STYRIA_BASE_URL=https://styriashirts.eu
 STYRIA_TIMEOUT_MS=10000
 STYRIA_BRAND_NAME=Svelte Society
-STYRIA_SUPPORTED_COUNTRIES=<reviewed-uppercase-comma-separated-ISO-alpha-2-list>
 ```
 
-The initial reviewed value is the EU except Slovenia plus the supported Asian destinations listed
-in `docs/superpowers/specs/2026-07-19-styria-supported-asia-destinations-design.md`. Keep `US` absent
-while Styria marks that route unavailable.
+The reviewed destination policy is source controlled in `SUPPORTED_DESTINATIONS`. It includes the
+EU except Slovenia plus the supported Asian destinations; the United States is not selectable.
 
 ### Plunk
 

@@ -47,9 +47,13 @@ function insertOrder(
 		trackingNumber?: string | null;
 	}
 ): void {
-	const totalAmount = input.totalAmount ?? 4567;
 	const destinationCountry = input.destinationCountry ?? 'SE';
 	const quantities = input.quantities ?? [2, 1];
+	const totalUnitCount = quantities.reduce((sum, quantity) => sum + quantity, 0);
+	const subtotalAmount = totalUnitCount * 1000;
+	const totalAmount = input.totalAmount ?? totalUnitCount * 1250;
+	const taxAmount = totalAmount - subtotalAmount;
+	const retailUnitAmount = totalAmount / totalUnitCount;
 	const fulfillmentStatus = input.fulfillmentStatus ?? 'pending_review';
 	const trackingNumber = input.trackingNumber ?? null;
 	const draftId = `draft_${input.id}`;
@@ -63,7 +67,7 @@ function insertOrder(
 		.run(
 			draftId,
 			`cs_${input.id}`,
-			quantities.reduce((sum, quantity) => sum + quantity, 0),
+			totalUnitCount,
 			now.toISOString(),
 			new Date(now.getTime() + 60_000).toISOString(),
 			now.toISOString(),
@@ -76,7 +80,7 @@ function insertOrder(
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
 				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				tracking_number, shipped_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, 0, ?, ?, 'paid', ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', ?, 0, 0, 0, ?, ?, ?, 'paid', ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
@@ -84,7 +88,8 @@ function insertOrder(
 			`pi_${input.id}`,
 			`cus_${input.id}`,
 			draftId,
-			totalAmount,
+			subtotalAmount,
+			taxAmount,
 			totalAmount,
 			destinationCountry,
 			fulfillmentStatus,
@@ -113,7 +118,7 @@ function insertOrder(
 			'{}',
 			quantity,
 			1000,
-			1000
+			retailUnitAmount
 		);
 	});
 }
@@ -197,7 +202,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			body:
 				'<p>Internal order ID: order_internal_123</p>' +
 				'<p>Unit count: 3</p>' +
-				'<p>Total: EUR 45.67</p>' +
+				'<p>Total: EUR 37.50</p>' +
 				'<p>Destination country: SE</p>' +
 				'<p>Open Codex and use list_pending_orders.</p>'
 		});

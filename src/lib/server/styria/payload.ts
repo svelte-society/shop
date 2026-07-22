@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ALLOWED_DESTINATIONS, isMarketDestination } from '$lib/domain/destinations';
+import { isSupportedDestination } from '$lib/domain/destinations';
 import type { OrderWithLines } from '$lib/domain/orders';
 import { emptyProductionDetails, normalizeProductionDetails } from '$lib/domain/production';
 import { isStyriaDesignPosition } from './design-positions';
@@ -56,7 +56,7 @@ function isHttpsUrl(value: string): boolean {
 }
 
 export function styriaCountryName(code: string): string {
-	if (!isMarketDestination(code)) fail('STYRIA_COUNTRY_UNSUPPORTED');
+	if (!isSupportedDestination(code)) fail('STYRIA_COUNTRY_UNSUPPORTED');
 	const name = COUNTRY_NAMES.of(code);
 	if (typeof name !== 'string' || name.length === 0) fail('STYRIA_COUNTRY_UNSUPPORTED');
 	return name;
@@ -84,7 +84,6 @@ export function buildStyriaPayload(input: {
 	fulfillment: StyriaFulfillmentDetails;
 	brandName: string;
 	comment: string;
-	allowedCountries?: readonly string[];
 }): StyriaOrderPayload {
 	const { order, fulfillment } = input;
 	const { recipient, address } = fulfillment;
@@ -104,7 +103,7 @@ export function buildStyriaPayload(input: {
 		fail('STYRIA_FULFILLMENT_INVALID');
 	}
 	if (order.destinationCountry !== address.countryCode) fail('STYRIA_FULFILLMENT_INVALID');
-	if (!(input.allowedCountries ?? ALLOWED_DESTINATIONS).includes(address.countryCode)) {
+	if (!isSupportedDestination(address.countryCode)) {
 		fail('STYRIA_COUNTRY_UNSUPPORTED');
 	}
 	const fullCountryName = styriaCountryName(address.countryCode);

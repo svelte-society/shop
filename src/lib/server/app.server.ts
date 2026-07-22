@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Buffer } from 'node:buffer';
 import { parseWithdrawalConfig, type WithdrawalSellerIdentity } from '$lib/config/private.server';
-import { parseStyriaSupportedCountries } from '$lib/domain/destinations';
 import { SqliteBackupService } from '$lib/server/backups/service.server';
 import {
 	createS3BackupStore,
@@ -198,8 +197,7 @@ function createRuntimeScheduler(
 ): Scheduler {
 	const outbox = new SqliteOutboxRepository(database);
 	const stripe = createStripeFulfillmentGateway(
-		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY')),
-		parseStyriaSupportedCountries(environment.STYRIA_SUPPORTED_COUNTRIES)
+		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'))
 	);
 	const styria = createStyriaClient({
 		appId: requiredEnvironmentValue(environment, 'STYRIA_APP_ID'),
@@ -401,7 +399,6 @@ export function createApplicationLifecycle(
 		const database = open(databasePath, { fileMustExist: !bootstrap });
 		try {
 			applyMigrations(database, migrationsDirectory);
-			parseStyriaSupportedCountries(options.environment.STYRIA_SUPPORTED_COUNTRIES);
 			const withdrawalConfig = parseWithdrawalConfig(options.environment);
 			const plunk = createPlunkClient({
 				secretKey: requiredEnvironmentValue(options.environment, 'PLUNK_SECRET_KEY'),

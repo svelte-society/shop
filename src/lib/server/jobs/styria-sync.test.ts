@@ -49,7 +49,7 @@ function insertOrder(
 				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				styria_order_id, styria_status, tracking_number, submitted_at, shipped_at,
 				updated_at, last_error_code
-			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 0, 750, 3750, 'SE', 'paid', ?, ?, ?, ?,
+			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 200, 700, 3500, 'SE', 'paid', ?, ?, ?, ?,
 				'2026-07-17T09:00:00.000Z', ?, '2026-07-17T10:00:00.000Z', NULL)`
 		)
 		.run(
@@ -71,7 +71,7 @@ function insertOrder(
 				variant_label, sku, styria_product_number, design_reference, design_json,
 				quantity, unit_amount, currency, retail_unit_amount
 			) VALUES (?, 0, ?, ?, 'Community Tee', 'M', ?, ?, ?,
-				'{"front":"https://cdn.example.test/front.svg"}', 1, 2000, 'eur', 2750)`
+				'{"front":"https://cdn.example.test/front.svg"}', 1, 2000, 'eur', 2500)`
 		)
 		.run(
 			input.id,

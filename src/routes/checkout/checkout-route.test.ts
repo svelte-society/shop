@@ -19,7 +19,6 @@ const BASE_ENV = {
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_route',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free',
-	STYRIA_SUPPORTED_COUNTRIES: 'SE,JP,TW',
 	DATABASE_PATH: ':memory:'
 };
 
