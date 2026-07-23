@@ -14,7 +14,16 @@
 		onRemove: () => void;
 	};
 
-	let { product, variant, unitDisplayPrice, lineDisplayPrice, quantity, maxQuantity, onQuantityChange, onRemove }: Props = $props();
+	let {
+		product,
+		variant,
+		unitDisplayPrice,
+		lineDisplayPrice,
+		quantity,
+		maxQuantity,
+		onQuantityChange,
+		onRemove
+	}: Props = $props();
 
 	function handleQuantityChange(event: Event): void {
 		const input = event.currentTarget as HTMLInputElement;

@@ -1,32 +1,37 @@
 <script lang="ts">
-	import {
-		pricingDisclosure,
-		type PricingDestination,
-		type PricedPublicCatalogProduct
-	} from '$lib/domain/pricing';
+	import type { PricedPublicCatalogProduct } from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
 	import { cart, type CartController } from '$lib/stores/cart.svelte';
 	import VariantPicker from './VariantPicker.svelte';
 
 	type Props = {
 		product: PricedPublicCatalogProduct;
-		destination: PricingDestination;
 		cartController?: CartController;
 	};
 
-	let { product, destination, cartController = cart }: Props = $props();
+	let { product, cartController = cart }: Props = $props();
 	let selectedPriceId = $state<string | null>(null);
 	let validationMessage = $state('');
 	let cartMessage = $state('');
 	let productIdentity = $derived(
-		JSON.stringify([product.slug, product.category, product.variants.map((variant) => variant.priceId)])
+		JSON.stringify([
+			product.slug,
+			product.category,
+			product.variants.map((variant) => variant.priceId)
+		])
 	);
 	let activeProductIdentity = $state('');
 	let selectedVariant = $derived(
 		product.variants.find((variant) => variant.priceId === selectedPriceId) ?? product.variants[0]
 	);
 	let pickerVariants = $derived(
-		product.variants.map(({ displayPrice: _displayPrice, ...variant }) => variant)
+		product.variants.map((variant) => ({
+			priceId: variant.priceId,
+			label: variant.label,
+			sortOrder: variant.sortOrder,
+			currency: variant.currency,
+			unitAmountCents: variant.unitAmountCents
+		}))
 	);
 
 	$effect.pre(() => {
@@ -81,7 +86,6 @@
 <div class="purchase-panel">
 	<div class="price-block">
 		<p class="price">{formatEur(selectedVariant.displayPrice.grossCents)}</p>
-		<p>{pricingDisclosure(destination)}</p>
 	</div>
 
 	{#key productIdentity}
@@ -114,20 +118,11 @@
 		gap: 1.25rem;
 	}
 
-	.price-block p {
-		margin: 0;
-	}
-
 	.price-block .price {
+		margin: 0;
 		font-size: clamp(1.65rem, 4vw, 2.15rem);
 		font-weight: 800;
 		letter-spacing: -0.035em;
-	}
-
-	.price-block p:last-child {
-		margin-top: 0.2rem;
-		color: var(--color-text-muted);
-		font-size: 0.82rem;
 	}
 
 	.size-guide {

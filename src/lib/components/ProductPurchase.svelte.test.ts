@@ -73,60 +73,44 @@ const destination = pricingDestination('SE');
 const priced = (product: PublicCatalogProduct) => pricePublicProduct(product, destination);
 
 describe('ProductPurchase', () => {
-	it('shows the destination-projected price and selected-country disclosure', async () => {
+	it('shows the destination-projected price without repeating tax guidance', async () => {
 		const germany = pricingDestination('DE');
 		render(ProductPurchase, {
-			product: pricePublicProduct(apparel, germany),
-			destination: germany
+			product: pricePublicProduct(apparel, germany)
 		});
 
 		await expect.element(page.getByText('€23.80')).toBeVisible();
-		await expect
-			.element(page.getByText('Includes 19% Germany VAT. Exact tax is confirmed from your delivery address at checkout.'))
-			.toBeVisible();
+		expect(document.body.textContent).not.toContain('Exact tax is confirmed');
 	});
 
-	it('keeps the selected size while destination repricing updates the amount and disclosure', async () => {
+	it('keeps the selected size while destination repricing updates the amount', async () => {
 		const sweden = pricingDestination('SE');
 		const germany = pricingDestination('DE');
 		const view = render(ProductPurchase, {
-			product: pricePublicProduct(apparel, sweden),
-			destination: sweden
+			product: pricePublicProduct(apparel, sweden)
 		});
 
 		await page.getByText('M', { exact: true }).click();
 		await expect.element(page.getByRole('radio', { name: 'M' })).toBeChecked();
 
-		await view.rerender({ product: pricePublicProduct(apparel, germany), destination: germany });
+		await view.rerender({ product: pricePublicProduct(apparel, germany) });
 
 		await expect.element(page.getByRole('radio', { name: 'M' })).toBeChecked();
 		await expect.element(page.getByText('€23.80')).toBeVisible();
-		await expect
-			.element(
-				page.getByText(
-					'Includes 19% Germany VAT. Exact tax is confirmed from your delivery address at checkout.'
-				)
-			)
-			.toBeVisible();
+		expect(document.body.textContent).not.toContain('Exact tax is confirmed');
 	});
 
-	it('shows zero EU VAT and import-charge copy for Japan', async () => {
+	it('shows the destination-projected price for Japan without duplicate import guidance', async () => {
 		const japan = pricingDestination('JP');
-		render(ProductPurchase, { product: pricePublicProduct(apparel, japan), destination: japan });
+		render(ProductPurchase, { product: pricePublicProduct(apparel, japan) });
 
 		await expect.element(page.getByText('€20.00')).toBeVisible();
-		await expect
-			.element(
-				page.getByText(
-					'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
-				)
-			)
-			.toBeVisible();
+		expect(document.body.textContent).not.toContain('Import VAT');
 	});
 
 	it('keeps apparel out of the cart until a size is selected', async () => {
 		const cartController = createCart(isolatedStorage);
-		render(ProductPurchase, { product: priced(apparel), destination, cartController });
+		render(ProductPurchase, { product: priced(apparel), cartController });
 
 		await page.getByRole('button', { name: 'Add to cart' }).click();
 
@@ -146,7 +130,7 @@ describe('ProductPurchase', () => {
 
 	it('adds the automatically selected accessory variant', async () => {
 		const cartController = createCart(isolatedStorage);
-		render(ProductPurchase, { product: priced(accessory), destination, cartController });
+		render(ProductPurchase, { product: priced(accessory), cartController });
 
 		await page.getByRole('button', { name: 'Add to cart' }).click();
 
@@ -177,7 +161,7 @@ describe('ProductPurchase', () => {
 			const cartController = createCart(isolatedStorage);
 			fill(cartController);
 			const initialLines = cartController.lines;
-			render(ProductPurchase, { product: priced(accessory), destination, cartController });
+			render(ProductPurchase, { product: priced(accessory), cartController });
 
 			await page.getByRole('button', { name: 'Add to cart' }).click();
 
@@ -199,7 +183,6 @@ describe('ProductPurchase', () => {
 					{ ...accessory.variants[0], priceId: 'price_mug_navy', label: 'Navy' }
 				]
 			}),
-			destination,
 			cartController
 		});
 
@@ -212,14 +195,14 @@ describe('ProductPurchase', () => {
 
 	it('clears selection and feedback when reused for another product', async () => {
 		const cartController = createCart(isolatedStorage);
-		const view = render(ProductPurchase, { product: priced(apparel), destination, cartController });
+		const view = render(ProductPurchase, { product: priced(apparel), cartController });
 		await page.getByText('M', { exact: true }).click();
 		await page.getByRole('button', { name: 'Add to cart' }).click();
 		await expect
 			.element(page.getByRole('status', { name: 'Cart status' }))
 			.toHaveTextContent('Society Tee, M added to cart.');
 
-		await view.rerender({ product: priced(nextApparel), destination, cartController });
+		await view.rerender({ product: priced(nextApparel), cartController });
 
 		await expect.element(page.getByRole('radio', { name: 'XS' })).not.toBeChecked();
 		await expect.element(page.getByRole('radio', { name: 'XL' })).not.toBeChecked();

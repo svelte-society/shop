@@ -32,15 +32,15 @@ const variant: PricedPublicCatalogVariant = {
 describe('CartLineItem', () => {
 	it('renders supplied gross unit and line amounts', async () => {
 		render(CartLineItem, {
-		product,
-		variant,
-		unitDisplayPrice: variant.displayPrice,
-		lineDisplayPrice: { netCents: 4_000, vatCents: 1_000, grossCents: 5_000 },
-		quantity: 2,
-		maxQuantity: 20,
-		onQuantityChange: vi.fn(),
-		onRemove: vi.fn()
-	});
+			product,
+			variant,
+			unitDisplayPrice: variant.displayPrice,
+			lineDisplayPrice: { netCents: 4_000, vatCents: 1_000, grossCents: 5_000 },
+			quantity: 2,
+			maxQuantity: 20,
+			onQuantityChange: vi.fn(),
+			onRemove: vi.fn()
+		});
 
 		await expect.element(page.getByText('€25.00 each')).toBeVisible();
 		await expect.element(page.getByText('€50.00')).toBeVisible();

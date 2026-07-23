@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { formatEur } from '$lib/domain/money';
-	import { pricingDisclosure, type CartDisplayPrice, type PricingDestination } from '$lib/domain/pricing';
+	import type { CartDisplayPrice, PricingDestination } from '$lib/domain/pricing';
 
 	type Props = {
 		totalUnits: number;
@@ -24,21 +24,35 @@
 	let shippingMessage = $derived(
 		totalUnits >= 2 ? 'Free shipping unlocked.' : 'Add one more item for free shipping.'
 	);
+	let destinationMessage = $derived(
+		destination.region === 'eu'
+			? `Estimated for delivery to ${destination.displayName}. Your delivery address confirms VAT and the final total at checkout.`
+			: `Estimated for delivery to ${destination.displayName}. Checkout confirms the final total; import charges may apply.`
+	);
 </script>
 
 <aside class="summary" aria-labelledby="cart-summary-title">
 	<h2 id="cart-summary-title">Order summary</h2>
 
 	<div class="price-rows">
-		<div class="price-row"><span>Merchandise</span><strong>{formatEur(cartDisplayPrice.merchandise.grossCents)}</strong></div>
-		<div class="price-row"><span>Shipping</span><strong>{formatEur(cartDisplayPrice.shipping.grossCents)}</strong></div>
-		<div class="price-row"><span>{destination.region === 'eu' ? 'VAT' : 'EU VAT'}</span><strong>{formatEur(cartDisplayPrice.totalVatCents)}</strong></div>
-		<div class="price-row estimated-total"><span>Estimated total</span><strong>{formatEur(cartDisplayPrice.totalGrossCents)}</strong></div>
+		<div class="price-row">
+			<span>Merchandise</span><strong>{formatEur(cartDisplayPrice.merchandise.grossCents)}</strong>
+		</div>
+		<div class="price-row">
+			<span>Shipping</span><strong>{formatEur(cartDisplayPrice.shipping.grossCents)}</strong>
+		</div>
+		<div class="price-row">
+			<span>{destination.region === 'eu' ? 'VAT' : 'EU VAT'}</span><strong
+				>{formatEur(cartDisplayPrice.totalVatCents)}</strong
+			>
+		</div>
+		<div class="price-row estimated-total">
+			<span>Estimated total</span><strong>{formatEur(cartDisplayPrice.totalGrossCents)}</strong>
+		</div>
 	</div>
 
 	<p class="shipping-message" aria-live="polite">{shippingMessage}</p>
-	<p>{pricingDisclosure(destination)}</p>
-	<p>Estimated for delivery to {destination.displayName}. Checkout confirms the final amount from your delivery address.</p>
+	<p>{destinationMessage}</p>
 
 	<button type="button" disabled={!checkoutEnabled || checkoutPending} onclick={onCheckout}>
 		{checkoutPending

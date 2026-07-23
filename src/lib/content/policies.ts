@@ -6,7 +6,8 @@ export type PolicySection = {
 
 export type PolicyDocument = {
 	title: string;
-	effectiveDate: string;
+	summary: string;
+	effectiveDate?: string;
 	sections: PolicySection[];
 };
 
@@ -42,43 +43,48 @@ const gdprFullText =
 	'https://www.imy.se/verksamhet/dataskydd/det-har-galler-enligt-gdpr/introduktion-till-gdpr/dataskyddsforordningen-i-fulltext/';
 const imyRights = 'https://www.imy.se/privatperson/dataskydd/dina-rattigheter/';
 
+function sentence(value: string): string {
+	return `${value.trim().replace(/[.!?]+$/u, '')}.`;
+}
+
 function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 	return {
 		title: 'Shipping',
+		summary: 'Where we deliver, what shipping costs, and when to expect your order.',
 		effectiveDate: config.policyEffectiveDate,
 		sections: [
 			{
 				heading: 'Where we ship',
 				paragraphs: [
-					'We ship only to destinations currently supported by our fulfillment partner: the European Union except Slovenia, and selected destinations across Asia. Availability is enforced at checkout and may change if a fulfillment or carrier route is suspended.'
+					'We currently ship to the European Union except Slovenia, and to the Asian countries available in the delivery-country picker. If a country is not available at checkout, we cannot ship there.',
+					'Available destinations may change if a carrier route is paused.'
 				]
 			},
 			{
-				heading: 'Currency and shipping rate',
+				heading: 'Shipping price',
 				paragraphs: [
-					'All store prices and charges are in EUR. The country shown in “Deliver to” controls the storefront tax projection.',
-					'When an order contains one total unit, the current amount is shown before checkout. Shipping is free when an order contains two or more total units.',
-					'For an EU destination, the storefront displays shipping with that country’s standard VAT projection. Stripe confirms the exact tax from the complete delivery and business details at checkout.'
+					'All prices and charges are in EUR. Choose your delivery country to see prices for that destination.',
+					'Shipping for one item is shown in your cart. Shipping is free when you order two or more items.'
 				]
 			},
 			{
 				heading: 'Delivery estimates',
 				paragraphs: [
-					`European Union: ${config.deliveryEstimateEu}.`,
-					`Supported Asian destinations: ${config.deliveryEstimateAsia}.`,
-					'These are estimates, not guaranteed delivery dates. We share tracking when the carrier provides it; tracking may not be available for every destination.'
+					`European Union: ${sentence(config.deliveryEstimateEu)}`,
+					`Supported Asian destinations: ${sentence(config.deliveryEstimateAsia)}`,
+					'These times are estimates, not guarantees. We send tracking when the carrier provides it, although tracking may not be available for every destination.'
 				]
 			},
 			{
-				heading: 'Tax and non-EU import charges',
+				heading: 'VAT and import charges',
 				paragraphs: [
-					'Final tax is calculated at checkout from the delivery and business details provided there.',
-					"Deliveries outside the EU may be charged import VAT, customs duties, brokerage fees, or carrier charges after checkout. These charges are not collected by this shop and are the recipient's responsibility. Check your local import rules before ordering."
+					'For EU orders, prices include VAT for your selected delivery country. The final amount is confirmed at checkout from your delivery details.',
+					'Orders outside the EU may be charged import VAT, customs duties, brokerage fees, or carrier charges after checkout. These charges are not included in your order total and are your responsibility. Check your local import rules before ordering.'
 				]
 			},
 			{
-				heading: 'Shipping support',
-				paragraphs: [`For order help, contact ${config.supportEmail}.`],
+				heading: 'Need help?',
+				paragraphs: [`For help with an order, email ${config.supportEmail}.`],
 				links: [{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` }]
 			}
 		]
@@ -89,65 +95,60 @@ function returnsDocument(config: PolicyContentConfig): PolicyDocument {
 	const sellerAddress = `${config.sellerAddressLine1}, ${config.sellerPostalCode} ${config.sellerCity}, ${config.sellerCountry}`;
 	return {
 		title: 'Returns and withdrawal',
+		summary: 'How to request a return, who pays postage, and when refunds are sent.',
 		effectiveDate: config.policyEffectiveDate,
 		sections: [
 			{
-				heading: 'Contact us first',
+				heading: 'Start a return',
 				paragraphs: [
-					`Contact ${config.supportEmail} before sending anything back so we can review the request and provide the correct return instructions. This approval-first handling step does not limit your statutory right to give a clear withdrawal or complaint notice within the applicable time limit.`
-				],
-				links: [{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` }]
-			},
-			{
-				heading: 'EU right of withdrawal',
-				paragraphs: [
-					'If you are an eligible EU consumer buying at a distance, you normally have 14 days to notify us that you are withdrawing. For goods, the period starts when you or a person you name takes possession of the goods. If one order arrives in separate parts, it starts when the final part arrives.',
-					'You may use the model withdrawal notice below or another clear statement. Send the notice before the withdrawal period ends. After notifying us, return the goods without undue delay and no later than 14 days after the notice.',
-					'We currently claim no merchandise-specific exclusion from the statutory right of withdrawal. Any future exclusion requires qualified legal review before it is published.'
+					`Before sending anything back, email ${config.supportEmail} or use the withdrawal form. We will confirm where and how to return your order. You may still notify us by any other clear statement within the applicable time limit.`
 				],
 				links: [
-					{ label: 'Submit a withdrawal notice', href: '/withdraw' },
+					{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` },
+					{ label: 'Use the withdrawal form', href: '/withdraw' }
+				]
+			},
+			{
+				heading: 'EU change-of-mind returns',
+				paragraphs: [
+					'If you are an eligible EU consumer, you normally have 14 days after receiving your order to tell us that you want to withdraw. If an order arrives in parts, the period starts when the final part arrives.',
+					'After telling us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping.'
+				],
+				links: [
 					{ label: 'Swedish Distance Contracts Act', href: distanceContractsAct },
 					{ label: 'EU Consumer Rights Directive', href: consumerRightsDirective }
 				]
 			},
 			{
+				heading: 'Damaged or incorrect items',
+				paragraphs: [
+					`Email ${config.supportEmail} with your order reference, a description of the problem, and useful photographs. For a valid complaint, we pay the necessary return postage. Wait for us to confirm the return method before buying postage.`,
+					'Depending on the problem and your rights, we may offer a correction, replacement, price reduction, or refund.'
+				],
+				links: [{ label: 'Konsumentverket guidance on faulty goods', href: consumerComplaints }]
+			},
+			{
+				heading: 'Orders outside the EU',
+				paragraphs: [
+					'We do not offer returns or exchanges for change of mind outside the EU. This does not affect rights that may apply to faulty, damaged, incorrect, or misdescribed goods, or other rights that cannot be waived where you live.'
+				]
+			},
+			{
+				heading: 'Refunds',
+				paragraphs: [
+					'When a refund is due, we return eligible payments to the original payment method within the legal deadline. We may wait until the goods arrive or you provide evidence that they were sent, whichever happens first.',
+					'If you chose delivery that cost more than our least expensive standard option, the extra delivery cost is not refundable.'
+				]
+			},
+			{
 				heading: 'Model withdrawal notice',
 				paragraphs: [
-					'Use these details only if you want to withdraw from the contract:',
+					'If you prefer not to use the online form, you can send this statement:',
 					`To: ${config.sellerLegalName}, ${sellerAddress}, ${config.sellerEmail}.`,
 					'I/We notify you that I/we withdraw from the contract for the sale of these goods: [describe the goods].',
 					'Ordered on: [date]. Received on: [date].',
 					'Name of consumer: [name]. Address of consumer: [address].',
 					'Date: [date]. Signature of consumer: [only if sent on paper].'
-				]
-			},
-			{
-				heading: 'Return postage',
-				paragraphs: [
-					'For a statutory change-of-mind withdrawal, you pay the direct return postage. Use the return instructions we provide so the parcel goes to the correct location.',
-					'For a valid complaint about a damaged or incorrect item, we pay the necessary return postage. Do not buy replacement postage until we have confirmed the return method.'
-				]
-			},
-			{
-				heading: 'Orders outside the EU',
-				paragraphs: [
-					'We offer no voluntary returns or exchanges for change of mind outside the EU. This does not limit mandatory rights that may apply to faulty, damaged, incorrect, or misdescribed goods, or other non-waivable consumer rights in your jurisdiction. Contact support before sending anything back.'
-				]
-			},
-			{
-				heading: 'Damaged or incorrect item',
-				paragraphs: [
-					`Contact ${config.supportEmail} with the order reference, a description of the problem, and useful photographs. Depending on the circumstances and your mandatory rights, the remedy may be correction, replacement, a price reduction, or a refund.`,
-					'Your statutory complaint rights are separate from the right of withdrawal.'
-				],
-				links: [{ label: 'Konsumentverket guidance on faulty goods', href: consumerComplaints }]
-			},
-			{
-				heading: 'Refunds',
-				paragraphs: [
-					'Refunds are processed manually through Stripe. For an accepted withdrawal, we refund eligible payments without undue delay and within the statutory deadline. We may wait until the goods arrive or you provide evidence that they were sent, whichever happens first.',
-					'We use the original payment method unless you expressly agree to another method that does not add a fee. Extra delivery cost above the least expensive standard delivery option is not refundable.'
 				]
 			}
 		]
@@ -157,60 +158,61 @@ function returnsDocument(config: PolicyContentConfig): PolicyDocument {
 function privacyDocument(config: PolicyContentConfig): PolicyDocument {
 	return {
 		title: 'Privacy',
+		summary: 'What we collect, why we use it, and how to exercise your data rights.',
 		effectiveDate: config.policyEffectiveDate,
 		sections: [
 			{
-				heading: 'Who is responsible',
+				heading: 'Who is responsible for your data',
 				paragraphs: [
-					`${config.sellerLegalName}, registration number ${config.sellerRegistrationNumber}, is responsible for the shop's handling of personal data. Contact ${config.supportEmail} with privacy questions.`
+					`${config.sellerLegalName}, registration number ${config.sellerRegistrationNumber}, is responsible for how this shop uses personal data. Email ${config.supportEmail} with privacy questions.`
 				],
 				links: [{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` }]
 			},
 			{
-				heading: 'What the shop handles',
+				heading: 'What we collect',
 				paragraphs: [
-					'Stripe handles checkout identity, contact, delivery, tax, and payment details. The shop keeps local operational state such as internal order and draft IDs, provider references, product-line snapshots, country, amounts, fulfillment status, support outcomes, and delivery status.',
-					'SQLite does not store customer names, postal addresses, phone numbers, VAT numbers, or payment-method data. Those details are retrieved from Stripe only when needed for fulfillment or support.',
-					'Structured logs contain operational events such as request IDs, route templates, stable error codes, and job outcomes. Secret values and unnecessary customer details are not intended for logs.'
+					'At checkout, Stripe collects your name, contact details, delivery address, tax information, and payment details.',
+					'We keep the order information needed to run the shop, such as what you bought, the amounts paid, delivery country, order and shipping status, and support history. We do not keep your name, postal address, phone number, VAT number, or payment details in the shop’s own database. We retrieve contact and delivery details from Stripe only when needed to fulfil your order or provide support.',
+					'We also keep limited technical logs to keep the shop secure and reliable. These logs are designed not to contain secrets or unnecessary customer details.'
 				]
 			},
 			{
-				heading: 'Services used',
+				heading: 'Who receives your data',
 				paragraphs: [
-					'Stripe provides catalog, checkout, payment, tax, receipts, and invoices. Our production and fulfillment partner receives the details needed to manufacture and fulfill approved orders. Plunk sends operational and shipping emails. The shipping carriers receive the details needed to deliver parcels.',
-					'When configured, Umami measures limited storefront activity. The shop sends allowlisted route-level events and removes query parameters before analytics collection.',
-					'Encrypted S3-compatible backups protect local operational records for recovery. Information is shared with these services for the operational purposes described here; each service also handles data under its own terms and legal duties.'
+					'Stripe handles checkout, payment, tax, receipts, and invoices. Our production partner and delivery carriers receive the contact, address, and order details needed to make and deliver your order.',
+					'Plunk sends order and shipping emails. We use self-hosted analytics to understand how the shop is used. These analytics do not include order or payment details.',
+					'We keep encrypted backups so the shop can recover from data loss. Each provider also handles data under its own terms and legal duties.'
 				]
 			},
 			{
-				heading: 'Purposes and legal bases',
+				heading: 'Why we use your data',
 				paragraphs: [
-					'We use order information to perform the sales contract, take payment, manufacture and deliver goods, provide order support, and handle returns.',
-					'We keep information when necessary for legal obligations. We also rely on legitimate interests for service security, fraud prevention, operational reliability, support records, recovery, and proportionate storefront measurement, after considering customer privacy.'
+					'We use order information to fulfil our contract with you: taking payment, making and delivering your order, providing support, and handling returns.',
+					'We keep information when needed to meet legal obligations. We rely on legitimate interests for security, fraud prevention, reliable operation, support records, recovery, and limited measurement of how the shop is used.'
 				]
 			},
 			{
-				heading: 'Retention',
+				heading: 'How long we keep it',
 				paragraphs: [
-					'Encrypted backups roll off after 30 days. Personal withdrawal case fields are encrypted while the case is active and are scheduled for purge 90 days after closure.',
-					'Provider records and structured logs are retained according to the applicable provider settings, operating schedule, contracts, and legal duties. Contact us for current details about a particular order.'
+					'Encrypted backups are kept for up to 30 days. Personal details submitted through the withdrawal form are encrypted while the case is open and deleted 90 days after closure.',
+					'Stripe and our other providers keep their own records according to their settings, agreements, and legal obligations. Contact us if you need details about a particular order.'
 				]
 			},
 			{
-				heading: 'International transfers',
+				heading: 'Data outside the EU/EEA',
 				paragraphs: [
-					'Some service providers may process data outside the EU/EEA. Where that happens, the transfer must use an applicable legal mechanism, such as an adequacy decision or approved contractual safeguards. Contact us for current provider and safeguard information.'
+					'Some providers may process data outside the EU/EEA. When this happens, the transfer must use a lawful mechanism, such as an adequacy decision or approved contractual safeguards. Contact us for current information about providers and safeguards.'
 				]
 			},
 			{
 				heading: 'Your rights',
 				paragraphs: [
-					'Depending on the circumstances, you may ask for access, correction, erasure, restriction, or portability of your personal data, or object to processing. A right may be limited where continued processing is required by law or another applicable exception.',
-					`Contact ${config.supportEmail} to make a request. You may also complain to the Swedish Authority for Privacy Protection (IMY). We may need enough information to verify that the request concerns you.`
+					'Depending on the situation, you can ask for access, correction, erasure, restriction, or portability of your personal data, or object to how it is used. Some rights have exceptions, including when we must keep information by law.',
+					`Email ${config.supportEmail} to make a request. We may ask for enough information to confirm that the data belongs to you. You can also complain to the Swedish Authority for Privacy Protection (IMY).`
 				],
 				links: [
-					{ label: 'GDPR full text at IMY', href: gdprFullText },
-					{ label: 'Your data protection rights at IMY', href: imyRights }
+					{ label: 'Read the GDPR at IMY', href: gdprFullText },
+					{ label: 'Read about your data rights at IMY', href: imyRights }
 				]
 			}
 		]
@@ -220,74 +222,75 @@ function privacyDocument(config: PolicyContentConfig): PolicyDocument {
 function termsDocument(config: PolicyContentConfig): PolicyDocument {
 	return {
 		title: 'Terms of sale',
+		summary: 'The main terms that apply when you buy from the Society Shop.',
 		effectiveDate: config.policyEffectiveDate,
 		sections: [
 			{
 				heading: 'Seller',
 				paragraphs: [
 					`${config.sellerLegalName}, registration number ${config.sellerRegistrationNumber}, VAT number ${config.sellerVatNumber}.`,
-					`${config.sellerAddressLine1}, ${config.sellerPostalCode} ${config.sellerCity}, ${config.sellerCountry}. Merchant email: ${config.sellerEmail}.`
+					`${config.sellerAddressLine1}, ${config.sellerPostalCode} ${config.sellerCity}, ${config.sellerCountry}. Email: ${config.sellerEmail}.`
 				],
 				links: [{ label: `Email ${config.sellerEmail}`, href: `mailto:${config.sellerEmail}` }]
 			},
 			{
-				heading: 'Products and ordering',
+				heading: 'Placing an order',
 				paragraphs: [
-					'The shop sells official Svelte Society apparel and accessories. Product descriptions, variants, quantities, and current availability appear on the product and checkout pages.',
-					'An order is accepted after Stripe confirms successful payment. We will contact you if a paid order cannot be fulfilled.'
+					'The shop sells official Svelte Society apparel and accessories. The product page and checkout show the description, available size or option, price, and quantity.',
+					'Your order is accepted when payment succeeds. If we cannot fulfil a paid order, we will contact you.'
 				]
 			},
 			{
 				heading: 'Prices, VAT, and shipping',
 				paragraphs: [
-					'Prices are in EUR. The country shown in “Deliver to” controls the storefront tax projection. For EU destinations, displayed prices include that country’s standard VAT projection; Stripe confirms exact tax from the complete delivery and business details at checkout. For supported destinations outside the EU, displayed prices exclude EU VAT and import charges may still be assessed after checkout.',
-					'The current shipping amount is shown before checkout for one total unit and is free for two or more total units. Changing “Deliver to” can change the displayed merchandise, shipping, and total prices. The Shipping page contains delivery estimates and the complete notice about charges outside the EU.'
+					'All prices are in EUR and depend on your selected delivery country. EU prices include local VAT. Prices outside the EU do not include EU VAT, and import charges may apply after checkout.',
+					'Shipping for one item is shown in your cart. Shipping is free when you order two or more items. See Shipping for delivery times and information about charges outside the EU.'
 				],
-				links: [{ label: 'Read the Shipping policy', href: '/shipping' }]
+				links: [{ label: 'Read about shipping', href: '/shipping' }]
 			},
 			{
-				heading: 'Payment, receipt, and invoice',
+				heading: 'Payment and receipts',
 				paragraphs: [
-					'Stripe processes payment. Stripe provides the payment receipt and, when available for the transaction, the invoice. The shop does not store payment-method data in its local SQLite database.'
+					'Payment is handled securely by Stripe. Stripe emails your receipt and, when available, an invoice. We do not store your card details.'
 				]
 			},
 			{
-				heading: 'Destinations and fulfillment',
+				heading: 'Delivery',
 				paragraphs: [
-					'We accept delivery addresses in the European Union except Slovenia, and in selected destinations across Asia currently supported by our fulfillment network. Availability is enforced at checkout and may change if a fulfillment or carrier route is suspended.',
-					'Paid orders enter manual review before submission to our production and fulfillment partner. Estimates are not guarantees, and we do not promise a fixed public review window. Tracking is sent when it becomes available.'
+					'We deliver to the European Union except Slovenia, and to selected destinations across Asia. The delivery-country picker shows the countries currently available.',
+					'After payment, we prepare your order for production. Delivery times are estimates, not guarantees. We send tracking when it becomes available.'
 				]
 			},
 			{
-				heading: 'Support, complaints, and returns',
+				heading: 'Returns and order problems',
 				paragraphs: [
-					`Contact ${config.supportEmail} for order support. Returns, EU withdrawal, damaged or incorrect items, postage, and manual refunds are explained on the Returns page.`,
-					'For an eligible EU withdrawal, unless we have offered to collect the goods, you must send them back or hand them over to us or our designated recipient in Sweden without undue delay and no later than 14 days after notifying us. You are responsible for the direct return postage. We recommend using a tracked service. Please contact us before sending the parcel so we can provide complete return instructions. Not contacting us first does not invalidate an otherwise timely statutory return or limit your right to notify us of withdrawal by another clear statement.'
+					`Email ${config.supportEmail} if your order is damaged, incorrect, or otherwise needs support. The Returns page explains change-of-mind returns, faulty items, postage, and refunds.`,
+					'Eligible EU consumers can notify us of withdrawal within the legal deadline. After notifying us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping. Contact us first for the complete return instructions. You may still notify us by any other clear statement.'
 				],
 				links: [
 					{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` },
-					{ label: 'Read the Returns policy', href: '/returns' }
+					{ label: 'Read about returns', href: '/returns' }
 				]
 			},
 			{
-				heading: 'Governing terms',
+				heading: 'Applicable law',
 				paragraphs: [
-					'Swedish law governs these terms. This choice does not remove mandatory consumer rights that apply where you live. If a term conflicts with a mandatory consumer rule, the mandatory rule applies.'
+					'Swedish law applies to these terms. This does not remove mandatory consumer rights where you live. If these terms conflict with a mandatory consumer rule, that rule applies.'
 				]
 			}
 		]
 	};
 }
 
-function aboutDocument(config: PolicyContentConfig): PolicyDocument {
+function aboutDocument(): PolicyDocument {
 	return {
-		title: 'About the Society Shop',
-		effectiveDate: config.policyEffectiveDate,
+		title: 'About the Shop',
+		summary: 'Official Svelte Society merchandise, made for the community.',
 		sections: [
 			{
-				heading: 'Made for the community',
+				heading: 'Made for Svelte people',
 				paragraphs: [
-					'Official Svelte Society merchandise for expressing community identity at meetups, at your desk, and wherever Svelte people gather.'
+					'The Society Shop gives Svelte developers, meetup organizers, and community members a simple way to wear the Svelte mark wherever they gather.'
 				]
 			}
 		]
@@ -300,6 +303,6 @@ export function createPolicyDocuments(config: PolicyContentConfig): PolicyDocume
 		returns: returnsDocument(config),
 		privacy: privacyDocument(config),
 		terms: termsDocument(config),
-		about: aboutDocument(config)
+		about: aboutDocument()
 	};
 }

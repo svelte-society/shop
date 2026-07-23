@@ -114,7 +114,7 @@ test('verified paid merch success shows approved copy and clears the cart after 
 	await expect(page.getByRole('heading', { level: 1, name: 'Order received.' })).toBeVisible();
 	await expect(
 		page.getByText(
-			"Stripe is emailing your receipt and invoice now. Your order is queued for fulfillment review. We'll email again when it ships.",
+			"Stripe is emailing your receipt and invoice now. We've received your order and will email you again when it ships.",
 			{ exact: true }
 		)
 	).toBeVisible();

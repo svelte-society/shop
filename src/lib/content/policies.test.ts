@@ -19,6 +19,7 @@ const config = {
 function text(document: PolicyDocument): string {
 	return [
 		document.title,
+		document.summary,
 		document.effectiveDate,
 		...document.sections.flatMap((section) => [
 			section.heading,
@@ -32,8 +33,10 @@ describe('configured policy documents', () => {
 	it('uses plain text and explicit links rather than HTML strings', () => {
 		const documents = createPolicyDocuments(config);
 
-		for (const document of Object.values(documents)) {
-			expect(document.effectiveDate).toBe('2026-07-17');
+		for (const [key, document] of Object.entries(documents)) {
+			expect(document.summary).toEqual(expect.any(String));
+			expect(document.summary.length).toBeGreaterThan(20);
+			expect(document.effectiveDate).toBe(key === 'about' ? undefined : '2026-07-17');
 			expect(document.sections.length).toBeGreaterThan(0);
 			for (const section of document.sections) {
 				expect(section.heading).not.toMatch(/[<>]/u);
@@ -50,52 +53,55 @@ describe('configured policy documents', () => {
 	it('publishes provider-owned shipping rules without a fixed public price promise', () => {
 		const shipping = text(createPolicyDocuments(config).shipping);
 
+		expect(shipping).toContain('Where we deliver, what shipping costs');
 		expect(shipping).toContain('EUR');
 		expect(shipping).toContain('European Union except Slovenia');
-		expect(shipping).toContain('selected destinations across Asia');
+		expect(shipping).toContain('Asian countries available in the delivery-country picker');
 		expect(shipping).not.toContain('United States');
-		expect(shipping).toContain('Deliver to');
-		expect(shipping).toContain('current amount is shown before checkout');
+		expect(shipping).toContain('selected delivery country');
+		expect(shipping).toContain('Shipping for one item is shown in your cart');
 		expect(shipping).not.toMatch(/EUR\s+\d/u);
-		expect(shipping).toContain('one total unit');
-		expect(shipping).toContain('two or more total units');
+		expect(shipping).toContain('two or more items');
 		expect(shipping).toContain('Reviewed EU estimate');
 		expect(shipping).toContain('Reviewed Asia estimate');
-		expect(shipping).toContain('exact tax');
+		expect(shipping).toContain('final amount is confirmed at checkout');
 		expect(shipping).toContain('customs duties, brokerage fees, or carrier charges');
-		expect(shipping).toContain('not guaranteed delivery dates');
+		expect(shipping).toContain('estimates, not guarantees');
+		expect(shipping).not.toMatch(/tax projection|total units|fulfillment partner/iu);
 	});
 
 	it('keeps the terms aligned with provider-owned shipping and destination pricing', () => {
 		const terms = text(createPolicyDocuments(config).terms);
 
-		expect(terms).toContain('Deliver to');
-		expect(terms).toContain('current shipping amount is shown before checkout');
-		expect(terms).toContain('free for two or more total units');
+		expect(terms).toContain('selected delivery country');
+		expect(terms).toContain('Shipping for one item is shown in your cart');
+		expect(terms).toContain('free when you order two or more items');
 		expect(terms).not.toMatch(/Shipping (?:costs|is) EUR\s+\d/u);
+		expect(terms).not.toMatch(/tax projection|total units|manual review|SQLite/iu);
 	});
 
 	it('publishes approval-first returns instructions without inventing a merchandise exclusion', () => {
 		const returns = text(createPolicyDocuments(config).returns);
 
-		expect(returns).toContain('Contact merch@sveltesociety.dev before sending anything back');
-		expect(returns).toContain('does not limit your statutory right');
+		expect(returns).toContain('How to request a return, who pays postage');
+		expect(returns).toContain('Before sending anything back');
+		expect(returns).toContain('You may still notify us by any other clear statement');
 		expect(returns).toContain('14 days');
 		expect(returns).toContain('Model withdrawal notice');
 		expect(
 			createPolicyDocuments(config).returns.sections.flatMap((section) => section.links ?? [])
-		).toContainEqual({ label: 'Submit a withdrawal notice', href: '/withdraw' });
+		).toContainEqual({ label: 'Use the withdrawal form', href: '/withdraw' });
 		expect(returns).toContain('Ordered on');
 		expect(returns).toContain('Received on');
 		expect(returns).toContain('Name of consumer');
 		expect(returns).toContain('Address of consumer');
 		expect(returns).toContain('Damaged or incorrect item');
 		expect(returns).toContain('we pay the necessary return postage');
-		expect(returns).toContain('you pay the direct return postage');
-		expect(returns).toContain('We currently claim no merchandise-specific exclusion');
-		expect(returns).toContain('Refunds are processed manually');
+		expect(returns).toContain('You pay the direct return postage');
+		expect(returns).not.toContain('merchandise-specific exclusion');
+		expect(returns).not.toContain('processed manually');
 		expect(returns).toContain('outside the EU');
-		expect(returns).toContain('no voluntary returns or exchanges for change of mind');
+		expect(returns).toContain('do not offer returns or exchanges for change of mind');
 		expect(returns).toContain('faulty, damaged, incorrect, or misdescribed goods');
 	});
 
@@ -104,13 +110,12 @@ describe('configured policy documents', () => {
 
 		for (const expected of [
 			'Stripe',
-			'production and fulfillment partner',
+			'production partner',
 			'Plunk',
-			'shipping carriers',
-			'Umami',
-			'structured logs',
-			'local operational state',
-			'S3-compatible backups',
+			'delivery carriers',
+			'self-hosted analytics',
+			'technical logs',
+			'encrypted backups',
 			'contract',
 			'legal obligations',
 			'legitimate interests',
@@ -126,13 +131,32 @@ describe('configured policy documents', () => {
 			expect(privacy).toContain(expected);
 		}
 		expect(privacy).not.toMatch(/Styria/iu);
+		expect(privacy).not.toMatch(/Umami/iu);
 		expect(privacy).toContain(
-			'SQLite does not store customer names, postal addresses, phone numbers, VAT numbers, or payment-method data'
+			'We do not keep your name, postal address, phone number, VAT number, or payment details in the shop’s own database'
 		);
-		expect(privacy).toContain('Encrypted backups roll off after 30 days');
-		expect(privacy).toContain('withdrawal case fields are encrypted while the case is active');
+		expect(privacy).toContain('Encrypted backups are kept for up to 30 days');
+		expect(privacy).toContain('details submitted through the withdrawal form');
 		expect(privacy).toContain('90 days after closure');
-		expect(privacy).not.toContain('no automatic deletion schedule in this MVP');
+		expect(privacy).not.toMatch(
+			/SQLite|S3-compatible|route templates|stable error codes|local operational state|allowlisted/iu
+		);
+		const services = createPolicyDocuments(config).privacy.sections.find(
+			(section) => section.heading === 'Who receives your data'
+		);
+		expect(new Set(services?.paragraphs).size).toBe(services?.paragraphs.length);
+	});
+
+	it('renders configured delivery estimates with a single sentence-ending period', () => {
+		const shipping = text(
+			createPolicyDocuments({
+				...config,
+				deliveryEstimateEu: 'Usually 5–7 business days total.',
+				deliveryEstimateAsia: 'Usually 7–15 business days total.'
+			}).shipping
+		);
+
+		expect(shipping).not.toContain('..');
 	});
 
 	it('identifies the configured seller and states the scoped commercial terms', () => {
@@ -154,8 +178,7 @@ describe('configured policy documents', () => {
 			'invoice',
 			'European Union except Slovenia',
 			'selected destinations across Asia',
-			'production and fulfillment partner',
-			'manual review',
+			'prepare your order for production',
 			'merch@sveltesociety.dev',
 			'mandatory consumer rights'
 		]) {
@@ -164,11 +187,10 @@ describe('configured policy documents', () => {
 		expect(terms).not.toMatch(/Styria/iu);
 		expect(terms).not.toContain('United States');
 		expect(
-			termsDocument.sections.find(
-				(section) => section.heading === 'Support, complaints, and returns'
-			)?.paragraphs
+			termsDocument.sections.find((section) => section.heading === 'Returns and order problems')
+				?.paragraphs
 		).toContain(
-			'For an eligible EU withdrawal, unless we have offered to collect the goods, you must send them back or hand them over to us or our designated recipient in Sweden without undue delay and no later than 14 days after notifying us. You are responsible for the direct return postage. We recommend using a tracked service. Please contact us before sending the parcel so we can provide complete return instructions. Not contacting us first does not invalidate an otherwise timely statutory return or limit your right to notify us of withdrawal by another clear statement.'
+			'Eligible EU consumers can notify us of withdrawal within the legal deadline. After notifying us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping. Contact us first for the complete return instructions. You may still notify us by any other clear statement.'
 		);
 		expect(terms).not.toContain('24-hour');
 	});
@@ -177,9 +199,10 @@ describe('configured policy documents', () => {
 		const about = createPolicyDocuments(config).about;
 		const aboutText = text(about);
 
-		expect(aboutText).toContain('Official Svelte Society merchandise');
-		expect(aboutText).toContain('community identity');
+		expect(aboutText).toContain('Official Svelte Society merchandise, made for the community');
+		expect(aboutText).toContain('wear the Svelte mark');
 		expect(aboutText.toLowerCase()).not.toContain('fund');
+		expect(about.effectiveDate).toBeUndefined();
 		expect(about.sections).toHaveLength(1);
 		expect(about.sections[0].paragraphs).toHaveLength(1);
 	});

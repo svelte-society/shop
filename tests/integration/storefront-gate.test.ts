@@ -127,7 +127,7 @@ describe('disabled storefront request gate', () => {
 		['/returns', 'Returns and withdrawal'],
 		['/privacy', 'Privacy'],
 		['/terms', 'Terms of sale'],
-		['/about', 'About the Society Shop']
+		['/about', 'About the Shop']
 	])(
 		'serves configured information route %s while the storefront is disabled',
 		async (path, title) => {

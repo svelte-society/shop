@@ -116,10 +116,11 @@ test('footer and Returns page expose the online notice without replacing damaged
 		.getAttribute('href');
 	expect(new URL(withdrawalHref ?? '', page.url()).pathname).toBe('/withdraw');
 	await page.goto(`${withdrawalOrigin}/returns`);
-	await expect(
-		page.getByRole('link', { name: 'Submit a withdrawal notice' }).first()
-	).toHaveAttribute('href', /\/withdraw$/u);
-	await expect(page.getByRole('heading', { name: 'Damaged or incorrect item' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'Use the withdrawal form' }).first()).toHaveAttribute(
+		'href',
+		/\/withdraw$/u
+	);
+	await expect(page.getByRole('heading', { name: 'Damaged or incorrect items' })).toBeVisible();
 });
 
 test('withdrawal layout fits the configured viewport and respects reduced motion', async ({

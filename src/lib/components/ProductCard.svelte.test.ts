@@ -57,4 +57,19 @@ describe('ProductCard analytics', () => {
 		render(ProductCard, { product: pricePublicProduct(product, pricingDestination(country)) });
 		await expect.element(page.getByText(amount)).toBeVisible();
 	});
+
+	it('reveals an already-cached product image on mount', async () => {
+		const complete = vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+
+		try {
+			render(ProductCard, { product: pricePublicProduct(product, destination) });
+
+			expect(
+				page.getByRole('img', { name: 'Community Tee' }).element().parentElement
+			).toHaveAttribute('aria-busy', 'false');
+			expect(page.getByText('Loading product image…').query()).toBeNull();
+		} finally {
+			complete.mockRestore();
+		}
+	});
 });

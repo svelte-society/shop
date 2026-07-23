@@ -63,6 +63,12 @@ describe('DestinationPicker', () => {
 		await expect
 			.element(page.getByRole('heading', { name: 'Choose delivery country' }))
 			.toBeVisible();
+		await expect
+			.element(page.getByText('Prices and availability update for your delivery country.'))
+			.toBeVisible();
+		expect(
+			page.getByText('We’ll show your local tax treatment before checkout.').query()
+		).toBeNull();
 		await expect.element(page.getByRole('group', { name: 'EU countries' })).toBeVisible();
 		await expect.element(page.getByRole('group', { name: 'Asia countries' })).toBeVisible();
 		await expect.element(page.getByRole('radio', { name: 'Sweden' })).toBeChecked();

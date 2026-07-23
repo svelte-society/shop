@@ -3,20 +3,31 @@
 	import type { PolicyDocument } from '$lib/content/policies';
 
 	let { document }: { document: PolicyDocument } = $props();
+	let lastUpdated = $derived(document.effectiveDate ? formatDate(document.effectiveDate) : null);
 
 	const informationPages = [
 		{ label: 'Shipping', href: '/shipping' },
 		{ label: 'Returns', href: '/returns' },
-		{ label: 'Submit a withdrawal notice', href: '/withdraw' },
+		{ label: 'Withdrawal form', href: '/withdraw' },
 		{ label: 'Privacy', href: '/privacy' },
 		{ label: 'Terms', href: '/terms' },
 		{ label: 'About', href: '/about' }
 	] as const;
+
+	function formatDate(value: string): string {
+		const [year, month, day] = value.split('-').map(Number);
+		return new Intl.DateTimeFormat('en-GB', {
+			day: 'numeric',
+			month: 'long',
+			year: 'numeric',
+			timeZone: 'UTC'
+		}).format(new Date(Date.UTC(year, month - 1, day)));
+	}
 </script>
 
 <svelte:head>
 	<title>{document.title} — Svelte Society Shop</title>
-	<meta name="description" content={`${document.title} information for the Svelte Society Shop.`} />
+	<meta name="description" content={document.summary} />
 </svelte:head>
 
 <main class="policy-shell">
@@ -33,7 +44,12 @@
 		<header>
 			<p class="eyebrow">Svelte Society Shop</p>
 			<h1 id="policy-title">{document.title}</h1>
-			<p class="effective-date">Effective {document.effectiveDate}</p>
+			<p class="summary">{document.summary}</p>
+			{#if lastUpdated}
+				<p class="effective-date">
+					<time datetime={document.effectiveDate}>Last updated {lastUpdated}</time>
+				</p>
+			{/if}
 		</header>
 
 		<div class="policy-sections">
@@ -130,6 +146,14 @@
 		font-weight: 800;
 		line-height: 0.94;
 		letter-spacing: -0.055em;
+	}
+
+	.summary {
+		max-width: 40rem;
+		margin-bottom: 1rem;
+		color: var(--color-slate-700);
+		font-size: clamp(1rem, 2vw, 1.2rem);
+		line-height: 1.65;
 	}
 
 	.effective-date {

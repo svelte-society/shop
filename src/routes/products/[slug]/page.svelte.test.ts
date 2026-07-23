@@ -52,7 +52,11 @@ const communityTee: PublicCatalogProduct = {
 
 function renderCommunityTee(): void {
 	render(ProductPage, {
-		data: { product: communityTee, catalogUnavailable: false, pricingDestination: pricingDestination('SE') },
+		data: {
+			product: communityTee,
+			catalogUnavailable: false,
+			pricingDestination: pricingDestination('SE')
+		},
 		params: { slug: communityTee.slug },
 		form: null
 	});
@@ -108,26 +112,24 @@ describe('product details', () => {
 		renderCommunityTee();
 
 		expect(page.getByRole('heading', { name: 'Materials' }).element()).toBeTruthy();
-		expect(page.getByRole('heading', { name: 'Fit' }).element()).toBeTruthy();
-		expect(page.getByRole('heading', { name: 'Care' }).element()).toBeTruthy();
+		expect(page.getByRole('heading', { name: 'Fit', exact: true }).element()).toBeTruthy();
+		expect(page.getByRole('heading', { name: 'Care', exact: true }).element()).toBeTruthy();
 		expect(page.getByRole('heading', { name: 'Delivery' }).query()).toBeNull();
 		expect(page.getByRole('heading', { name: 'Returns' }).query()).toBeNull();
 	});
 
-	it('projects the item price and import-charge copy for the selected Asian destination', async () => {
+	it('projects the item price without repeating destination tax guidance', async () => {
 		render(ProductPage, {
-			data: { product: communityTee, catalogUnavailable: false, pricingDestination: pricingDestination('JP') },
+			data: {
+				product: communityTee,
+				catalogUnavailable: false,
+				pricingDestination: pricingDestination('JP')
+			},
 			params: { slug: communityTee.slug },
 			form: null
 		});
 
 		await expect.element(page.getByText('€20.00')).toBeVisible();
-		await expect
-			.element(
-				page.getByText(
-					'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
-				)
-			)
-			.toBeVisible();
+		expect(document.body.textContent).not.toContain('Import VAT');
 	});
 });

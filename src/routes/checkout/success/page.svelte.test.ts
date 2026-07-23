@@ -44,7 +44,7 @@ describe('verified checkout success page', () => {
 		await expect
 			.element(
 				page.getByText(
-					"Stripe is emailing your receipt and invoice now. Your order is queued for fulfillment review. We'll email again when it ships.",
+					"Stripe is emailing your receipt and invoice now. We've received your order and will email you again when it ships.",
 					{ exact: true }
 				)
 			)

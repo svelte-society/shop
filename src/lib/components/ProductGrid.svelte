@@ -1,15 +1,14 @@
 <script lang="ts">
 	import type { PublicCatalogProduct } from '$lib/domain/catalog';
-	import {
-		pricePublicProduct,
-		type PricingDestination
-	} from '$lib/domain/pricing';
+	import { pricePublicProduct, type PricingDestination } from '$lib/domain/pricing';
 	import ProductCard from './ProductCard.svelte';
 
 	type Props = { products: PublicCatalogProduct[]; destination: PricingDestination };
 
 	let { products, destination }: Props = $props();
-	let pricedProducts = $derived(products.map((product) => pricePublicProduct(product, destination)));
+	let pricedProducts = $derived(
+		products.map((product) => pricePublicProduct(product, destination))
+	);
 	let apparel = $derived(pricedProducts.filter((product) => product.category === 'apparel'));
 	let accessories = $derived(pricedProducts.filter((product) => product.category === 'accessory'));
 	let mixedCollection = $derived(apparel.length > 0 && accessories.length > 0);

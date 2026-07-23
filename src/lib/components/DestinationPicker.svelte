@@ -121,9 +121,9 @@
 		<dialog bind:this={dialog} aria-labelledby="destination-title" onclose={close}>
 			<form method="POST" action="/preferences/destination" onsubmit={submit} aria-busy={pending}>
 				<header class="dialog-heading">
-					<p class="eyebrow">Pricing destination</p>
+					<p class="eyebrow">Delivery</p>
 					<h2 id="destination-title">Choose delivery country</h2>
-					<p>We’ll show your local tax treatment before checkout.</p>
+					<p>Prices and availability update for your delivery country.</p>
 				</header>
 
 				<label class="search-field">

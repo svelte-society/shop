@@ -73,7 +73,10 @@ function contrast(foreground: string, background: string): number {
 
 describe('storefront contrast semantics', () => {
 	it('keeps action text and small orange labels at 4.5:1 or better', () => {
-		render(ProductPurchase, { product: pricedProduct, destination, cartController: createCart(isolatedStorage) });
+		render(ProductPurchase, {
+			product: pricedProduct,
+			cartController: createCart(isolatedStorage)
+		});
 		render(ProductCard, { product: pricedProduct });
 
 		const buttonStyle = getComputedStyle(

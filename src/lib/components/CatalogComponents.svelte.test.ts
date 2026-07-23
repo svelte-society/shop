@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { PublicCatalogProduct } from '$lib/domain/catalog';
@@ -74,6 +74,21 @@ describe('catalog display components', () => {
 		await expect
 			.element(page.getByRole('img', { name: 'Society Tee, image 2 of 2' }))
 			.toBeVisible();
+	});
+
+	it('reveals a product image that is already cached when the component mounts', async () => {
+		const complete = vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+
+		try {
+			render(ProductGallery, { name: apparel.name, images: apparel.images });
+
+			expect(
+				page.getByRole('img', { name: 'Society Tee, image 1 of 2' }).element().parentElement
+			).toHaveAttribute('aria-busy', 'false');
+			expect(page.getByText('Loading product image…').query()).toBeNull();
+		} finally {
+			complete.mockRestore();
+		}
 	});
 
 	it('renders and selects duplicate image URLs by their position', async () => {

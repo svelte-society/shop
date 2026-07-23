@@ -35,17 +35,14 @@
 				<p class="eyebrow">{data.product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 				<h1>{data.product.name}</h1>
 				<p class="description">{data.product.description}</p>
-				{#if pricedProduct}<ProductPurchase
-						product={pricedProduct}
-						destination={data.pricingDestination}
-					/>{/if}
+				{#if pricedProduct}<ProductPurchase product={pricedProduct} />{/if}
 			</div>
 		</div>
 
 		<section class="product-details" aria-labelledby="details-title">
 			<header>
 				<p class="eyebrow">Product details</p>
-				<h2 id="details-title">Made to be used.</h2>
+				<h2 id="details-title">Fit, fabric, and care.</h2>
 			</header>
 			<div class="details-content">
 				<div class="details-grid">

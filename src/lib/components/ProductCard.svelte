@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { track } from '$lib/analytics/events';
 	import type { PricedPublicCatalogProduct } from '$lib/domain/pricing';
@@ -8,9 +9,14 @@
 
 	let { product }: Props = $props();
 	let imageReady = $state(false);
+	let productImage = $state<HTMLImageElement | null>(null);
 	let lowestPrice = $derived(
 		Math.min(...product.variants.map((variant) => variant.displayPrice.grossCents))
 	);
+
+	onMount(() => {
+		if (productImage?.complete) imageReady = true;
+	});
 </script>
 
 <article class="product-card">
@@ -20,6 +26,7 @@
 	>
 		<div class="product-frame" aria-busy={!imageReady}>
 			<img
+				bind:this={productImage}
 				src={product.images[0]}
 				alt={product.name}
 				loading="lazy"

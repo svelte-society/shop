@@ -1,9 +1,12 @@
 <script lang="ts">
+	import { onMount, tick } from 'svelte';
+
 	type Props = { name: string; images: string[] };
 
 	let { name, images }: Props = $props();
 	let selectedIndex = $state(0);
 	let imageReady = $state(false);
+	let mainImage = $state<HTMLImageElement | null>(null);
 	let activeGalleryIdentity = $state('');
 	let galleryIdentity = $derived(`${name}:${images.join('|')}`);
 	let selectedImage = $derived(images[selectedIndex] ?? images[0]);
@@ -15,17 +18,31 @@
 		activeGalleryIdentity = identity;
 		selectedIndex = 0;
 		imageReady = false;
+		void revealCachedImage();
 	});
+
+	onMount(revealIfComplete);
+
+	function revealIfComplete(): void {
+		if (mainImage?.complete) imageReady = true;
+	}
+
+	async function revealCachedImage(): Promise<void> {
+		await tick();
+		revealIfComplete();
+	}
 
 	function selectImage(index: number): void {
 		selectedIndex = index;
 		imageReady = false;
+		void revealCachedImage();
 	}
 </script>
 
 <div class="gallery">
 	<div class="main-frame" aria-busy={!imageReady}>
 		<img
+			bind:this={mainImage}
 			src={selectedImage}
 			alt={`${name}, image ${selectedIndex + 1} of ${images.length}`}
 			onload={() => (imageReady = true)}

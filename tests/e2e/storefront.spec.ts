@@ -8,9 +8,22 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 
 	await expect(page).toHaveTitle('Svelte Society Shop — Official Community Merch');
 	await expect(
-		page.getByRole('heading', { level: 1, name: 'Made for people who make with Svelte.' })
+		page.getByRole('heading', { level: 1, name: 'Wear Svelte. Support the community.' })
 	).toBeVisible();
-	await expect(page.getByText('Free shipping when you pick two.', { exact: true })).toBeVisible();
+	await expect(
+		page.getByText('Every purchase supports Svelte Society.', { exact: true })
+	).toBeVisible();
+	await expect(
+		page.getByRole('heading', { level: 2, name: 'Your purchase supports' })
+	).toBeVisible();
+	for (const supportedWork of [
+		'Community events',
+		'Shared resources',
+		'Open-source projects',
+		'Developer connections'
+	]) {
+		await expect(page.getByText(supportedWork, { exact: true })).toBeVisible();
+	}
 	await expect(page.getByText(/€11\.71 for one item/)).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Apparel' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Accessories' })).toBeVisible();
@@ -200,7 +213,7 @@ test('disabled storefront keeps every information page and footer destination av
 		['/returns', 'Returns and withdrawal'],
 		['/privacy', 'Privacy'],
 		['/terms', 'Terms of sale'],
-		['/about', 'About the Society Shop']
+		['/about', 'About the Shop']
 	] as const;
 
 	for (const [path, heading] of pages) {

@@ -38,10 +38,11 @@ describe('CartSummary checkout action', () => {
 		await expect
 			.element(
 				page.getByText(
-					'Includes 19% Germany VAT. Exact tax is confirmed from your delivery address at checkout.'
+					'Estimated for delivery to Germany. Your delivery address confirms VAT and the final total at checkout.'
 				)
 			)
 			.toBeVisible();
+		expect(document.body.textContent).not.toContain('Exact tax is confirmed');
 		await expect.element(page.getByText('€23.80')).toBeVisible();
 		await expect.element(page.getByText('€9.52')).toBeVisible();
 		await expect.element(page.getByText('€5.32')).toBeVisible();
