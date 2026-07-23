@@ -18,23 +18,32 @@
 	<title>Svelte Society Shop — Official Community Merch</title>
 	<meta
 		name="description"
-		content="Official Svelte Society apparel and accessories for Svelte developers. Shipping across the EU except Slovenia and to selected destinations in Asia. Free shipping on orders of two or more items."
+		content="Official Svelte Society merchandise that supports continued community work across the Svelte ecosystem. Free shipping on two or more items."
 	/>
 </svelte:head>
 
 <main>
 	<section class="hero" aria-labelledby="hero-title">
 		<div class="hero-copy">
-			<p class="eyebrow">Society Shop</p>
-			<h1 id="hero-title">Made for people who make with Svelte.</h1>
-			<p>Official Svelte Society merch for meetups, desks, and wherever the community gathers.</p>
+			<p class="eyebrow">Svelte Society Shop</p>
+			<h1 id="hero-title">Wear Svelte. Support the community.</h1>
+			<p>
+				Every purchase supports Svelte Society’s continued work across the ecosystem—organizing
+				community events, sharing useful resources, and helping Svelte developers connect.
+			</p>
 			<a class="primary-link" href={resolve('/#collection')}>Shop the collection</a>
 		</div>
 
-		<div class="shipping-signature" aria-label="Two or more items ship free">
-			<strong>2</strong>
-			<span>items<br />ship free</span>
-		</div>
+		<aside class="support-panel" aria-labelledby="support-title">
+			<p class="eyebrow">Community-powered</p>
+			<h2 id="support-title">Your purchase supports</h2>
+			<ul>
+				<li>Community events</li>
+				<li>Shared resources</li>
+				<li>Open-source projects</li>
+				<li>Developer connections</li>
+			</ul>
+		</aside>
 	</section>
 
 	<section id="collection" class="collection" aria-labelledby="collection-title">
@@ -43,7 +52,7 @@
 				<p class="eyebrow">The collection</p>
 				<h2 id="collection-title">Svelte, out in the world.</h2>
 			</div>
-			<p>Apparel and accessories made to move from your desk to the next meetup.</p>
+			<p>Community merch made to move from your desk to the next meetup.</p>
 		</header>
 
 		{#if data.catalogUnavailable}
@@ -59,7 +68,7 @@
 	<section class="commerce" aria-labelledby="commerce-title">
 		<header>
 			<p class="eyebrow">Good to know</p>
-			<h2 id="commerce-title">Simple from shelf to doorstep.</h2>
+			<h2 id="commerce-title">From cart to doorstep.</h2>
 		</header>
 		<div class="commerce-grid">
 			<article>
@@ -87,12 +96,6 @@
 			</article>
 		</div>
 	</section>
-
-	<section class="final-cta" aria-labelledby="final-cta-title">
-		<p class="eyebrow">Meetup ready</p>
-		<h2 id="final-cta-title">Find your piece of the Society.</h2>
-		<a class="primary-link" href={resolve('/#collection')}>Shop the collection</a>
-	</section>
 </main>
 
 <style>
@@ -102,16 +105,15 @@
 
 	.hero,
 	.collection,
-	.commerce,
-	.final-cta {
+	.commerce {
 		width: min(76rem, calc(100% - 2rem));
 		margin-inline: auto;
 	}
 
 	.hero {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(14rem, 22rem);
-		gap: clamp(2rem, 8vw, 7rem);
+		grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem);
+		gap: clamp(2rem, 7vw, 6rem);
 		align-items: center;
 		min-height: clamp(28rem, 64vh, 39rem);
 		padding-block: clamp(3.5rem, 9vw, 7rem);
@@ -174,11 +176,10 @@
 		background: var(--color-svelte-500);
 	}
 
-	.shipping-signature {
-		display: grid;
-		aspect-ratio: 4 / 5;
-		grid-template-columns: 1fr auto;
-		align-items: end;
+	.support-panel {
+		display: flex;
+		min-height: clamp(24rem, 42vw, 31rem);
+		flex-direction: column;
 		border-radius: 1rem;
 		padding: clamp(1.25rem, 4vw, 2rem);
 		background: var(--color-ink);
@@ -186,21 +187,32 @@
 		box-shadow: 0.9rem 0.9rem 0 var(--color-svelte-100);
 	}
 
-	.shipping-signature strong {
-		align-self: center;
+	.support-panel .eyebrow {
 		color: var(--color-svelte-500);
-		font-size: clamp(7rem, 19vw, 13rem);
-		font-weight: 800;
-		line-height: 0.7;
-		letter-spacing: -0.08em;
 	}
 
-	.shipping-signature span {
-		font-size: clamp(0.9rem, 2vw, 1.1rem);
+	.support-panel h2 {
+		max-width: 8ch;
+		margin-bottom: 2rem;
+		font-size: clamp(2.2rem, 5vw, 3.8rem);
+		line-height: 0.95;
+		letter-spacing: -0.05em;
+	}
+
+	.support-panel ul {
+		display: grid;
+		margin: auto 0 0;
+		padding: 0;
+		border-top: 1px solid color-mix(in oklch, var(--color-white) 24%, transparent);
+		list-style: none;
+	}
+
+	.support-panel li {
+		padding-block: 0.8rem;
+		border-bottom: 1px solid color-mix(in oklch, var(--color-white) 24%, transparent);
+		font-size: clamp(0.9rem, 2vw, 1rem);
 		font-weight: 800;
-		line-height: 1.05;
-		text-align: right;
-		text-transform: uppercase;
+		line-height: 1.25;
 	}
 
 	.collection,
@@ -221,8 +233,7 @@
 	}
 
 	.section-heading h2,
-	.commerce h2,
-	.final-cta h2 {
+	.commerce h2 {
 		margin-bottom: 0;
 		font-size: clamp(2.1rem, 5vw, 4.2rem);
 		line-height: 0.98;
@@ -257,7 +268,7 @@
 
 	.commerce-grid {
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		border-block: 1px solid color-mix(in oklch, var(--color-svelte-300) 42%, var(--color-border));
 	}
 
@@ -287,21 +298,9 @@
 		text-underline-offset: 0.2rem;
 	}
 
-	.final-cta {
-		display: grid;
-		justify-items: center;
-		padding-block: clamp(4.5rem, 11vw, 8rem);
-		text-align: center;
-	}
-
-	.final-cta h2 {
-		max-width: 44rem;
-		margin-bottom: 1.75rem;
-	}
-
 	@media (max-width: 52rem) {
 		.hero {
-			grid-template-columns: minmax(0, 1fr) minmax(10rem, 15rem);
+			grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);
 			gap: 2rem;
 		}
 
@@ -325,9 +324,8 @@
 			min-height: auto;
 		}
 
-		.shipping-signature {
-			width: min(100%, 15rem);
-			justify-self: end;
+		.support-panel {
+			min-height: auto;
 		}
 
 		.section-heading {
