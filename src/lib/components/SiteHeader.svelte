@@ -121,9 +121,10 @@
 
 	@media (max-width: 44rem) {
 		.header-inner {
-			flex-wrap: wrap;
-			gap: 0.35rem 1rem;
-			padding-block: 0.75rem;
+			width: min(76rem, calc(100% - 1rem));
+			flex-wrap: nowrap;
+			gap: 0.35rem;
+			padding-block: 0.5rem;
 		}
 
 		.brand-link img {
@@ -131,13 +132,11 @@
 		}
 
 		nav {
-			width: 100%;
-			flex-wrap: wrap;
-			justify-content: center;
+			flex-wrap: nowrap;
 		}
 
 		nav a {
-			padding-inline: 0.45rem;
+			padding-inline: 0.35rem;
 		}
 	}
 </style>

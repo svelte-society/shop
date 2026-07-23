@@ -55,6 +55,21 @@ for (const viewport of [
 	});
 }
 
+test('mobile header keeps the brand and primary navigation on one row', async ({ page }) => {
+	await page.setViewportSize({ width: 320, height: 720 });
+	await page.goto('/');
+
+	const brandBox = await page.getByRole('link', { name: 'Society Shop home' }).boundingBox();
+	const navigationBox = await page
+		.getByRole('navigation', { name: 'Primary navigation' })
+		.boundingBox();
+
+	expect(brandBox).not.toBeNull();
+	expect(navigationBox).not.toBeNull();
+	expect(Math.abs((brandBox?.y ?? 0) - (navigationBox?.y ?? 0))).toBeLessThanOrEqual(2);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+});
+
 test('country picker keeps its actions visible while only the country list scrolls', async ({
 	page
 }) => {
