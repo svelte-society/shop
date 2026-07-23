@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import '../app.css';
 	import OpeningSoon from '$lib/components/OpeningSoon.svelte';
-	import ShippingStrip from '$lib/components/ShippingStrip.svelte';
+	import AnnouncementStrip from '$lib/components/AnnouncementStrip.svelte';
 	import SiteFooter from '$lib/components/SiteFooter.svelte';
 	import SiteHeader from '$lib/components/SiteHeader.svelte';
 	import Umami from '$lib/components/Umami.svelte';
@@ -23,7 +23,7 @@
 {/if}
 
 <a class="skip-link" href="#main-content" tabindex="0">Skip to content</a>
-<ShippingStrip />
+<AnnouncementStrip />
 <SiteHeader
 	destination={data.pricingDestination}
 	destinations={data.destinationOptions}

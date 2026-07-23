@@ -1,9 +1,9 @@
-<div class="shipping-strip">
-	<p>Free shipping when you pick two.</p>
+<div class="announcement-strip">
+	<p>Every purchase supports Svelte Society.</p>
 </div>
 
 <style>
-	.shipping-strip {
+	.announcement-strip {
 		display: grid;
 		min-height: 2.5rem;
 		place-items: center;
