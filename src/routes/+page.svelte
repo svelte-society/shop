@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import CatalogUnavailable from '$lib/components/CatalogUnavailable.svelte';
 	import ProductGrid from '$lib/components/ProductGrid.svelte';
 	import { displayPriceForDestination } from '$lib/domain/pricing';
@@ -23,36 +22,10 @@
 </svelte:head>
 
 <main>
-	<section class="hero" aria-labelledby="hero-title">
-		<div class="hero-copy">
+	<section id="collection" class="collection collection-first" aria-labelledby="collection-title">
+		<header class="collection-heading">
 			<p class="eyebrow">Svelte Society Shop</p>
-			<h1 id="hero-title">Wear Svelte. Support the community.</h1>
-			<p>
-				Every purchase supports Svelte Society’s continued work across the ecosystem—organizing
-				community events, sharing useful resources, and helping Svelte developers connect.
-			</p>
-			<a class="primary-link" href={resolve('/#collection')}>Shop the collection</a>
-		</div>
-
-		<aside class="support-panel" aria-labelledby="support-title">
-			<p class="eyebrow">Community-powered</p>
-			<h2 id="support-title">Your purchase supports</h2>
-			<ul>
-				<li>Community events</li>
-				<li>Shared resources</li>
-				<li>Open-source projects</li>
-				<li>Developer connections</li>
-			</ul>
-		</aside>
-	</section>
-
-	<section id="collection" class="collection" aria-labelledby="collection-title">
-		<header class="section-heading">
-			<div>
-				<p class="eyebrow">The collection</p>
-				<h2 id="collection-title">Svelte, out in the world.</h2>
-			</div>
-			<p>Community merch made to move from your desk to the next meetup.</p>
+			<h1 id="collection-title">Shop the collection.</h1>
 		</header>
 
 		{#if data.catalogUnavailable}
@@ -63,6 +36,27 @@
 			{/if}
 			<ProductGrid products={data.products} destination={data.pricingDestination} />
 		{/if}
+	</section>
+
+	<section class="mission" aria-labelledby="mission-title">
+		<div class="mission-copy">
+			<p class="eyebrow">Community-powered</p>
+			<h2 id="mission-title">Wear Svelte. Support the community.</h2>
+			<p>
+				Every purchase supports Svelte Society’s continued work across the ecosystem—organizing
+				community events, sharing useful resources, and helping Svelte developers connect.
+			</p>
+		</div>
+
+		<aside class="support-panel" aria-labelledby="support-title">
+			<h2 id="support-title">Your purchase supports</h2>
+			<ul>
+				<li>Community events</li>
+				<li>Shared resources</li>
+				<li>Open-source projects</li>
+				<li>Developer connections</li>
+			</ul>
+		</aside>
 	</section>
 
 	<section class="commerce" aria-labelledby="commerce-title">
@@ -103,23 +97,23 @@
 		color: var(--color-ink);
 	}
 
-	.hero,
+	.mission,
 	.collection,
 	.commerce {
 		width: min(76rem, calc(100% - 2rem));
 		margin-inline: auto;
 	}
 
-	.hero {
+	.mission {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem);
 		gap: clamp(2rem, 7vw, 6rem);
 		align-items: center;
-		min-height: clamp(28rem, 64vh, 39rem);
 		padding-block: clamp(3.5rem, 9vw, 7rem);
+		border-top: 1px solid var(--color-border);
 	}
 
-	.hero-copy {
+	.mission-copy {
 		max-width: 50rem;
 	}
 
@@ -140,40 +134,27 @@
 	}
 
 	h1 {
-		max-width: 50rem;
-		margin-bottom: 1.25rem;
-		font-size: clamp(3rem, 8.3vw, 6.5rem);
+		margin-bottom: 0;
+		font-size: clamp(2.35rem, 6vw, 4.8rem);
 		font-weight: 800;
-		line-height: 0.91;
-		letter-spacing: -0.065em;
+		line-height: 0.95;
+		letter-spacing: -0.055em;
 	}
 
-	.hero-copy > p:not(.eyebrow) {
+	.mission-copy h2 {
+		max-width: 13ch;
+		margin-bottom: 1.25rem;
+		font-size: clamp(2.5rem, 6vw, 5.2rem);
+		line-height: 0.94;
+		letter-spacing: -0.06em;
+	}
+
+	.mission-copy > p:not(.eyebrow) {
 		max-width: 42rem;
-		margin-bottom: 1.75rem;
+		margin-bottom: 0;
 		color: var(--color-slate-700);
 		font-size: clamp(1.05rem, 2vw, 1.3rem);
 		line-height: 1.65;
-	}
-
-	.primary-link {
-		display: inline-flex;
-		min-height: 2.75rem;
-		align-items: center;
-		border-radius: 0.65rem;
-		padding: 0.7rem 1.05rem;
-		background: var(--color-svelte-900);
-		color: var(--color-ink);
-		font-weight: 800;
-		text-decoration: none;
-		transition:
-			transform 140ms ease,
-			background 140ms ease;
-	}
-
-	.primary-link:hover {
-		transform: translateY(-1px);
-		background: var(--color-svelte-500);
 	}
 
 	.support-panel {
@@ -185,10 +166,6 @@
 		background: var(--color-ink);
 		color: var(--color-white);
 		box-shadow: 0.9rem 0.9rem 0 var(--color-svelte-100);
-	}
-
-	.support-panel .eyebrow {
-		color: var(--color-svelte-500);
 	}
 
 	.support-panel h2 {
@@ -220,31 +197,19 @@
 		padding-block: clamp(4rem, 9vw, 7rem);
 	}
 
-	.collection {
-		border-top: 1px solid var(--color-border);
+	.collection-first {
+		padding-top: clamp(1.5rem, 4vw, 3rem);
 	}
 
-	.section-heading {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem);
-		gap: 2rem;
-		align-items: end;
-		margin-bottom: clamp(2.5rem, 6vw, 4.5rem);
+	.collection-heading {
+		margin-bottom: clamp(1.25rem, 3vw, 2rem);
 	}
 
-	.section-heading h2,
 	.commerce h2 {
 		margin-bottom: 0;
 		font-size: clamp(2.1rem, 5vw, 4.2rem);
 		line-height: 0.98;
 		letter-spacing: -0.05em;
-	}
-
-	.section-heading > p {
-		margin-bottom: 0;
-		color: var(--color-text-muted);
-		font-size: 1.05rem;
-		line-height: 1.65;
 	}
 
 	.stale-note {
@@ -299,7 +264,7 @@
 	}
 
 	@media (max-width: 52rem) {
-		.hero {
+		.mission {
 			grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);
 			gap: 2rem;
 		}
@@ -319,18 +284,12 @@
 	}
 
 	@media (max-width: 40rem) {
-		.hero {
+		.mission {
 			grid-template-columns: 1fr;
-			min-height: auto;
 		}
 
 		.support-panel {
 			min-height: auto;
-		}
-
-		.section-heading {
-			grid-template-columns: 1fr;
-			gap: 1rem;
 		}
 	}
 
