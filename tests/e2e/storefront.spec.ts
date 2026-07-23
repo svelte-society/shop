@@ -14,6 +14,16 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 	await expect(page.getByText(/€11\.71 for one item/)).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Apparel' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Accessories' })).toBeVisible();
+	const destinationTrigger = page.getByRole('button', {
+		name: 'Choose delivery country, currently Sweden'
+	});
+	await expect(destinationTrigger).toBeVisible();
+	await expect(destinationTrigger).toHaveAttribute('title', 'Deliver to Sweden');
+	await expect(destinationTrigger).toContainText('🇸🇪');
+	await expect(page.getByRole('heading', { level: 3, name: 'Shipping' })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 3, name: 'Regions' })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 3, name: 'Support' })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 3, name: 'Tax' })).toHaveCount(0);
 	await expect(page.getByRole('link', { name: /Community Tee/ })).toHaveAttribute(
 		'href',
 		'/products/community-tee'

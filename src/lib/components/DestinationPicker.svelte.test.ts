@@ -54,7 +54,9 @@ describe('DestinationPicker', () => {
 		const trigger = page.getByRole('button', {
 			name: 'Choose delivery country, currently Sweden'
 		});
-		await expect.element(trigger).toHaveTextContent('Deliver to: Sweden');
+		await expect.element(trigger).toHaveAttribute('title', 'Deliver to Sweden');
+		expect(trigger.element().textContent?.replace(/\s/g, '')).toBe('🇸🇪⌄');
+		await expect.element(trigger).not.toHaveTextContent('Deliver to: Sweden');
 		await trigger.click();
 
 		await expect.element(page.getByRole('dialog')).toBeVisible();

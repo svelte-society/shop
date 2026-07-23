@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import CatalogUnavailable from '$lib/components/CatalogUnavailable.svelte';
 	import ProductGrid from '$lib/components/ProductGrid.svelte';
-	import { displayPriceForDestination, pricingDisclosure } from '$lib/domain/pricing';
+	import { displayPriceForDestination } from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
 	import type { PageProps } from './$types';
 
@@ -76,10 +76,6 @@
 			<article>
 				<h3>Regions</h3>
 				<p>Shipping across the EU, except Slovenia, and to selected destinations in Asia.</p>
-			</article>
-			<article>
-				<h3>Tax</h3>
-				<p>{pricingDisclosure(data.pricingDestination)}</p>
 			</article>
 			<article>
 				<h3>Support</h3>

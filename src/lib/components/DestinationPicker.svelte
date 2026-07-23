@@ -25,10 +25,17 @@
 	let asianDestinations = $derived(destinations.filter((option) => option.region === 'asia'));
 	let filteredEuropeanDestinations = $derived(filtered.filter((option) => option.region === 'eu'));
 	let filteredAsianDestinations = $derived(filtered.filter((option) => option.region === 'asia'));
+	let destinationFlag = $derived(countryFlag(destination.countryCode));
 
 	$effect(() => {
 		hydrated = true;
 	});
+
+	function countryFlag(countryCode: string): string {
+		return [...countryCode.toUpperCase()]
+			.map((character) => String.fromCodePoint(127397 + character.charCodeAt(0)))
+			.join('');
+	}
 
 	function matchesQuery(option: DestinationOption): boolean {
 		return filtered.includes(option);
@@ -102,11 +109,11 @@
 			class="destination-trigger"
 			type="button"
 			aria-label={`Choose delivery country, currently ${destination.displayName}`}
+			title={`Deliver to ${destination.displayName}`}
 			onclick={open}
 		>
-			<span class="trigger-label">Deliver to:</span>
-			<span>{destination.displayName}</span>
-			<span aria-hidden="true">⌄</span>
+			<span class="destination-flag" aria-hidden="true">{destinationFlag}</span>
+			<span class="destination-chevron" aria-hidden="true">⌄</span>
 		</button>
 
 		<dialog bind:this={dialog} aria-labelledby="destination-title" onclose={close}>
@@ -200,11 +207,13 @@
 
 	.destination-trigger {
 		display: inline-flex;
+		width: 2.75rem;
 		align-items: center;
-		gap: 0.35rem;
+		justify-content: center;
+		gap: 0.1rem;
 		border: 1px solid transparent;
 		border-radius: 0.5rem;
-		padding: 0.6rem clamp(0.55rem, 1.3vw, 0.85rem);
+		padding: 0.35rem;
 		background: transparent;
 		color: var(--color-ink);
 		font-size: 0.88rem;
@@ -217,11 +226,18 @@
 	}
 
 	.destination-trigger:hover {
-		text-decoration: underline;
+		border-color: var(--color-border);
+		background: var(--color-svelte-50);
 	}
 
-	.trigger-label {
-		color: var(--color-text-muted);
+	.destination-flag {
+		font-size: 1.25rem;
+		line-height: 1;
+	}
+
+	.destination-chevron {
+		font-size: 0.72rem;
+		line-height: 1;
 	}
 
 	dialog {
