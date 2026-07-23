@@ -24,9 +24,16 @@ const product: PublicCatalogProduct = {
 	sizeChart: null,
 	variants: [
 		{
+			priceId: 'price_tee_small_current',
+			label: 'S',
+			sortOrder: 10,
+			currency: 'eur',
+			unitAmountCents: 2_000
+		},
+		{
 			priceId: 'price_tee_medium_current',
 			label: 'M',
-			sortOrder: 10,
+			sortOrder: 20,
 			currency: 'eur',
 			unitAmountCents: 2_000
 		}
@@ -41,12 +48,22 @@ describe('ProductCard analytics', () => {
 
 	it('reports the product navigation once without product data', async () => {
 		render(ProductCard, { product: pricePublicProduct(product, destination) });
-		const link = page.getByRole('link', { name: /Community Tee/ });
+		const link = page.getByRole('link').first();
 		link.element().addEventListener('click', (event) => event.preventDefault());
 
 		await link.click();
 
 		expect(track.mock.calls).toEqual([['product_viewed']]);
+	});
+
+	it('keeps product navigation and quick add as separate card interactions', async () => {
+		render(ProductCard, { product: pricePublicProduct(product, destination) });
+
+		await expect.element(page.getByRole('button', { name: 'Add to cart' })).toBeVisible();
+		expect(page.getByRole('link').all()).toHaveLength(2);
+		expect(
+			document.querySelector('a button, button a, a [role="button"], button [role="link"]')
+		).toBeNull();
 	});
 
 	it.each([
@@ -65,7 +82,7 @@ describe('ProductCard analytics', () => {
 			render(ProductCard, { product: pricePublicProduct(product, destination) });
 
 			expect(
-				page.getByRole('img', { name: 'Community Tee' }).element().parentElement
+				page.getByRole('img', { name: 'Community Tee' }).element().closest('.product-frame')
 			).toHaveAttribute('aria-busy', 'false');
 			expect(page.getByText('Loading product image…').query()).toBeNull();
 		} finally {

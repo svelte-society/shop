@@ -4,6 +4,7 @@
 	import { track } from '$lib/analytics/events';
 	import type { PricedPublicCatalogProduct } from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
+	import ProductQuickAdd from './ProductQuickAdd.svelte';
 
 	type Props = { product: PricedPublicCatalogProduct };
 
@@ -20,11 +21,12 @@
 </script>
 
 <article class="product-card">
-	<a
-		href={resolve('/products/[slug]', { slug: product.slug })}
-		onclick={() => track('product_viewed')}
-	>
-		<div class="product-frame" aria-busy={!imageReady}>
+	<div class="product-frame" aria-busy={!imageReady}>
+		<a
+			class="image-link"
+			href={resolve('/products/[slug]', { slug: product.slug })}
+			onclick={() => track('product_viewed')}
+		>
 			<img
 				bind:this={productImage}
 				src={product.images[0]}
@@ -33,9 +35,16 @@
 				onload={() => (imageReady = true)}
 				onerror={() => (imageReady = true)}
 			/>
-			{#if !imageReady}<span class="image-loading">Loading product image…</span>{/if}
-		</div>
+		</a>
+		{#if !imageReady}<span class="image-loading">Loading product image…</span>{/if}
+		<ProductQuickAdd {product} />
+	</div>
 
+	<a
+		class="card-copy-link"
+		href={resolve('/products/[slug]', { slug: product.slug })}
+		onclick={() => track('product_viewed')}
+	>
 		<div class="card-copy">
 			<div>
 				<p class="category">{product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
@@ -55,10 +64,15 @@
 		border-top: 1px solid var(--color-border);
 	}
 
-	a {
+	.image-link,
+	.card-copy-link {
 		display: block;
 		border-radius: 0.8rem;
 		text-decoration: none;
+	}
+
+	.image-link {
+		height: 100%;
 	}
 
 	.product-frame {
@@ -98,6 +112,7 @@
 		color: var(--color-text-muted);
 		font-size: 0.8rem;
 		font-weight: 700;
+		pointer-events: none;
 	}
 
 	.card-copy {
@@ -135,7 +150,7 @@
 		white-space: nowrap;
 	}
 
-	a:hover img {
+	.image-link:hover img {
 		transform: scale(1.018);
 	}
 </style>
