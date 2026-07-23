@@ -165,15 +165,15 @@ describe('ProductQuickAdd', () => {
 		render(ProductQuickAdd, { product, cartController });
 		const addButton = page.getByRole('button', { name: 'Add to cart' });
 
-		expect(Number.parseFloat(getComputedStyle(addButton.element()).minHeight)).toBeGreaterThanOrEqual(
-			44
-		);
+		expect(
+			Number.parseFloat(getComputedStyle(addButton.element()).minHeight)
+		).toBeGreaterThanOrEqual(44);
 		await addButton.click();
 
 		for (const option of page.getByRole('group').getByRole('button').all()) {
-			expect(Number.parseFloat(getComputedStyle(option.element()).minHeight)).toBeGreaterThanOrEqual(
-				44
-			);
+			expect(
+				Number.parseFloat(getComputedStyle(option.element()).minHeight)
+			).toBeGreaterThanOrEqual(44);
 		}
 	});
 });

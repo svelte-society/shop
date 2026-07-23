@@ -7,9 +7,26 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 	await page.goto('/');
 
 	await expect(page).toHaveTitle('Svelte Society Shop — Official Community Merch');
-	await expect(
-		page.getByRole('heading', { level: 1, name: 'Wear Svelte. Support the community.' })
-	).toBeVisible();
+	const collectionHeading = page.getByRole('heading', { level: 1, name: 'Shop the collection.' });
+	const firstProductImage = page.getByRole('img', { name: 'Community Tee' });
+	const missionHeading = page.getByRole('heading', {
+		level: 2,
+		name: 'Wear Svelte. Support the community.'
+	});
+	await expect(collectionHeading).toBeVisible();
+	await expect(firstProductImage).toBeVisible();
+	await expect(missionHeading).toBeVisible();
+	const [collectionBox, productBox, missionBox] = await Promise.all([
+		collectionHeading.boundingBox(),
+		firstProductImage.boundingBox(),
+		missionHeading.boundingBox()
+	]);
+	expect(collectionBox).not.toBeNull();
+	expect(productBox).not.toBeNull();
+	expect(missionBox).not.toBeNull();
+	expect(productBox?.y ?? 0).toBeGreaterThan(collectionBox?.y ?? 0);
+	expect(productBox?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(page.viewportSize()?.height ?? 0);
+	expect(missionBox?.y ?? 0).toBeGreaterThan((productBox?.y ?? 0) + (productBox?.height ?? 0));
 	await expect(
 		page.getByText('Every purchase supports Svelte Society.', { exact: true })
 	).toBeVisible();
@@ -37,11 +54,11 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 	await expect(page.getByRole('heading', { level: 3, name: 'Regions' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Support' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Tax' })).toHaveCount(0);
-	await expect(page.getByRole('link', { name: /Community Tee/ })).toHaveAttribute(
+	await expect(page.getByRole('link', { name: /Community Tee/ }).first()).toHaveAttribute(
 		'href',
 		'/products/community-tee'
 	);
-	await expect(page.getByRole('link', { name: /Society Mug/ })).toHaveAttribute(
+	await expect(page.getByRole('link', { name: /Society Mug/ }).first()).toHaveAttribute(
 		'href',
 		'/products/society-mug'
 	);
@@ -51,6 +68,36 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 		() => document.documentElement.scrollWidth > window.innerWidth
 	);
 	expect(hasHorizontalOverflow).toBe(false);
+});
+
+test('homepage quick add selects apparel, adds an accessory, and persists the cart', async ({
+	page
+}) => {
+	await page.goto('/');
+	const teeCard = page.getByRole('article').filter({ hasText: 'Community Tee' });
+	const mugCard = page.getByRole('article').filter({ hasText: 'Society Mug' });
+
+	await teeCard.getByRole('button', { name: 'Add to cart' }).click();
+	await page
+		.getByRole('group', { name: 'Choose a size for Community Tee' })
+		.getByRole('button', { name: 'M', exact: true })
+		.click();
+
+	await expect(page).toHaveURL(/\/$/);
+	await expect(teeCard.getByRole('status', { name: 'Cart status' })).toHaveText(
+		'Community Tee, M added to cart.'
+	);
+	await expect(page.getByRole('link', { name: 'Cart, 1 item' })).toBeVisible();
+
+	await page.reload();
+	await expect(page.getByRole('link', { name: 'Cart, 1 item' })).toBeVisible();
+	await mugCard.getByRole('button', { name: 'Add to cart' }).click();
+
+	await expect(page.getByRole('group', { name: 'Choose a size for Society Mug' })).toHaveCount(0);
+	await expect(mugCard.getByRole('status', { name: 'Cart status' })).toHaveText(
+		'Society Mug, One size added to cart.'
+	);
+	await expect(page.getByRole('link', { name: 'Cart, 2 items' })).toBeVisible();
 });
 
 for (const viewport of [

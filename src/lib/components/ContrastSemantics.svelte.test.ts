@@ -79,14 +79,17 @@ describe('storefront contrast semantics', () => {
 		});
 		render(ProductCard, { product: pricedProduct });
 
-		const buttonStyle = getComputedStyle(
-			page.getByRole('button', { name: 'Add to cart' }).element()
-		);
+		const buttonStyles = page
+			.getByRole('button', { name: 'Add to cart' })
+			.all()
+			.map((button) => getComputedStyle(button.element()));
 		const categoryStyle = getComputedStyle(page.getByText('Accessory', { exact: true }).element());
 		const rootStyle = getComputedStyle(document.documentElement);
 		const paper = rootStyle.getPropertyValue('--color-paper').trim();
 
-		expect(contrast(buttonStyle.color, buttonStyle.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+		for (const buttonStyle of buttonStyles) {
+			expect(contrast(buttonStyle.color, buttonStyle.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+		}
 		expect(contrast(categoryStyle.color, paper)).toBeGreaterThanOrEqual(4.5);
 	});
 

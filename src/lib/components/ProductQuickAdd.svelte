@@ -93,8 +93,7 @@
 					type="button"
 					aria-label="Close size choices"
 					onclick={closeChoices}
-					onkeydown={handleChooserKeydown}
-					>×</button
+					onkeydown={handleChooserKeydown}>×</button
 				>
 			</div>
 			<div class="variant-options">

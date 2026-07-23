@@ -71,8 +71,9 @@ test('reduced-motion preference collapses storefront transitions', async ({ page
 	await page.goto('/');
 
 	const durations = await page
-		.getByRole('link', { name: 'Shop the collection' })
-		.first()
+		.getByRole('article')
+		.filter({ hasText: 'Community Tee' })
+		.getByRole('button', { name: 'Add to cart' })
 		.evaluate((element) => {
 			const style = getComputedStyle(element);
 			return `${style.transitionDuration},${style.animationDuration}`.split(',').map((duration) => {
@@ -86,7 +87,12 @@ test('reduced-motion preference collapses storefront transitions', async ({ page
 
 test('primary actions and purchase controls meet the 44px target', async ({ page }) => {
 	await page.goto('/');
-	await expectAtLeast44Pixels(page.getByRole('link', { name: 'Shop the collection' }).first());
+	await expectAtLeast44Pixels(
+		page
+			.getByRole('article')
+			.filter({ hasText: 'Community Tee' })
+			.getByRole('button', { name: 'Add to cart' })
+	);
 	await page.waitForLoadState('networkidle');
 
 	await page.goto('/products/community-tee');
