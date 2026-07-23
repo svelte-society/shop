@@ -8,7 +8,9 @@
 
 	let { data }: PageProps = $props();
 	let sizeGuide = $derived(data.product?.sizeChart ?? null);
-	let pricedProduct = $derived(data.product ? pricePublicProduct(data.product, data.pricingDestination) : null);
+	let pricedProduct = $derived(
+		data.product ? pricePublicProduct(data.product, data.pricingDestination) : null
+	);
 </script>
 
 <svelte:head>
@@ -33,7 +35,10 @@
 				<p class="eyebrow">{data.product.category === 'apparel' ? 'Apparel' : 'Accessory'}</p>
 				<h1>{data.product.name}</h1>
 				<p class="description">{data.product.description}</p>
-				{#if pricedProduct}<ProductPurchase product={pricedProduct} destination={data.pricingDestination} />{/if}
+				{#if pricedProduct}<ProductPurchase
+						product={pricedProduct}
+						destination={data.pricingDestination}
+					/>{/if}
 			</div>
 		</div>
 
@@ -67,6 +72,7 @@
 						</p>
 						<div class="table-wrap">
 							<table
+								class:compact={sizeGuide.sizes.length <= 3}
 								aria-label={`${data.product.name} size guide`}
 								aria-describedby="size-guide-help"
 							>
@@ -179,6 +185,12 @@
 		border: 1px solid var(--color-border);
 	}
 
+	.details-content,
+	.size-guide,
+	.table-wrap {
+		min-width: 0;
+	}
+
 	.details-grid article {
 		min-width: 0;
 		padding: 1.5rem;
@@ -281,6 +293,20 @@
 	}
 
 	@media (max-width: 34rem) {
+		table.compact {
+			min-width: 0;
+			table-layout: fixed;
+		}
+
+		table.compact th:first-child {
+			width: 44%;
+		}
+
+		table.compact th,
+		table.compact td {
+			padding-inline: 0.35rem;
+		}
+
 		.details-grid {
 			grid-template-columns: 1fr;
 		}

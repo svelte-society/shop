@@ -91,7 +91,9 @@ test('primary actions and purchase controls meet the 44px target', async ({ page
 
 	await page.goto('/products/community-tee');
 	await expectAtLeast44Pixels(page.getByRole('button', { name: 'Add to cart' }));
-	await expectAtLeast44Pixels(page.getByText('S', { exact: true }));
+	await expectAtLeast44Pixels(
+		page.getByRole('radiogroup', { name: 'Choose a size' }).getByText('S', { exact: true })
+	);
 
 	await addMug(page);
 	await page.goto('/cart');

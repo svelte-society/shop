@@ -85,7 +85,17 @@ function scenario(): CatalogScenario {
 const PRODUCTS = [
 	stripeProduct({
 		metadata: {
-			sort_order: '10'
+			sort_order: '10',
+			size_guide_url: '',
+			size_chart_json: JSON.stringify({
+				unit: 'cm',
+				sizes: ['S', 'M', 'L'],
+				measurements: [
+					{ label: 'Half chest', values: [49.5, 53.5, 56.5] },
+					{ label: 'Body length', values: [69, 73, 75] },
+					{ label: 'Sleeve length', values: [22.5, 24, 24.5] }
+				]
+			})
 		}
 	}),
 	stripeAccessoryProduct({
@@ -108,7 +118,16 @@ const PRICES_BY_PRODUCT = new Map([
 					styria_pn: 'STYRIA-TEE-S'
 				}
 			}),
-			stripePrice()
+			stripePrice(),
+			stripePrice({
+				id: 'price_apparel_large',
+				metadata: {
+					label: 'L',
+					sort_order: '30',
+					sku: 'SS-TEE-L',
+					styria_pn: 'STYRIA-TEE-L'
+				}
+			})
 		]
 	],
 	['prod_accessory', [stripeAccessoryPrice()]]

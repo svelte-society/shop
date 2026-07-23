@@ -86,12 +86,36 @@ test('apparel requires a size before adding the selected variant', async ({ page
 	await page.getByRole('button', { name: 'Add to cart' }).click();
 	await expect(page.getByRole('alert')).toHaveText('Choose a size before adding to cart.');
 
-	await page.getByText('M', { exact: true }).click();
+	await page
+		.getByRole('radiogroup', { name: 'Choose a size' })
+		.getByText('M', { exact: true })
+		.click();
 	await page.getByRole('button', { name: 'Add to cart' }).click();
 	await expect(page.getByRole('status', { name: 'Cart status' })).toHaveText(
 		'Community Tee, M added to cart.'
 	);
 	await expect(page.getByRole('link', { name: 'Cart, 1 item' })).toBeVisible();
+});
+
+test('three-size product guide fits the mobile viewport without horizontal overflow', async ({
+	page
+}) => {
+	await page.setViewportSize({ width: 320, height: 720 });
+	await page.goto('/products/community-tee');
+
+	const sizeGuide = page.locator('.size-guide');
+	const tableWrap = sizeGuide.locator('.table-wrap');
+	await expect(sizeGuide).toBeVisible();
+
+	const layout = await tableWrap.evaluate((element) => ({
+		documentWidth: document.documentElement.scrollWidth,
+		viewportWidth: window.innerWidth,
+		visibleWidth: element.clientWidth,
+		contentWidth: element.scrollWidth
+	}));
+
+	expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+	expect(layout.contentWidth).toBeLessThanOrEqual(layout.visibleWidth);
 });
 
 test('single-variant accessory is ready to add without a redundant selector', async ({ page }) => {
