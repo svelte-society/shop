@@ -26,15 +26,13 @@ describe('SiteHeader', () => {
 	beforeEach(() => cart.clear());
 	afterEach(() => cart.clear());
 
-	it('exposes only the shop primary destinations as labelled links', async () => {
+	it('keeps the primary navigation limited to destination and cart controls', async () => {
 		renderHeader();
 
 		await expect
 			.element(page.getByRole('link', { name: 'Society Shop home' }))
 			.toHaveAttribute('href', '/');
-		await expect
-			.element(page.getByRole('link', { name: 'Collection' }))
-			.toHaveAttribute('href', '/#collection');
+		await expect.element(page.getByRole('link', { name: 'Collection' })).not.toBeInTheDocument();
 		await expect
 			.element(page.getByRole('link', { name: 'Svelte Society' }))
 			.not.toBeInTheDocument();

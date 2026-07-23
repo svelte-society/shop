@@ -86,17 +86,14 @@ test('country picker keeps its actions visible while only the country list scrol
 	);
 });
 
-test('mobile country dialog opens without focusing or undersizing its search field', async ({
-	page
-}) => {
+test('mobile country dialog focuses its search field without undersizing it', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 720 });
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Choose delivery country, currently Sweden' }).click();
 
-	const heading = page.getByRole('heading', { name: 'Choose delivery country' });
 	const search = page.getByRole('searchbox', { name: 'Search delivery countries' });
 	await expect(page.getByRole('dialog')).toBeVisible();
-	expect.soft(await heading.evaluate((element) => document.activeElement === element)).toBe(true);
+	await expect(search).toBeFocused();
 	expect(
 		Number.parseFloat(await search.evaluate((element) => getComputedStyle(element).fontSize))
 	).toBeGreaterThanOrEqual(16);

@@ -22,7 +22,6 @@
 		</a>
 
 		<nav aria-label="Primary navigation">
-			<a href={resolve('/#collection')}>Collection</a>
 			<DestinationPicker {destination} {destinations} {returnTo} />
 			<a
 				class="cart-link"

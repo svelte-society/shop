@@ -11,6 +11,7 @@
 	let { destination, destinations, returnTo }: Props = $props();
 	let dialog = $state<HTMLDialogElement | null>(null);
 	let trigger = $state<HTMLButtonElement | null>(null);
+	let searchInput = $state<HTMLInputElement | null>(null);
 	let query = $state('');
 	let pending = $state(false);
 	let announcement = $state('');
@@ -45,6 +46,7 @@
 		announcement = '';
 		error = '';
 		dialog?.showModal();
+		searchInput?.focus();
 	}
 
 	function close(): void {
@@ -120,14 +122,18 @@
 			<form method="POST" action="/preferences/destination" onsubmit={submit} aria-busy={pending}>
 				<header class="dialog-heading">
 					<p class="eyebrow">Pricing destination</p>
-					<!-- svelte-ignore a11y_autofocus (focus follows an explicit dialog-open action) -->
-					<h2 id="destination-title" tabindex="-1" autofocus>Choose delivery country</h2>
+					<h2 id="destination-title">Choose delivery country</h2>
 					<p>We’ll show your local tax treatment before checkout.</p>
 				</header>
 
 				<label class="search-field">
 					<span>Search delivery countries</span>
-					<input type="search" bind:value={query} placeholder="Search countries" />
+					<input
+						bind:this={searchInput}
+						type="search"
+						bind:value={query}
+						placeholder="Search countries"
+					/>
 				</label>
 
 				<div class="destination-groups">
