@@ -120,7 +120,8 @@
 			<form method="POST" action="/preferences/destination" onsubmit={submit} aria-busy={pending}>
 				<header class="dialog-heading">
 					<p class="eyebrow">Pricing destination</p>
-					<h2 id="destination-title">Choose delivery country</h2>
+					<!-- svelte-ignore a11y_autofocus (focus follows an explicit dialog-open action) -->
+					<h2 id="destination-title" tabindex="-1" autofocus>Choose delivery country</h2>
 					<p>We’ll show your local tax treatment before checkout.</p>
 				</header>
 
@@ -456,6 +457,10 @@
 	}
 
 	@media (max-width: 44rem) {
+		.search-field input {
+			font-size: 1rem;
+		}
+
 		dialog {
 			inset: auto 0 0;
 			width: 100%;
