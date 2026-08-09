@@ -196,7 +196,7 @@ export type PaidCheckoutFixtureOptions = {
 	customerId?: string;
 	draftId?: string;
 	country?: string;
-	shippingSubtotal?: number;
+	shippingGrossAmount?: number;
 	shippingRateId?: string;
 	shippingTaxAmount?: number;
 	lines?: PaidCheckoutFixtureLine[];
@@ -288,9 +288,12 @@ export function paidCheckoutProviderFixture(
 	const draftId = options.draftId ?? 'draft-paid-123';
 	const country = options.country ?? 'SE';
 	const taxBasisPoints = { SE: 2_500, DE: 1_900, FI: 2_550, HU: 2_700 }[country] ?? 0;
-	const shippingSubtotal = options.shippingSubtotal ?? 800;
+	const shippingGrossAmount = options.shippingGrossAmount ?? 1_000;
 	const shippingTaxAmount =
-		options.shippingTaxAmount ?? Math.round((shippingSubtotal * taxBasisPoints) / 10_000);
+		options.shippingTaxAmount ??
+		(shippingGrossAmount === 0
+			? 0
+			: Math.round((shippingGrossAmount * taxBasisPoints) / (10_000 + taxBasisPoints)));
 	const lines = options.lines ?? [
 		{
 			id: 'li_tee_medium',
@@ -308,12 +311,12 @@ export function paidCheckoutProviderFixture(
 	const amountDiscount = providerLines.reduce((total, line) => total + line.amount_discount, 0);
 	const amountTax =
 		providerLines.reduce((total, line) => total + line.amount_tax, 0) + shippingTaxAmount;
-	const shippingTotal = shippingSubtotal + shippingTaxAmount;
+	const shippingTotal = shippingGrossAmount;
 	const amountTotal =
 		providerLines.reduce((total, line) => total + line.amount_total, 0) + shippingTotal;
 	const metadata = {
 		product_type: 'merch',
-		checkout_contract_version: '3',
+		checkout_contract_version: '4',
 		checkout_draft_id: draftId,
 		destination_country: country
 	};
@@ -394,14 +397,15 @@ export function paidCheckoutProviderFixture(
 			payment_intent: paymentIntent,
 			payment_status: 'paid',
 			shipping_cost: {
-				amount_subtotal: shippingSubtotal,
+				amount_subtotal: shippingGrossAmount,
 				amount_tax: shippingTaxAmount,
 				amount_total: shippingTotal,
 				shipping_rate: {
-					id: options.shippingRateId ?? (shippingSubtotal === 0 ? 'shr_free' : 'shr_paid_8_eur'),
+					id:
+						options.shippingRateId ?? (shippingGrossAmount === 0 ? 'shr_free' : 'shr_paid_10_eur'),
 					object: 'shipping_rate',
-					fixed_amount: { amount: shippingSubtotal, currency: 'eur' },
-					tax_behavior: 'exclusive',
+					fixed_amount: { amount: shippingGrossAmount, currency: 'eur' },
+					tax_behavior: shippingGrossAmount === 0 ? 'exclusive' : 'inclusive',
 					type: 'fixed_amount'
 				},
 				taxes:
@@ -411,19 +415,22 @@ export function paidCheckoutProviderFixture(
 								{
 									amount: shippingTaxAmount,
 									rate: {
-										id: 'txr_shipping_exclusive',
+										id:
+											shippingGrossAmount === 0
+												? 'txr_shipping_exclusive'
+												: 'txr_shipping_inclusive',
 										object: 'tax_rate',
-										inclusive: false
+										inclusive: shippingGrossAmount > 0
 									},
 									taxability_reason: 'standard_rated',
-									taxable_amount: shippingSubtotal
+									taxable_amount: shippingGrossAmount - shippingTaxAmount
 								}
 							]
 			},
 			status: 'complete',
 			total_details: {
 				amount_discount: amountDiscount,
-				amount_shipping: shippingSubtotal,
+				amount_shipping: shippingGrossAmount,
 				amount_tax: amountTax
 			}
 		},

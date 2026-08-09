@@ -74,7 +74,7 @@
 		ready && cart.lines.some((line) => !catalogByPriceId.has(line.priceId))
 	);
 	let cartDisplayPrice = $derived(
-		data.paidShippingNetCents === null
+		data.paidShippingGrossCents === null
 			? null
 			: displayCartPrice(
 					resolvedLines.map(({ line, variant }) => ({
@@ -82,7 +82,7 @@
 						quantity: line.quantity
 					})),
 					data.pricingDestination,
-					data.paidShippingNetCents
+					data.paidShippingGrossCents
 				)
 	);
 

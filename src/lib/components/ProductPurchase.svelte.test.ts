@@ -73,14 +73,14 @@ const destination = pricingDestination('SE');
 const priced = (product: PublicCatalogProduct) => pricePublicProduct(product, destination);
 
 describe('ProductPurchase', () => {
-	it('shows the destination-projected price without repeating tax guidance', async () => {
+	it('shows the destination-projected price and included VAT amount', async () => {
 		const germany = pricingDestination('DE');
 		render(ProductPurchase, {
 			product: pricePublicProduct(apparel, germany)
 		});
 
 		await expect.element(page.getByText('€23.80')).toBeVisible();
-		expect(document.body.textContent).not.toContain('Exact tax is confirmed');
+		await expect.element(page.getByText('Includes €3.80 VAT.')).toBeVisible();
 	});
 
 	it('keeps the selected size while destination repricing updates the amount', async () => {
@@ -97,15 +97,15 @@ describe('ProductPurchase', () => {
 
 		await expect.element(page.getByRole('radio', { name: 'M' })).toBeChecked();
 		await expect.element(page.getByText('€23.80')).toBeVisible();
-		expect(document.body.textContent).not.toContain('Exact tax is confirmed');
+		await expect.element(page.getByText('Includes €3.80 VAT.')).toBeVisible();
 	});
 
-	it('shows the destination-projected price for Japan without duplicate import guidance', async () => {
+	it('explains that the destination-projected price for Japan excludes EU VAT', async () => {
 		const japan = pricingDestination('JP');
 		render(ProductPurchase, { product: pricePublicProduct(apparel, japan) });
 
 		await expect.element(page.getByText('€20.00')).toBeVisible();
-		expect(document.body.textContent).not.toContain('Import VAT');
+		await expect.element(page.getByText('EU VAT excluded. Import taxes may apply.')).toBeVisible();
 	});
 
 	it('keeps apparel out of the cart until a size is selected', async () => {

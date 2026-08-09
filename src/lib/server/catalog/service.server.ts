@@ -17,7 +17,7 @@ import { enqueueAlert, type AlertService } from '$lib/server/monitoring/alerts.s
 export interface CatalogService {
 	listPublic(): Promise<{
 		products: PublicCatalogProduct[];
-		paidShippingNetCents: number;
+		paidShippingGrossCents: number;
 		stale: boolean;
 	}>;
 	findPublicBySlug(slug: string): Promise<PublicCatalogProduct | null>;
@@ -83,7 +83,7 @@ export function createCatalogService(
 			const snapshot = await monitoredSnapshot();
 			return {
 				products: snapshot.products.map(toPublicCatalogProduct),
-				paidShippingNetCents: snapshot.shippingRates.paid.netAmountCents,
+				paidShippingGrossCents: snapshot.shippingRates.paid.grossAmountCents,
 				stale: snapshot.stale
 			};
 		},

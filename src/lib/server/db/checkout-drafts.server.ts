@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { PAID_SHIPPING_GROSS_CENTS } from '$lib/domain/catalog';
 import { isSupportedDestination } from '$lib/domain/destinations';
 import type {
 	CheckoutDraft,
@@ -35,7 +36,7 @@ type DraftRow = {
 	completed_at: unknown;
 	destination_country: unknown;
 	shipping_rate_id: unknown;
-	shipping_net_amount: unknown;
+	shipping_gross_amount: unknown;
 };
 
 type DraftLineRow = {
@@ -157,7 +158,7 @@ function validateNewDraft(input: NewCheckoutDraft): {
 	if (
 		!input ||
 		!Number.isSafeInteger(input.contractVersion) ||
-		input.contractVersion !== 3 ||
+		input.contractVersion !== 4 ||
 		!isSupportedDestination(input.destinationCountry) ||
 		input.currency !== 'eur' ||
 		!Number.isSafeInteger(input.totalUnitCount) ||
@@ -165,7 +166,7 @@ function validateNewDraft(input: NewCheckoutDraft): {
 		input.totalUnitCount > 20 ||
 		(input.shippingMode !== 'paid' && input.shippingMode !== 'free') ||
 		!isNonEmptyString(input.shippingRateId) ||
-		!isSafeNonNegativeInteger(input.shippingNetAmount) ||
+		!isSafeNonNegativeInteger(input.shippingGrossAmount) ||
 		!Array.isArray(input.lines) ||
 		input.lines.length < 1 ||
 		input.lines.length > 10
@@ -180,8 +181,8 @@ function validateNewDraft(input: NewCheckoutDraft): {
 		totalUnitCount !== input.totalUnitCount ||
 		input.shippingMode !== expectedShippingMode ||
 		(input.shippingMode === 'paid'
-			? input.shippingNetAmount <= 0
-			: input.shippingNetAmount !== 0) ||
+			? input.shippingGrossAmount !== PAID_SHIPPING_GROSS_CENTS
+			: input.shippingGrossAmount !== 0) ||
 		new Set(input.lines.map((line) => line.stripePriceId)).size !== input.lines.length
 	) {
 		fail('CHECKOUT_DRAFT_INVALID');
@@ -237,7 +238,7 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		(row.stripe_checkout_session_id !== null &&
 			!isNonEmptyString(row.stripe_checkout_session_id)) ||
 		!Number.isSafeInteger(row.contract_version) ||
-		row.contract_version !== 3 ||
+		row.contract_version !== 4 ||
 		!isNonEmptyString(row.destination_country) ||
 		!isSupportedDestination(row.destination_country) ||
 		row.currency !== 'eur' ||
@@ -246,7 +247,7 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		(row.total_unit_count as number) > 20 ||
 		(row.shipping_mode !== 'paid' && row.shipping_mode !== 'free') ||
 		!isNonEmptyString(row.shipping_rate_id) ||
-		!isSafeNonNegativeInteger(row.shipping_net_amount)
+		!isSafeNonNegativeInteger(row.shipping_gross_amount)
 	) {
 		fail('CHECKOUT_DRAFT_ROW_INVALID');
 	}
@@ -262,8 +263,8 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		totalUnitCount !== row.total_unit_count ||
 		(row.shipping_mode === 'paid') !== (totalUnitCount === 1) ||
 		(row.shipping_mode === 'paid'
-			? (row.shipping_net_amount as number) <= 0
-			: row.shipping_net_amount !== 0)
+			? row.shipping_gross_amount !== PAID_SHIPPING_GROSS_CENTS
+			: row.shipping_gross_amount !== 0)
 	) {
 		fail('CHECKOUT_DRAFT_ROW_INVALID');
 	}
@@ -277,7 +278,7 @@ function mapDraft(row: DraftRow, lines: CheckoutDraftLine[]): CheckoutDraftWithL
 		totalUnitCount: row.total_unit_count as number,
 		shippingMode: row.shipping_mode,
 		shippingRateId: row.shipping_rate_id,
-		shippingNetAmount: row.shipping_net_amount,
+		shippingGrossAmount: row.shipping_gross_amount,
 		createdAt,
 		expiresAt,
 		completedAt,
@@ -295,7 +296,7 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 			INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency,
 				total_unit_count, shipping_mode, created_at, expires_at, completed_at,
-				destination_country, shipping_rate_id, shipping_net_amount
+				destination_country, shipping_rate_id, shipping_gross_amount
 			) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
 		`);
 		const insertLine = this.database.prepare(`
@@ -316,7 +317,7 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 				validated.expiresAt,
 				input.destinationCountry,
 				input.shippingRateId,
-				input.shippingNetAmount
+				input.shippingGrossAmount
 			);
 			for (const [index, line] of input.lines.entries()) {
 				insertLine.run(
@@ -356,7 +357,7 @@ export class SqliteCheckoutDraftRepository implements CheckoutDraftRepository {
 			totalUnitCount: created.totalUnitCount,
 			shippingMode: created.shippingMode,
 			shippingRateId: created.shippingRateId,
-			shippingNetAmount: created.shippingNetAmount,
+			shippingGrossAmount: created.shippingGrossAmount,
 			createdAt: created.createdAt,
 			expiresAt: created.expiresAt,
 			completedAt: created.completedAt

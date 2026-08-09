@@ -27,7 +27,7 @@ export const load: PageServerLoad = async () => {
 
 		return {
 			products: catalog.products,
-			paidShippingNetCents: catalog.paidShippingNetCents,
+			paidShippingGrossCents: catalog.paidShippingGrossCents,
 			catalogUnavailable: false,
 			checkoutEnabled: config.checkoutEnabled
 		};
@@ -36,7 +36,7 @@ export const load: PageServerLoad = async () => {
 
 		return {
 			products: [],
-			paidShippingNetCents: null,
+			paidShippingGrossCents: null,
 			catalogUnavailable: true,
 			checkoutEnabled: false
 		};

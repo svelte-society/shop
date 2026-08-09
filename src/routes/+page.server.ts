@@ -28,7 +28,7 @@ export function _createHomePageServerLoad(
 		if (!publicConfig.storefrontEnabled) {
 			return {
 				products: [],
-				paidShippingNetCents: null,
+				paidShippingGrossCents: null,
 				stale: false,
 				catalogUnavailable: false
 			};
@@ -49,7 +49,7 @@ export function _createHomePageServerLoad(
 			if (!isCatalogUnavailable(error)) throw error;
 			return {
 				products: [],
-				paidShippingNetCents: null,
+				paidShippingGrossCents: null,
 				stale: false,
 				catalogUnavailable: true
 			};

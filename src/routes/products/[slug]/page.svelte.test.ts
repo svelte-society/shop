@@ -118,7 +118,7 @@ describe('product details', () => {
 		expect(page.getByRole('heading', { name: 'Returns' }).query()).toBeNull();
 	});
 
-	it('projects the item price without repeating destination tax guidance', async () => {
+	it('projects the item price with destination tax guidance', async () => {
 		render(ProductPage, {
 			data: {
 				product: communityTee,
@@ -130,6 +130,6 @@ describe('product details', () => {
 		});
 
 		await expect.element(page.getByText('€20.00')).toBeVisible();
-		expect(document.body.textContent).not.toContain('Import VAT');
+		await expect.element(page.getByText('EU VAT excluded. Import taxes may apply.')).toBeVisible();
 	});
 });

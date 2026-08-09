@@ -8,7 +8,7 @@ import type {
 	CatalogVariant,
 	ProductSizeChart
 } from '$lib/domain/catalog';
-import { isProductSizeChart } from '$lib/domain/catalog';
+import { isProductSizeChart, PAID_SHIPPING_GROSS_CENTS } from '$lib/domain/catalog';
 import { styriaDesignPositionForMetadataSlug } from '$lib/server/styria/design-positions';
 
 type ParsedProduct = Omit<CatalogProduct, 'variants'>;
@@ -324,8 +324,8 @@ function shippingTaxCode(value: Stripe.ShippingRate['tax_code']): string | null 
 
 function parseShippingRate(
 	source: ShippingRateSource,
-	expectedAmount: 'positive' | 'zero'
-): { id: string; netAmountCents: number } {
+	kind: 'paid' | 'free'
+): { id: string; grossAmountCents: number } {
 	const { rate } = source;
 	const amount = rate.fixed_amount?.amount;
 	if (
@@ -339,24 +339,24 @@ function parseShippingRate(
 		!Number.isSafeInteger(amount) ||
 		amount === undefined ||
 		amount < 0 ||
-		(expectedAmount === 'positive' ? amount <= 0 : amount !== 0) ||
-		rate.tax_behavior !== 'exclusive' ||
+		(kind === 'paid' ? amount !== PAID_SHIPPING_GROSS_CENTS : amount !== 0) ||
+		rate.tax_behavior !== (kind === 'paid' ? 'inclusive' : 'exclusive') ||
 		shippingTaxCode(rate.tax_code) !== SHIPPING_TAX_CODE
 	) {
 		throw new Error('CATALOG_SHIPPING_RATE_INVALID');
 	}
 
-	return { id: rate.id, netAmountCents: amount };
+	return { id: rate.id, grossAmountCents: amount };
 }
 
 export function parseStripeShippingRates(input: {
 	paid: ShippingRateSource;
 	free: ShippingRateSource;
 }): CatalogShippingRates {
-	const paid = parseShippingRate(input.paid, 'positive');
-	const free = parseShippingRate(input.free, 'zero');
+	const paid = parseShippingRate(input.paid, 'paid');
+	const free = parseShippingRate(input.free, 'free');
 	if (paid.id === free.id) throw new Error('CATALOG_SHIPPING_RATE_INVALID');
-	return { paid, free: { ...free, netAmountCents: 0 } };
+	return { paid, free: { ...free, grossAmountCents: 0 } };
 }
 
 function sortDiagnostics(diagnostics: CatalogDiagnostic[]): CatalogDiagnostic[] {

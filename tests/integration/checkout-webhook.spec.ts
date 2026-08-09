@@ -65,13 +65,13 @@ function createDraft(
 ) {
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 3,
+		contractVersion: 4,
 		destinationCountry,
 		currency: 'eur',
 		totalUnitCount: quantity,
 		shippingMode: quantity === 1 ? 'paid' : 'free',
-		shippingRateId: quantity === 1 ? 'shr_paid_8_eur' : 'shr_free',
-		shippingNetAmount: quantity === 1 ? 800 : 0,
+		shippingRateId: quantity === 1 ? 'shr_paid_10_eur' : 'shr_free',
+		shippingGrossAmount: quantity === 1 ? 1_000 : 0,
 		createdAt: new Date('2026-07-16T10:00:00.000Z'),
 		expiresAt: new Date('2026-07-17T10:00:00.000Z'),
 		lines: [
@@ -160,7 +160,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const { draft, order } = await intakePaidOrder('evt_test_eu_consumer', {
 			quantity: 1,
 			country: 'SE',
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			taxAmount: 500
 		});
 		expect(order).toMatchObject({
@@ -188,14 +188,14 @@ describe('checkout to Stripe webhook intake', () => {
 		const { order } = await intakePaidOrder('evt_test_asia_customer', {
 			quantity: 1,
 			country: 'JP',
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			shippingTaxAmount: 0,
 			taxAmount: 0
 		});
 
 		expect(order).toMatchObject({
 			destinationCountry: 'JP',
-			amounts: { shipping: 800, shippingTax: 0, tax: 0, total: 2_800 },
+			amounts: { shipping: 1_000, shippingTax: 0, tax: 0, total: 3_000 },
 			paymentStatus: 'paid'
 		});
 	});
@@ -204,7 +204,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const { order } = await intakePaidOrder('evt_test_reverse_charge', {
 			quantity: 1,
 			country: 'SE',
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			shippingTaxAmount: 0,
 			taxExempt: 'reverse',
 			taxIds: [{ type: 'eu_vat', value: 'SE123456789001' }],
@@ -213,7 +213,7 @@ describe('checkout to Stripe webhook intake', () => {
 
 		expect(order).toMatchObject({
 			destinationCountry: 'SE',
-			amounts: { shipping: 800, shippingTax: 0, tax: 0, total: 2_800 },
+			amounts: { shipping: 1_000, shippingTax: 0, tax: 0, total: 3_000 },
 			paymentStatus: 'paid'
 		});
 		expect(JSON.stringify(order)).not.toContain('SE123456789001');
@@ -223,7 +223,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const { order } = await intakePaidOrder('evt_test_exempt', {
 			quantity: 1,
 			country: 'SE',
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			shippingTaxAmount: 0,
 			taxExempt: 'exempt',
 			taxAmount: 0
@@ -231,7 +231,7 @@ describe('checkout to Stripe webhook intake', () => {
 
 		expect(order).toMatchObject({
 			destinationCountry: 'SE',
-			amounts: { shipping: 800, shippingTax: 0, tax: 0, total: 2_800 },
+			amounts: { shipping: 1_000, shippingTax: 0, tax: 0, total: 3_000 },
 			paymentStatus: 'paid'
 		});
 	});
@@ -242,7 +242,7 @@ describe('checkout to Stripe webhook intake', () => {
 			const { event, service } = paidOrderAttempt(`evt_test_${taxExempt}_positive_tax`, {
 				quantity: 1,
 				country: 'SE',
-				shippingSubtotal: 800,
+				shippingGrossAmount: 1000,
 				taxExempt,
 				taxIds: taxExempt === 'reverse' ? [{ type: 'eu_vat', value: 'SE123456789001' }] : [],
 				taxAmount: 500
@@ -262,7 +262,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const { draft, order } = await intakePaidOrder('evt_test_one_unit_shipping', {
 			quantity: 1,
 			country: 'SE',
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			taxAmount: 500
 		});
 
@@ -274,7 +274,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const { draft, order } = await intakePaidOrder('evt_test_two_unit_shipping', {
 			quantity: 2,
 			country: 'SE',
-			shippingSubtotal: 0,
+			shippingGrossAmount: 0,
 			shippingTaxAmount: 0,
 			taxAmount: 1_000
 		});
@@ -289,7 +289,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const fixture = paidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			lines: [
 				{
 					id: 'li_mug',
@@ -351,7 +351,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const fixture = paidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			lines: [
 				{
 					id: 'li_mug',
@@ -413,7 +413,7 @@ describe('checkout to Stripe webhook intake', () => {
 		const fixture = paidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
-			shippingSubtotal: 800,
+			shippingGrossAmount: 1000,
 			lines: [
 				{
 					id: 'li_mug',

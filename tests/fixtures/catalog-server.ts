@@ -32,13 +32,13 @@ function ensureVerifiedDraft(): string {
 
 	const drafts = new SqliteCheckoutDraftRepository(database);
 	const draft = drafts.create({
-		contractVersion: 3,
+		contractVersion: 4,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
-		shippingRateId: 'shr_paid_8_eur',
-		shippingNetAmount: 800,
+		shippingRateId: 'shr_paid_10_eur',
+		shippingGrossAmount: 1000,
 		createdAt: new Date('2026-07-22T09:00:00.000Z'),
 		expiresAt: new Date('2026-07-23T09:00:00.000Z'),
 		lines: [
@@ -164,7 +164,7 @@ export function createStripeClient(
 	let fixture = paidCheckoutProviderFixture({
 		sessionId: VERIFIED_SESSION_ID,
 		draftId: 'draft-test-browser-verified',
-		shippingSubtotal: 800,
+		shippingGrossAmount: 1000,
 		lines: [
 			{
 				id: 'li_browser_mug',
@@ -185,7 +185,7 @@ export function createStripeClient(
 			fixture = paidCheckoutProviderFixture({
 				sessionId: VERIFIED_SESSION_ID,
 				draftId,
-				shippingSubtotal: 800,
+				shippingGrossAmount: 1000,
 				lines: [
 					{
 						id: 'li_browser_mug',
@@ -244,7 +244,8 @@ async function parsedFixtureCatalog(options: {
 				configuredId: options.paidShippingRateId,
 				rate: stripeShippingRate({
 					id: options.paidShippingRateId,
-					fixed_amount: { amount: 937, currency: 'eur' }
+					fixed_amount: { amount: 1000, currency: 'eur' },
+					tax_behavior: 'inclusive'
 				})
 			},
 			free: {

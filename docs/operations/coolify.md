@@ -159,6 +159,10 @@ STRIPE_PAID_SHIPPING_RATE_ID=<shipping-rate-id>
 STRIPE_FREE_SHIPPING_RATE_ID=<shipping-rate-id>
 ```
 
+The paid rate must be a fixed EUR 10.00 gross, tax-inclusive Stripe Shipping Rate with Stripe's
+Shipping tax code. The customer pays EUR 10.00 in every destination; Stripe backs destination tax
+out of that amount. The free rate remains a fixed EUR 0.00 tax-exclusive rate with the same tax code.
+
 ### Internal MCP
 
 ```text

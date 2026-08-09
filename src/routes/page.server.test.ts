@@ -19,7 +19,7 @@ describe('homepage catalog loader', () => {
 
 		await expect(load({} as Parameters<typeof load>[0])).resolves.toEqual({
 			products: [],
-			paidShippingNetCents: null,
+			paidShippingGrossCents: null,
 			stale: false,
 			catalogUnavailable: false
 		});
@@ -46,7 +46,7 @@ describe('homepage catalog loader', () => {
 
 		await expect(load({} as Parameters<typeof load>[0])).resolves.toEqual({
 			products: [],
-			paidShippingNetCents: null,
+			paidShippingGrossCents: null,
 			stale: false,
 			catalogUnavailable: true
 		});

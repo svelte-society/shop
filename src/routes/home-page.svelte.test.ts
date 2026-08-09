@@ -33,7 +33,7 @@ describe('storefront home page', () => {
 		render(HomePage, {
 			data: {
 				products: [product],
-				paidShippingNetCents: null,
+				paidShippingGrossCents: 1_000,
 				stale: false,
 				catalogUnavailable: false,
 				pricingDestination: pricingDestination('SE')
@@ -84,7 +84,12 @@ describe('storefront home page', () => {
 		expect(page.getByText('items ship free', { exact: false }).query()).toBeNull();
 		await expect.element(commerce).toBeVisible();
 		await expect
-			.element(page.getByText('Free shipping when you pick two or more.', { exact: false }))
+			.element(
+				page.getByText(
+					'€10.00 including €2.00 VAT for one item. Free shipping when you pick two or more.',
+					{ exact: true }
+				)
+			)
 			.toBeVisible();
 		expect(
 			page.getByRole('heading', { name: 'Find your piece of the Society.' }).query()

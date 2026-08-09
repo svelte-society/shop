@@ -1,4 +1,5 @@
 import { parseCart, selectShippingMode, totalUnits, type CartLine } from '$lib/domain/cart';
+import { PAID_SHIPPING_GROSS_CENTS } from '$lib/domain/catalog';
 import type { CatalogProduct, CatalogShippingRates, CatalogVariant } from '$lib/domain/catalog';
 import { isSupportedDestination, type MarketDestination } from '$lib/domain/destinations';
 import type { NewCheckoutDraftLine } from '$lib/domain/orders';
@@ -72,9 +73,9 @@ function validateShippingRates(input: CatalogShippingRates): CatalogShippingRate
 		typeof input.free.id !== 'string' ||
 		input.free.id.trim().length === 0 ||
 		input.paid.id === input.free.id ||
-		!Number.isSafeInteger(input.paid.netAmountCents) ||
-		input.paid.netAmountCents <= 0 ||
-		input.free.netAmountCents !== 0
+		!Number.isSafeInteger(input.paid.grossAmountCents) ||
+		input.paid.grossAmountCents !== PAID_SHIPPING_GROSS_CENTS ||
+		input.free.grossAmountCents !== 0
 	) {
 		throw new Error('CATALOG_SHIPPING_RATE_INVALID');
 	}
@@ -183,7 +184,7 @@ export function createCheckoutService(options: CheckoutServiceOptions): Checkout
 					totalUnitCount: totalUnits(lines),
 					shippingMode,
 					shippingRateId: shippingRate.id,
-					shippingNetAmount: shippingRate.netAmountCents,
+					shippingGrossAmount: shippingRate.grossAmountCents,
 					createdAt,
 					expiresAt: new Date(createdAt.getTime() + CHECKOUT_DRAFT_TTL_MS),
 					lines: resolved.map(snapshotLine)

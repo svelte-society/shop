@@ -86,6 +86,11 @@
 <div class="purchase-panel">
 	<div class="price-block">
 		<p class="price">{formatEur(selectedVariant.displayPrice.grossCents)}</p>
+		{#if selectedVariant.displayPrice.vatCents > 0}
+			<p class="tax-note">Includes {formatEur(selectedVariant.displayPrice.vatCents)} VAT.</p>
+		{:else}
+			<p class="tax-note">EU VAT excluded. Import taxes may apply.</p>
+		{/if}
 	</div>
 
 	{#key productIdentity}
@@ -123,6 +128,12 @@
 		font-size: clamp(1.65rem, 4vw, 2.15rem);
 		font-weight: 800;
 		letter-spacing: -0.035em;
+	}
+
+	.tax-note {
+		margin: 0.25rem 0 0;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
 	}
 
 	.size-guide {

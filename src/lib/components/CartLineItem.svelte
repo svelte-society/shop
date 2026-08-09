@@ -48,6 +48,11 @@
 		<h2>{product.name}</h2>
 		<p class="variant">{variant.label}</p>
 		<p class="unit-price">{formatEur(unitDisplayPrice.grossCents)} each</p>
+		{#if unitDisplayPrice.vatCents > 0}
+			<p class="tax-note">Includes {formatEur(unitDisplayPrice.vatCents)} VAT per item.</p>
+		{:else}
+			<p class="tax-note">EU VAT excluded. Import taxes may apply.</p>
+		{/if}
 
 		<div class="line-actions">
 			<label for={`quantity-${variant.priceId}`}>Quantity</label>
@@ -108,6 +113,7 @@
 	.category,
 	.variant,
 	.unit-price,
+	.tax-note,
 	.line-total {
 		margin: 0;
 	}
@@ -127,13 +133,19 @@
 	}
 
 	.variant,
-	.unit-price {
+	.unit-price,
+	.tax-note {
 		color: oklch(44% 0.025 255);
 	}
 
 	.unit-price {
 		margin-top: 0.25rem;
 		font-size: 0.9rem;
+	}
+
+	.tax-note {
+		margin-top: 0.15rem;
+		font-size: 0.8rem;
 	}
 
 	.line-actions {

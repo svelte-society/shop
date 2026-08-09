@@ -101,7 +101,7 @@ class RecordingDraftRepository implements CheckoutDraftRepository {
 			totalUnitCount: input.totalUnitCount,
 			shippingMode: input.shippingMode,
 			shippingRateId: input.shippingRateId,
-			shippingNetAmount: input.shippingNetAmount,
+			shippingGrossAmount: input.shippingGrossAmount,
 			createdAt: input.createdAt,
 			expiresAt: input.expiresAt,
 			completedAt: null
@@ -148,12 +148,15 @@ class RecordingStripeGateway implements StripeCheckoutGateway {
 
 type ResolvedCart = Awaited<ReturnType<CatalogService['resolveCartForCheckout']>>;
 
-function catalogResolution(lines: ResolvedCart['lines'], paidShippingNetCents = 937): ResolvedCart {
+function catalogResolution(
+	lines: ResolvedCart['lines'],
+	paidShippingGrossCents = 1000
+): ResolvedCart {
 	return {
 		lines,
 		shippingRates: {
-			paid: { id: 'shr_paid_dynamic', netAmountCents: paidShippingNetCents },
-			free: { id: 'shr_free', netAmountCents: 0 }
+			paid: { id: 'shr_paid_dynamic', grossAmountCents: paidShippingGrossCents },
+			free: { id: 'shr_free', grossAmountCents: 0 }
 		}
 	};
 }
@@ -287,7 +290,7 @@ describe('createCheckoutService', () => {
 				totalUnitCount: 1,
 				shippingMode: 'paid',
 				shippingRateId: 'shr_paid_dynamic',
-				shippingNetAmount: 937,
+				shippingGrossAmount: 1000,
 				createdAt: NOW,
 				expiresAt: new Date('2026-07-17T10:00:00.000Z'),
 				lines: [
@@ -346,7 +349,7 @@ describe('createCheckoutService', () => {
 			totalUnitCount: 2,
 			shippingMode: 'free',
 			shippingRateId: 'shr_free',
-			shippingNetAmount: 0
+			shippingGrossAmount: 0
 		});
 		expect(stripe.creations[0]).toMatchObject({
 			shippingRateId: 'shr_free',

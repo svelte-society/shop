@@ -15,6 +15,14 @@ import { parseStripeCatalog, parseStripeShippingRates } from './parse';
 import { createCatalogService } from './service.server';
 import { createStripeCatalogGateway, type StripeCatalogClient } from './stripe-catalog.server';
 
+function paidShippingRate(overrides: Partial<Stripe.ShippingRate> = {}): Stripe.ShippingRate {
+	return stripeShippingRate({
+		fixed_amount: { amount: 1_000, currency: 'eur' },
+		tax_behavior: 'inclusive',
+		...overrides
+	});
+}
+
 type Deferred<T> = {
 	promise: Promise<T>;
 	resolve(value: T): void;
@@ -53,7 +61,7 @@ function providerClient(
 	const priceRequests: string[] = [];
 	const shippingRateRequests: string[] = [];
 	const shippingRates = new Map([
-		['shr_paid', stripeShippingRate()],
+		['shr_paid', paidShippingRate()],
 		[
 			'shr_free',
 			stripeShippingRate({
@@ -112,7 +120,7 @@ async function validSnapshot(loadedAt: Date, name = 'Society Mug'): Promise<Cata
 		async () => [stripeAccessoryPrice()],
 		loadedAt,
 		parseStripeShippingRates({
-			paid: { configuredId: 'shr_paid', rate: stripeShippingRate() },
+			paid: { configuredId: 'shr_paid', rate: paidShippingRate() },
 			free: {
 				configuredId: 'shr_free',
 				rate: stripeShippingRate({
@@ -159,8 +167,8 @@ describe('createStripeCatalogGateway', () => {
 			'price_apparel_medium'
 		]);
 		expect(snapshot.shippingRates).toEqual({
-			paid: { id: 'shr_paid', netAmountCents: 937 },
-			free: { id: 'shr_free', netAmountCents: 0 }
+			paid: { id: 'shr_paid', grossAmountCents: 1_000 },
+			free: { id: 'shr_free', grossAmountCents: 0 }
 		});
 		expect(shippingRateRequests).toEqual(['shr_paid', 'shr_free']);
 		expect(snapshot.diagnostics).toEqual([
@@ -232,7 +240,7 @@ describe('createCatalogCache', () => {
 		expect(stale.stale).toBe(true);
 		expect(stale.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(stale.products[0].slug).toBe('society-mug');
-		expect(stale.shippingRates.paid.netAmountCents).toBe(937);
+		expect(stale.shippingRates.paid.grossAmountCents).toBe(1_000);
 	});
 
 	it('throws CATALOG_UNAVAILABLE when no last-known-good snapshot exists', async () => {
@@ -294,16 +302,16 @@ describe('createCatalogCache', () => {
 		expect(Object.isFrozen(first.shippingRates.paid)).toBe(true);
 		expect(() => first.products[0].variants.push(first.products[0].variants[0])).toThrow(TypeError);
 		expect(() => {
-			first.shippingRates.paid.netAmountCents = 1;
+			first.shippingRates.paid.grossAmountCents = 1;
 		}).toThrow(TypeError);
 		first.loadedAt.setTime(0);
 		source.products[0].name = 'Mutated source';
-		source.shippingRates.paid.netAmountCents = 1;
+		source.shippingRates.paid.grossAmountCents = 1;
 
 		const second = await cache.get();
 		expect(second.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(second.products[0].name).toBe('Society Mug');
-		expect(second.shippingRates.paid.netAmountCents).toBe(937);
+		expect(second.shippingRates.paid.grossAmountCents).toBe(1_000);
 	});
 
 	it('shares one provider refresh across concurrent reads of an expired snapshot', async () => {
@@ -481,7 +489,7 @@ describe('createCatalogService', () => {
 		const product = listed.products[0];
 
 		expect(listed.stale).toBe(false);
-		expect(listed.paidShippingNetCents).toBe(937);
+		expect(listed.paidShippingGrossCents).toBe(1_000);
 		expect(product).toMatchObject({
 			slug: 'community-tee',
 			materials: '100% organic cotton',
@@ -533,8 +541,8 @@ describe('createCatalogService', () => {
 		]);
 		expect(resolved.lines.map(({ variant }) => variant.sku)).toEqual(['SS-TEE-M', 'SS-MUG']);
 		expect(resolved.shippingRates).toEqual({
-			paid: { id: 'shr_paid', netAmountCents: 937 },
-			free: { id: 'shr_free', netAmountCents: 0 }
+			paid: { id: 'shr_paid', grossAmountCents: 1_000 },
+			free: { id: 'shr_free', grossAmountCents: 0 }
 		});
 		await expect(
 			service.resolveCart([{ priceId: 'price_missing', quantity: 1 }])
@@ -566,8 +574,8 @@ describe('createCatalogService', () => {
 				.mockResolvedValue({
 					products: [],
 					shippingRates: {
-						paid: { id: 'shr_paid', netAmountCents: 937 },
-						free: { id: 'shr_free', netAmountCents: 0 }
+						paid: { id: 'shr_paid', grossAmountCents: 1_000 },
+						free: { id: 'shr_free', grossAmountCents: 0 }
 					},
 					diagnostics: [],
 					loadedAt: new Date(STRIPE_CATALOG_LOADED_AT),
@@ -586,7 +594,7 @@ describe('createCatalogService', () => {
 		alerts.enqueueAlert.mockClear();
 		await expect(service.listPublic()).resolves.toEqual({
 			products: [],
-			paidShippingNetCents: 937,
+			paidShippingGrossCents: 1_000,
 			stale: false
 		});
 		expect(alerts.enqueueAlert).not.toHaveBeenCalled();

@@ -8,7 +8,7 @@ import {
 	VAT_TABLE_REVIEWED_AT
 } from './pricing';
 import type { PublicCatalogProduct } from './catalog';
-import type { MarketDestination } from './destinations';
+import { ASIA_DESTINATIONS, EU_DESTINATIONS, type MarketDestination } from './destinations';
 
 const product: PublicCatalogProduct = {
 	slug: 'community-tee',
@@ -39,35 +39,58 @@ describe('destination pricing', () => {
 	});
 	it.each([
 		['SE', 2_500, 1_000, 3_500],
-		['DE', 2_380, 952, 3_332],
-		['FI', 2_510, 1_004, 3_514],
-		['HU', 2_540, 1_016, 3_556],
-		['JP', 2_000, 800, 2_800]
+		['DE', 2_380, 1_000, 3_380],
+		['FI', 2_510, 1_000, 3_510],
+		['HU', 2_540, 1_000, 3_540],
+		['JP', 2_000, 1_000, 3_000]
 	] as const)('projects %s with integer cents', (country, merchandise, shipping, total) => {
 		const destination = pricingDestination(country);
 		expect(displayPriceForDestination(2_000, destination).grossCents).toBe(merchandise);
 		expect(
-			displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], destination, 800)
+			displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], destination, 1_000)
 		).toMatchObject({
 			shipping: { grossCents: shipping },
 			totalGrossCents: total
 		});
 	});
 
+	it.each([...EU_DESTINATIONS, ...ASIA_DESTINATIONS])(
+		'keeps the paid shipping gross fixed at €10 for %s',
+		(country) => {
+			expect(
+				displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], pricingDestination(country), 1_000)
+					.shipping.grossCents
+			).toBe(1_000);
+		}
+	);
+
+	it.each([
+		['SE', 800, 200],
+		['DE', 840, 160],
+		['FI', 797, 203],
+		['HU', 787, 213],
+		['JP', 1_000, 0]
+	] as const)('backs included shipping VAT out of the fixed gross for %s', (country, net, vat) => {
+		expect(
+			displayCartPrice([{ netUnitCents: 2_000, quantity: 1 }], pricingDestination(country), 1_000)
+				.shipping
+		).toEqual({ netCents: net, vatCents: vat, grossCents: 1_000 });
+	});
+
 	it('keeps shipping free for two units', () => {
 		expect(
-			displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], pricingDestination('FI'), 937)
+			displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], pricingDestination('FI'), 1_000)
 		).toMatchObject({ shipping: { netCents: 0, vatCents: 0, grossCents: 0 } });
 	});
 
 	it('uses the trusted paid shipping amount supplied by the server', () => {
 		expect(
-			displayCartPrice([{ netUnitCents: 2_347, quantity: 1 }], pricingDestination('DE'), 937)
+			displayCartPrice([{ netUnitCents: 2_347, quantity: 1 }], pricingDestination('DE'), 1_000)
 		).toMatchObject({
-			shipping: { netCents: 937, vatCents: 178, grossCents: 1_115 },
-			totalNetCents: 3_284,
-			totalVatCents: 624,
-			totalGrossCents: 3_908
+			shipping: { netCents: 840, vatCents: 160, grossCents: 1_000 },
+			totalNetCents: 3_187,
+			totalVatCents: 606,
+			totalGrossCents: 3_793
 		});
 	});
 
@@ -89,7 +112,7 @@ describe('destination pricing', () => {
 		'rejects invalid cart quantity %s',
 		(quantity) => {
 			expect(() =>
-				displayCartPrice([{ netUnitCents: 2_000, quantity }], pricingDestination('SE'), 937)
+				displayCartPrice([{ netUnitCents: 2_000, quantity }], pricingDestination('SE'), 1_000)
 			).toThrowError('INVALID_CENTS');
 		}
 	);
@@ -99,7 +122,7 @@ describe('destination pricing', () => {
 			displayCartPrice(
 				[{ netUnitCents: Number.MAX_SAFE_INTEGER, quantity: 2 }],
 				pricingDestination('JP'),
-				937
+				1_000
 			)
 		).toThrowError('INVALID_CENTS');
 	});

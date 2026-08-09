@@ -67,7 +67,7 @@ function checkoutDraft(
 		checkoutSessionId?: string | null;
 		shippingMode?: 'paid' | 'free';
 		shippingRateId?: string;
-		shippingNetAmount?: number;
+		shippingGrossAmount?: number;
 		totalUnitCount?: number;
 		lines?: Array<{ priceId: string; quantity: number; unitAmount: number }>;
 	} = {}
@@ -80,14 +80,14 @@ function checkoutDraft(
 		id: options.id ?? 'draft-paid-123',
 		checkoutSessionId:
 			options.checkoutSessionId === undefined ? 'cs_test_paid' : options.checkoutSessionId,
-		contractVersion: 3,
+		contractVersion: 4,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount,
 		shippingMode,
 		shippingRateId:
-			options.shippingRateId ?? (shippingMode === 'paid' ? 'shr_paid_8_eur' : 'shr_free'),
-		shippingNetAmount: options.shippingNetAmount ?? (shippingMode === 'paid' ? 800 : 0),
+			options.shippingRateId ?? (shippingMode === 'paid' ? 'shr_paid_10_eur' : 'shr_free'),
+		shippingGrossAmount: options.shippingGrossAmount ?? (shippingMode === 'paid' ? 1_000 : 0),
 		createdAt: new Date('2026-07-16T10:00:00.000Z'),
 		expiresAt: new Date('2026-07-17T10:00:00.000Z'),
 		completedAt: null,
@@ -142,7 +142,7 @@ describe('Stripe paid Checkout normalization', () => {
 		const { snapshot, client } = await normalizedSnapshot();
 
 		expect(snapshot).toEqual({
-			contractVersion: 3,
+			contractVersion: 4,
 			checkoutSessionId: 'cs_test_paid',
 			paymentIntentId: 'pi_test_paid',
 			customerId: 'cus_test_paid',
@@ -150,7 +150,7 @@ describe('Stripe paid Checkout normalization', () => {
 			currency: 'eur',
 			paymentStatus: 'paid',
 			destinationCountry: 'SE',
-			shippingRate: { id: 'shr_paid_8_eur', netAmount: 800 },
+			shippingRate: { id: 'shr_paid_10_eur', grossAmount: 1_000 },
 			amounts: {
 				subtotal: 2_000,
 				discount: 0,
@@ -194,10 +194,9 @@ describe('Stripe paid Checkout normalization', () => {
 		]);
 	});
 
-	it('normalizes arbitrary positive Stripe Price and paid Shipping Rate amounts', async () => {
+	it('normalizes an arbitrary positive Stripe Price while preserving the dynamic Shipping Rate ID', async () => {
 		const fixture = paidCheckoutProviderFixture({
 			country: 'DE',
-			shippingSubtotal: 937,
 			shippingRateId: 'shr_paid_dynamic',
 			lines: [
 				{
@@ -215,13 +214,13 @@ describe('Stripe paid Checkout normalization', () => {
 				fixture.session.id
 			)
 		).resolves.toMatchObject({
-			shippingRate: { id: 'shr_paid_dynamic', netAmount: 937 },
+			shippingRate: { id: 'shr_paid_dynamic', grossAmount: 1_000 },
 			amounts: {
 				subtotal: 2_347,
-				shipping: 1_115,
-				shippingTax: 178,
-				tax: 624,
-				total: 3_908
+				shipping: 1_000,
+				shippingTax: 160,
+				tax: 606,
+				total: 3_793
 			},
 			lines: [{ priceId: 'price_dynamic', unitAmount: 2_347, retailUnitAmount: 2_793 }]
 		});
@@ -294,7 +293,7 @@ describe('Stripe paid Checkout normalization', () => {
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
 			)
-		).resolves.toMatchObject({ amounts: { tax: 0, total: 2_800 } });
+		).resolves.toMatchObject({ amounts: { tax: 0, total: 3_000 } });
 	});
 
 	it('accepts an exempt customer only when merchandise and shipping tax are both zero', async () => {
@@ -316,7 +315,7 @@ describe('Stripe paid Checkout normalization', () => {
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
 			)
-		).resolves.toMatchObject({ amounts: { tax: 0, total: 2_800 } });
+		).resolves.toMatchObject({ amounts: { tax: 0, total: 3_000 } });
 	});
 
 	it.each([
@@ -418,7 +417,7 @@ describe('Stripe paid Checkout normalization', () => {
 
 	it('retrieves every line-item page in provider order', async () => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingSubtotal: 0,
+			shippingGrossAmount: 0,
 			shippingTaxAmount: 0,
 			lines: [
 				{
@@ -758,7 +757,7 @@ describe('Stripe paid Checkout normalization', () => {
 		);
 	});
 
-	it('normalizes exclusive shipping tax into the charged gross shipping snapshot', async () => {
+	it('normalizes inclusive shipping tax inside the charged gross shipping snapshot', async () => {
 		const fixture = paidCheckoutProviderFixture();
 
 		await expect(
@@ -771,26 +770,26 @@ describe('Stripe paid Checkout normalization', () => {
 	});
 
 	it.each([
-		['SE', 500, 200, 2_500, 1_000, 3_500],
-		['DE', 380, 152, 2_380, 952, 3_332],
-		['FI', 510, 204, 2_510, 1_004, 3_514],
-		['HU', 540, 216, 2_540, 1_016, 3_556],
-		['JP', 0, 0, 2_000, 800, 2_800]
+		['SE', 500, 200, 2_500, 3_500],
+		['DE', 380, 160, 2_380, 3_380],
+		['FI', 510, 203, 2_510, 3_510],
+		['HU', 540, 213, 2_540, 3_540],
+		['JP', 0, 0, 2_000, 3_000]
 	] as const)(
-		'normalizes the v3 exclusive %s pricing matrix',
-		async (country, merchandiseTax, shippingTax, retailUnitAmount, shipping, total) => {
+		'normalizes the v4 inclusive fixed-shipping %s pricing matrix',
+		async (country, merchandiseTax, shippingTax, retailUnitAmount, total) => {
 			const fixture = paidCheckoutProviderFixture({ country });
 			const snapshot = await createStripeOrderGateway(
 				new ContractStripeClient(fixture)
 			).retrievePaidCheckout(fixture.session.id);
 
 			expect(snapshot).toMatchObject({
-				contractVersion: 3,
+				contractVersion: 4,
 				destinationCountry: country,
 				amounts: {
 					subtotal: 2_000,
 					discount: 0,
-					shipping,
+					shipping: 1_000,
 					shippingTax,
 					tax: merchandiseTax + shippingTax,
 					total
@@ -800,10 +799,10 @@ describe('Stripe paid Checkout normalization', () => {
 		}
 	);
 
-	it('rejects version 1 metadata without a compatibility path', async () => {
+	it('rejects version 3 metadata without a compatibility path', async () => {
 		const fixture = paidCheckoutProviderFixture();
 		if (!fixture.session.metadata) throw new Error();
-		fixture.session.metadata.checkout_contract_version = '1';
+		fixture.session.metadata.checkout_contract_version = '3';
 
 		await expectStableCode(
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
@@ -829,11 +828,19 @@ describe('Stripe paid Checkout normalization', () => {
 			}
 		],
 		[
-			'inclusive ShippingRate',
+			'exclusive paid ShippingRate',
 			(fixture: PaidCheckoutProviderFixture) => {
 				const rate = fixture.session.shipping_cost?.shipping_rate;
 				if (!rate || typeof rate === 'string') throw new Error();
-				rate.tax_behavior = 'inclusive';
+				rate.tax_behavior = 'exclusive';
+			}
+		],
+		[
+			'non-contract paid ShippingRate gross',
+			(fixture: PaidCheckoutProviderFixture) => {
+				const rate = fixture.session.shipping_cost?.shipping_rate;
+				if (!rate || typeof rate === 'string') throw new Error();
+				rate.fixed_amount.amount = 999;
 			}
 		],
 		[
@@ -844,15 +851,15 @@ describe('Stripe paid Checkout normalization', () => {
 			}
 		],
 		[
-			'inclusive shipping tax rate',
+			'exclusive shipping tax rate',
 			(fixture: PaidCheckoutProviderFixture) => {
 				const tax = fixture.session.shipping_cost?.taxes?.[0];
 				if (!tax) throw new Error();
-				tax.rate.inclusive = true;
+				tax.rate.inclusive = false;
 			}
 		],
 		[
-			'mixed exclusive and inclusive shipping tax rates',
+			'mixed inclusive and exclusive shipping tax rates',
 			(fixture: PaidCheckoutProviderFixture) => {
 				const taxes = fixture.session.shipping_cost?.taxes;
 				if (!taxes?.[0]) throw new Error();
@@ -860,7 +867,7 @@ describe('Stripe paid Checkout normalization', () => {
 				taxes.push({
 					...structuredClone(taxes[0]),
 					amount: 100,
-					rate: { ...taxes[0].rate, id: 'txr_shipping_mutated_inclusive', inclusive: true }
+					rate: { ...taxes[0].rate, id: 'txr_shipping_exclusive', inclusive: false }
 				});
 			}
 		],
@@ -872,10 +879,45 @@ describe('Stripe paid Checkout normalization', () => {
 				tax.amount -= 1;
 			}
 		]
-	])('rejects %s for v3 exclusive shipping', async (_label, mutate) => {
+	])('rejects %s for v4 inclusive paid shipping', async (_label, mutate) => {
 		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture);
 
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_TAX_INVALID'
+		);
+	});
+
+	it('requires free shipping to remain EUR 0 and exclusive', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			shippingGrossAmount: 0,
+			shippingTaxAmount: 0,
+			lines: [
+				{
+					id: 'li_two_tees',
+					priceId: 'price_tee_medium',
+					quantity: 2,
+					unitAmount: 2_000,
+					taxAmount: 1_000
+				}
+			]
+		});
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			shippingRate: { id: 'shr_free', grossAmount: 0 },
+			amounts: { shipping: 0, shippingTax: 0 }
+		});
+
+		const rate = fixture.session.shipping_cost?.shipping_rate;
+		if (!rate || typeof rate === 'string') throw new Error();
+		rate.tax_behavior = 'inclusive';
 		await expectStableCode(
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
 				fixture.session.id
@@ -1100,16 +1142,15 @@ describe('Stripe paid Checkout normalization', () => {
 });
 
 describe('paid Checkout comparison', () => {
-	it('accepts an end-to-end normalized EU checkout with exclusive paid shipping', async () => {
+	it('accepts an end-to-end normalized EU checkout with inclusive paid shipping', async () => {
 		const { snapshot } = await normalizedSnapshot();
 
 		expect(() => comparePaidCheckout(checkoutDraft(), snapshot)).not.toThrow();
 	});
 
-	it('accepts arbitrary frozen Price and Shipping Rate amounts', async () => {
+	it('accepts an arbitrary frozen Price and dynamic Shipping Rate ID', async () => {
 		const fixture = paidCheckoutProviderFixture({
 			country: 'DE',
-			shippingSubtotal: 937,
 			shippingRateId: 'shr_paid_dynamic',
 			lines: [
 				{
@@ -1124,7 +1165,6 @@ describe('paid Checkout comparison', () => {
 		const { snapshot } = await normalizedSnapshot(fixture);
 		const draft = checkoutDraft({
 			shippingRateId: 'shr_paid_dynamic',
-			shippingNetAmount: 937,
 			lines: [{ priceId: 'price_dynamic', quantity: 1, unitAmount: 2_347 }]
 		});
 		draft.destinationCountry = 'DE';
@@ -1134,7 +1174,7 @@ describe('paid Checkout comparison', () => {
 
 	it('accepts reordered exact lines and a destination-specific final tax', async () => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingSubtotal: 0,
+			shippingGrossAmount: 0,
 			shippingTaxAmount: 0,
 			lines: [
 				{
@@ -1181,7 +1221,7 @@ describe('paid Checkout comparison', () => {
 
 	it.each([
 		['Shipping Rate ID', (paid: PaidCheckoutSnapshot) => (paid.shippingRate.id = 'shr_other')],
-		['Shipping Rate amount', (paid: PaidCheckoutSnapshot) => (paid.shippingRate.netAmount = 799)]
+		['Shipping Rate amount', (paid: PaidCheckoutSnapshot) => (paid.shippingRate.grossAmount = 799)]
 	])('rejects a frozen %s mismatch', async (_label, mutate) => {
 		const { snapshot } = await normalizedSnapshot();
 		mutate(snapshot);
@@ -1194,7 +1234,7 @@ describe('paid Checkout comparison', () => {
 
 	it('retains duplicate provider lines instead of overwriting them during comparison', async () => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingSubtotal: 0,
+			shippingGrossAmount: 0,
 			shippingTaxAmount: 0,
 			lines: [
 				{
@@ -1301,7 +1341,7 @@ describe('paid Checkout comparison', () => {
 		['free draft with paid provider shipping', 'free' as const, 1_000]
 	])('rejects %s', async (_label, shippingMode, shipping) => {
 		const fixture = paidCheckoutProviderFixture({
-			shippingSubtotal: shippingMode === 'free' ? 0 : 800,
+			shippingGrossAmount: shippingMode === 'free' ? 0 : 1_000,
 			shippingTaxAmount: shippingMode === 'free' ? 0 : 200,
 			lines:
 				shippingMode === 'free'

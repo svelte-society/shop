@@ -83,6 +83,19 @@ export function displayPriceForDestination(
 	return { netCents, vatCents: grossCents - netCents, grossCents };
 }
 
+export function displayInclusivePriceForDestination(
+	grossCents: number,
+	destination: PricingDestination
+): DisplayPrice {
+	if (!Number.isSafeInteger(grossCents) || grossCents < 0) throw new Error('INVALID_CENTS');
+	const denominator = BigInt(10_000 + destination.vatBasisPoints);
+	const numerator = BigInt(grossCents) * 10_000n;
+	const net = (numerator + denominator / 2n) / denominator;
+	if (net > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('INVALID_CENTS');
+	const netCents = Number(net);
+	return { netCents, vatCents: grossCents - netCents, grossCents };
+}
+
 export function pricePublicProduct(
 	product: PublicCatalogProduct,
 	destination: PricingDestination
@@ -104,9 +117,9 @@ function safeCents(value: bigint): number {
 export function displayCartPrice(
 	lines: readonly { netUnitCents: number; quantity: number }[],
 	destination: PricingDestination,
-	paidShippingNetCents: number
+	paidShippingGrossCents: number
 ): CartDisplayPrice {
-	if (!Number.isSafeInteger(paidShippingNetCents) || paidShippingNetCents <= 0) {
+	if (!Number.isSafeInteger(paidShippingGrossCents) || paidShippingGrossCents <= 0) {
 		throw new Error('INVALID_CENTS');
 	}
 	let units = 0;
@@ -124,7 +137,10 @@ export function displayCartPrice(
 		merchandiseNet += BigInt(line.netUnitCents) * BigInt(line.quantity);
 	}
 	const merchandise = displayPriceForDestination(safeCents(merchandiseNet), destination);
-	const shipping = displayPriceForDestination(units === 1 ? paidShippingNetCents : 0, destination);
+	const shipping = displayInclusivePriceForDestination(
+		units === 1 ? paidShippingGrossCents : 0,
+		destination
+	);
 	return {
 		merchandise,
 		shipping,

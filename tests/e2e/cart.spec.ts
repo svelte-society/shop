@@ -32,7 +32,11 @@ test('cart persists the provider price and restores it after reload', async ({ p
 	await expect(page.getByRole('heading', { level: 2, name: 'Society Mug' })).toBeVisible();
 	await expect(page.getByLabel('Quantity')).toHaveValue('1');
 	await expect(page.getByText('Add one more item for free shipping.')).toBeVisible();
-	await expect(page.getByText('€11.71', { exact: true })).toBeVisible();
+	await expect(page.getByText('Includes €5.00 VAT per item.')).toBeVisible();
+	await expect(page.getByText('Merchandise (incl. VAT)')).toBeVisible();
+	await expect(page.getByText('Shipping (incl. VAT)')).toBeVisible();
+	await expect(page.getByText('Included VAT')).toBeVisible();
+	await expect(page.getByText('€10.00', { exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Checkout opens soon' })).toBeDisabled();
 
 	const stored = await page.evaluate((key) => window.localStorage.getItem(key), CART_STORAGE_KEY);

@@ -43,7 +43,7 @@ export type NewCheckoutDraft = {
 	totalUnitCount: number;
 	shippingMode: ShippingMode;
 	shippingRateId: string;
-	shippingNetAmount: number;
+	shippingGrossAmount: number;
 	createdAt: Date;
 	expiresAt: Date;
 	lines: NewCheckoutDraftLine[];

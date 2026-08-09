@@ -1,15 +1,24 @@
 <script lang="ts">
 	import CatalogUnavailable from '$lib/components/CatalogUnavailable.svelte';
 	import ProductGrid from '$lib/components/ProductGrid.svelte';
-	import { displayPriceForDestination } from '$lib/domain/pricing';
+	import { displayInclusivePriceForDestination } from '$lib/domain/pricing';
 	import { formatEur } from '$lib/domain/money';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
-	let projectedShipping = $derived(
-		data.paidShippingNetCents === null
+	let displayShipping = $derived(
+		data.paidShippingGrossCents === null
 			? null
-			: displayPriceForDestination(data.paidShippingNetCents, data.pricingDestination)
+			: displayInclusivePriceForDestination(data.paidShippingGrossCents, data.pricingDestination)
+	);
+	let shippingPriceCopy = $derived(
+		displayShipping
+			? `${formatEur(displayShipping.grossCents)} ${
+					data.pricingDestination.region === 'eu'
+						? `including ${formatEur(displayShipping.vatCents)} VAT`
+						: 'excluding EU VAT'
+				} for one item. Free shipping when you pick two or more.`
+			: null
 	);
 </script>
 
@@ -67,11 +76,8 @@
 		<div class="commerce-grid">
 			<article>
 				<h3>Shipping</h3>
-				{#if projectedShipping}
-					<p>
-						{formatEur(projectedShipping.grossCents)} for one item. Free shipping when you pick two or
-						more.
-					</p>
+				{#if shippingPriceCopy}
+					<p>{shippingPriceCopy}</p>
 				{:else}
 					<p>Current shipping is shown before checkout. Free shipping when you pick two or more.</p>
 				{/if}

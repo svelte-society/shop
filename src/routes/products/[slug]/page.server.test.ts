@@ -39,8 +39,8 @@ describe('product catalog loader', () => {
 						return {
 							products: [],
 							shippingRates: {
-								paid: { id: 'shr_paid', netAmountCents: 937 },
-								free: { id: 'shr_free', netAmountCents: 0 }
+								paid: { id: 'shr_paid', grossAmountCents: 1_000 },
+								free: { id: 'shr_free', grossAmountCents: 0 }
 							},
 							diagnostics: [],
 							loadedAt: new Date(),

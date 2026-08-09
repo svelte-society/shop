@@ -43,6 +43,7 @@ describe('CartLineItem', () => {
 		});
 
 		await expect.element(page.getByText('€25.00 each')).toBeVisible();
+		await expect.element(page.getByText('Includes €5.00 VAT per item.')).toBeVisible();
 		await expect.element(page.getByText('€50.00')).toBeVisible();
 	});
 });

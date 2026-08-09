@@ -417,7 +417,7 @@ function seedRealOrder(database: ShopDatabase): void {
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
 				shipping_mode, created_at, expires_at, completed_at, destination_country,
-				shipping_rate_id, shipping_net_amount
+				shipping_rate_id, shipping_gross_amount
 			) VALUES ('draft_prepare', 'cs_test_prepare', 2, 'eur', 2, 'free', ?, ?, ?, 'SE',
 				'shr_free', 0)`
 		)

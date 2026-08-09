@@ -85,13 +85,13 @@ function spawnClaimContender(
 
 function draftInput(overrides: Partial<NewCheckoutDraft> = {}): NewCheckoutDraft {
 	return {
-		contractVersion: 3,
+		contractVersion: 4,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 2,
 		shippingMode: 'free',
 		shippingRateId: 'shr_free',
-		shippingNetAmount: 0,
+		shippingGrossAmount: 0,
 		createdAt: new Date('2026-07-16T08:00:00.000Z'),
 		expiresAt: new Date('2026-07-16T09:00:00.000Z'),
 		lines: [
@@ -202,7 +202,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 		expect(found).toMatchObject({
 			shippingMode: 'free',
 			shippingRateId: 'shr_free',
-			shippingNetAmount: 0
+			shippingGrossAmount: 0
 		});
 		expect(found?.lines).toEqual([
 			expect.objectContaining({
@@ -238,7 +238,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 		);
 	});
 
-	it('requires contract v3 and a valid market destination when creating or mapping drafts', () => {
+	it('requires contract v4 and a valid market destination when creating or mapping drafts', () => {
 		expect(() => drafts.create(draftInput({ contractVersion: 1 }))).toThrowError(
 			'CHECKOUT_DRAFT_INVALID'
 		);
@@ -248,7 +248,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 			)
 		).toThrowError('CHECKOUT_DRAFT_INVALID');
 		const draft = drafts.create(draftInput());
-		expect(draft).toMatchObject({ contractVersion: 3, destinationCountry: 'SE' });
+		expect(draft).toMatchObject({ contractVersion: 4, destinationCountry: 'SE' });
 		database
 			.prepare('UPDATE checkout_drafts SET destination_country = ? WHERE id = ?')
 			.run('ZZ', draft.id);
@@ -281,7 +281,7 @@ describe('SqliteCheckoutDraftRepository', () => {
 			'CHECKOUT_DRAFT_INVALID'
 		);
 		expect(() =>
-			drafts.create(draftInput({ shippingNetAmount: Number.MAX_SAFE_INTEGER + 1 }))
+			drafts.create(draftInput({ shippingGrossAmount: Number.MAX_SAFE_INTEGER + 1 }))
 		).toThrowError('CHECKOUT_DRAFT_INVALID');
 		expect(() =>
 			drafts.create(
@@ -289,21 +289,32 @@ describe('SqliteCheckoutDraftRepository', () => {
 					totalUnitCount: 1,
 					shippingMode: 'paid',
 					shippingRateId: 'shr_paid',
-					shippingNetAmount: 0,
+					shippingGrossAmount: 0,
 					lines: [{ ...draftInput().lines[0], quantity: 1 }]
 				})
 			)
 		).toThrowError('CHECKOUT_DRAFT_INVALID');
-		expect(() => drafts.create(draftInput({ shippingNetAmount: 1 }))).toThrowError(
+		expect(() => drafts.create(draftInput({ shippingGrossAmount: 1 }))).toThrowError(
 			'CHECKOUT_DRAFT_INVALID'
 		);
+		expect(() =>
+			drafts.create(
+				draftInput({
+					totalUnitCount: 1,
+					shippingMode: 'paid',
+					shippingRateId: 'shr_paid',
+					shippingGrossAmount: 999,
+					lines: [{ ...draftInput().lines[0], quantity: 1 }]
+				})
+			)
+		).toThrowError('CHECKOUT_DRAFT_INVALID');
 	});
 
 	it('rejects a corrupted stored shipping snapshot at the row boundary', () => {
 		const draft = drafts.create(draftInput());
 		database.exec('DROP TRIGGER checkout_drafts_shipping_required_update');
 		database
-			.prepare('UPDATE checkout_drafts SET shipping_net_amount = ? WHERE id = ?')
+			.prepare('UPDATE checkout_drafts SET shipping_gross_amount = ? WHERE id = ?')
 			.run(1, draft.id);
 
 		expect(() => drafts.findById(draft.id)).toThrowError('CHECKOUT_DRAFT_ROW_INVALID');

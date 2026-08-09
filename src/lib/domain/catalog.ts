@@ -2,6 +2,8 @@ import type { ProductionDetails } from './production';
 
 export type CatalogCategory = 'apparel' | 'accessory';
 
+export const PAID_SHIPPING_GROSS_CENTS = 1_000;
+
 export type CatalogDiagnostic = {
 	providerId: string;
 	code: string;
@@ -9,12 +11,12 @@ export type CatalogDiagnostic = {
 
 export type CatalogShippingRate = {
 	id: string;
-	netAmountCents: number;
+	grossAmountCents: number;
 };
 
 export type CatalogShippingRates = {
 	paid: CatalogShippingRate;
-	free: CatalogShippingRate & { netAmountCents: 0 };
+	free: CatalogShippingRate & { grossAmountCents: 0 };
 };
 
 export type CatalogVariant = {
@@ -144,10 +146,10 @@ function isCatalogVariant(input: unknown): input is CatalogVariant {
 function isCatalogShippingRate(input: unknown, expectedAmount: 'positive' | 'zero'): boolean {
 	return (
 		isRecord(input) &&
-		hasExactKeys(input, ['id', 'netAmountCents']) &&
+		hasExactKeys(input, ['id', 'grossAmountCents']) &&
 		isNonEmptyString(input.id) &&
-		isSafeNonNegativeInteger(input.netAmountCents) &&
-		(expectedAmount === 'positive' ? input.netAmountCents > 0 : input.netAmountCents === 0)
+		isSafeNonNegativeInteger(input.grossAmountCents) &&
+		(expectedAmount === 'positive' ? input.grossAmountCents > 0 : input.grossAmountCents === 0)
 	);
 }
 

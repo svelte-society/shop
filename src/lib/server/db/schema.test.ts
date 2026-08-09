@@ -39,7 +39,7 @@ const expectedColumns = {
 		column('completed_at', 'TEXT', 0),
 		column('destination_country', 'TEXT', 0),
 		column('shipping_rate_id', 'TEXT', 0),
-		column('shipping_net_amount', 'INTEGER', 0)
+		column('shipping_gross_amount', 'INTEGER', 0)
 	],
 	checkout_draft_lines: [
 		column('draft_id', 'TEXT', 1, null, 1),
@@ -289,7 +289,7 @@ type DraftInput = {
 	totalUnitCount: number;
 	shippingMode: string;
 	shippingRateId: string | null;
-	shippingNetAmount: number | null;
+	shippingGrossAmount: number | null;
 };
 
 function insertDraft(database: ShopDatabase, overrides: Partial<DraftInput> = {}): void {
@@ -301,7 +301,7 @@ function insertDraft(database: ShopDatabase, overrides: Partial<DraftInput> = {}
 		totalUnitCount: 1,
 		shippingMode: 'paid',
 		shippingRateId: 'shr_paid',
-		shippingNetAmount: 937,
+		shippingGrossAmount: 937,
 		...overrides
 	};
 	database
@@ -309,13 +309,13 @@ function insertDraft(database: ShopDatabase, overrides: Partial<DraftInput> = {}
 			`INSERT INTO checkout_drafts (
 				id, stripe_checkout_session_id, contract_version, currency,
 				total_unit_count, shipping_mode, created_at, expires_at, destination_country,
-				shipping_rate_id, shipping_net_amount
+				shipping_rate_id, shipping_gross_amount
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
 			input.sessionId,
-			2,
+			4,
 			input.currency,
 			input.totalUnitCount,
 			input.shippingMode,
@@ -323,7 +323,7 @@ function insertDraft(database: ShopDatabase, overrides: Partial<DraftInput> = {}
 			'2026-07-16T01:00:00.000Z',
 			input.destinationCountry,
 			input.shippingRateId,
-			input.shippingNetAmount
+			input.shippingGrossAmount
 		);
 }
 
@@ -615,7 +615,7 @@ describe('initial schema CHECK constraints', () => {
 			totalUnitCount: 20,
 			shippingMode: 'free',
 			shippingRateId: 'shr_free',
-			shippingNetAmount: 0
+			shippingGrossAmount: 0
 		});
 		expect(() =>
 			database.prepare("UPDATE checkout_drafts SET shipping_mode = 'express'").run()
@@ -645,10 +645,10 @@ describe('initial schema CHECK constraints', () => {
 		expect(() => insertDraft(database, { shippingRateId: null })).toThrow(
 			/checkout shipping snapshot required/
 		);
-		expect(() => insertDraft(database, { shippingNetAmount: null })).toThrow(
+		expect(() => insertDraft(database, { shippingGrossAmount: null })).toThrow(
 			/checkout shipping snapshot required/
 		);
-		expect(() => insertDraft(database, { shippingNetAmount: 0 })).toThrow(
+		expect(() => insertDraft(database, { shippingGrossAmount: 0 })).toThrow(
 			/checkout shipping snapshot required/
 		);
 		expect(() =>
@@ -656,12 +656,12 @@ describe('initial schema CHECK constraints', () => {
 				shippingMode: 'free',
 				totalUnitCount: 2,
 				shippingRateId: 'shr_free',
-				shippingNetAmount: 1
+				shippingGrossAmount: 1
 			})
 		).toThrow(/checkout shipping snapshot required/);
 		insertDraft(database);
 		expect(() =>
-			database.prepare('UPDATE checkout_drafts SET shipping_net_amount = 0').run()
+			database.prepare('UPDATE checkout_drafts SET shipping_gross_amount = 0').run()
 		).toThrow(/checkout shipping snapshot required/);
 		expect(() =>
 			database.prepare('UPDATE checkout_drafts SET shipping_rate_id = NULL').run()

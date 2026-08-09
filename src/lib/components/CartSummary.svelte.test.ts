@@ -7,10 +7,10 @@ import { displayCartPrice, pricingDestination } from '$lib/domain/pricing';
 
 const germanCart = {
 	merchandise: { netCents: 2_000, vatCents: 380, grossCents: 2_380 },
-	shipping: { netCents: 800, vatCents: 152, grossCents: 952 },
-	totalNetCents: 2_800,
-	totalVatCents: 532,
-	totalGrossCents: 3_332
+	shipping: { netCents: 840, vatCents: 160, grossCents: 1_000 },
+	totalNetCents: 2_840,
+	totalVatCents: 540,
+	totalGrossCents: 3_380
 };
 const germanDestination: PricingDestination = {
 	countryCode: 'DE',
@@ -34,7 +34,9 @@ describe('CartSummary checkout action', () => {
 		});
 
 		await page.getByRole('button', { name: 'Continue to secure checkout' }).click();
-		await expect.element(page.getByText('Merchandise')).toBeVisible();
+		await expect.element(page.getByText('Merchandise (incl. VAT)')).toBeVisible();
+		await expect.element(page.getByText('Shipping (incl. VAT)')).toBeVisible();
+		await expect.element(page.getByText('Included VAT')).toBeVisible();
 		await expect
 			.element(
 				page.getByText(
@@ -44,9 +46,9 @@ describe('CartSummary checkout action', () => {
 			.toBeVisible();
 		expect(document.body.textContent).not.toContain('Exact tax is confirmed');
 		await expect.element(page.getByText('€23.80')).toBeVisible();
-		await expect.element(page.getByText('€9.52')).toBeVisible();
-		await expect.element(page.getByText('€5.32')).toBeVisible();
-		await expect.element(page.getByText('€33.32')).toBeVisible();
+		await expect.element(page.getByText('€10.00')).toBeVisible();
+		await expect.element(page.getByText('€5.40')).toBeVisible();
+		await expect.element(page.getByText('€33.80')).toBeVisible();
 
 		expect(enabledClicks).toBe(1);
 
@@ -95,13 +97,19 @@ describe('CartSummary checkout action', () => {
 		const destination = pricingDestination('DE');
 		render(CartSummary, {
 			totalUnits: 2,
-			cartDisplayPrice: displayCartPrice([{ netUnitCents: 2_000, quantity: 2 }], destination, 937),
+			cartDisplayPrice: displayCartPrice(
+				[{ netUnitCents: 2_000, quantity: 2 }],
+				destination,
+				1_000
+			),
 			destination,
 			checkoutEnabled: true
 		});
 
-		const shippingRow = page.getByText('Shipping', { exact: true }).element().parentElement;
-		expect(shippingRow?.textContent).toBe('Shipping€0.00');
+		const shippingRow = page
+			.getByText('Shipping (incl. VAT)', { exact: true })
+			.element().parentElement;
+		expect(shippingRow?.textContent).toBe('Shipping (incl. VAT)€0.00');
 		const totalRow = page.getByText('Estimated total', { exact: true }).element().parentElement;
 		expect(totalRow?.textContent).toBe('Estimated total€47.60');
 	});

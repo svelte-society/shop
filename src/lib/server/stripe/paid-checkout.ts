@@ -1,4 +1,5 @@
 import type Stripe from 'stripe';
+import { PAID_SHIPPING_GROSS_CENTS } from '$lib/domain/catalog';
 import { isSupportedDestination } from '$lib/domain/destinations';
 import type { CheckoutDraftWithLines, PaymentStatus } from '$lib/domain/orders';
 import {
@@ -147,7 +148,7 @@ function requireCurrency(value: unknown): void {
 
 type CheckoutMetadata = {
 	draftId: string;
-	contractVersion: 3;
+	contractVersion: 4;
 	destinationCountry: string;
 };
 
@@ -543,21 +544,23 @@ function validatePaymentIntent(
 	return { paymentIntentId: value.id, charge };
 }
 
-function normalizeExclusiveShipping(
+function normalizeShippingRate(
 	value: UnknownRecord,
 	requiresPaidShipping: boolean
-): { id: string; netAmount: number } {
+): { id: string; grossAmount: number } {
 	const rate = value.shipping_rate;
+	const expectedGrossAmount = requiresPaidShipping ? PAID_SHIPPING_GROSS_CENTS : 0;
+	const expectedTaxBehavior = requiresPaidShipping ? 'inclusive' : 'exclusive';
 	if (
 		!isRecord(rate) ||
 		rate.object !== 'shipping_rate' ||
 		!isProviderId(rate.id, SHIPPING_RATE_ID_PATTERN) ||
 		rate.type !== 'fixed_amount' ||
-		rate.tax_behavior !== 'exclusive' ||
+		rate.tax_behavior !== expectedTaxBehavior ||
 		!isRecord(rate.fixed_amount) ||
-		!isSafeNonNegativeInteger(rate.fixed_amount.amount) ||
+		rate.fixed_amount.amount !== expectedGrossAmount ||
 		rate.fixed_amount.amount !== value.amount_subtotal ||
-		(requiresPaidShipping ? rate.fixed_amount.amount <= 0 : rate.fixed_amount.amount !== 0) ||
+		rate.fixed_amount.amount !== value.amount_total ||
 		rate.fixed_amount.currency !== 'eur'
 	) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
@@ -572,7 +575,7 @@ function normalizeExclusiveShipping(
 				!isRecord(tax.rate) ||
 				tax.rate.object !== 'tax_rate' ||
 				!isProviderId(tax.rate.id, TAX_RATE_ID_PATTERN) ||
-				tax.rate.inclusive !== false
+				tax.rate.inclusive !== requiresPaidShipping
 			) {
 				fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 			}
@@ -580,17 +583,10 @@ function normalizeExclusiveShipping(
 		}),
 		'STRIPE_PAID_CHECKOUT_TAX_INVALID'
 	);
-	if (
-		shippingTax !== value.amount_tax ||
-		value.amount_total !==
-			safeSum(
-				[value.amount_subtotal as number, value.amount_tax as number],
-				'STRIPE_PAID_CHECKOUT_TAX_INVALID'
-			)
-	) {
+	if (shippingTax !== value.amount_tax || (value.amount_tax as number) > expectedGrossAmount) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}
-	return { id: rate.id, netAmount: rate.fixed_amount.amount };
+	return { id: rate.id, grossAmount: expectedGrossAmount };
 }
 
 function normalizePaidCheckout(
@@ -647,9 +643,10 @@ function normalizePaidCheckout(
 		lines.map((line) => line.quantity),
 		'STRIPE_PAID_CHECKOUT_LINES_INVALID'
 	);
-	const shippingRate = normalizeExclusiveShipping(session.shipping_cost, unitCount === 1);
+	const shippingRate = normalizeShippingRate(session.shipping_cost, unitCount === 1);
 
-	// Stripe 2026-06-24.dahlia all-exclusive reconciliation.
+	// Stripe 2026-06-24.dahlia reconciliation: merchandise is exclusive, while paid shipping
+	// tax is included in its fixed EUR 10 gross and must not be added to the Session total twice.
 	const lineSubtotal = safeSum(
 		lines.map((line) => line.subtotal),
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -684,7 +681,7 @@ function normalizePaidCheckout(
 				session.total_details.amount_discount,
 				'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
 			),
-			providerTax,
+			lineTax,
 			session.total_details.amount_shipping
 		],
 		'STRIPE_PAID_CHECKOUT_TOTALS_INVALID'
@@ -900,19 +897,17 @@ export function comparePaidCheckout(
 	if (!Number.isSafeInteger(paidUnitCount) || paidUnitCount !== draft.totalUnitCount) {
 		comparisonFail('PAID_CHECKOUT_UNIT_COUNT_MISMATCH');
 	}
-	const netShipping = paid.amounts.shipping - paid.amounts.shippingTax;
+	const expectedShippingGross = draft.shippingMode === 'paid' ? PAID_SHIPPING_GROSS_CENTS : 0;
 	if (
-		!Number.isSafeInteger(netShipping) ||
-		netShipping < 0 ||
 		!paid.shippingRate ||
 		!isProviderId(paid.shippingRate.id, SHIPPING_RATE_ID_PATTERN) ||
-		!isSafeNonNegativeInteger(paid.shippingRate.netAmount) ||
+		!isSafeNonNegativeInteger(paid.shippingRate.grossAmount) ||
 		!isProviderId(draft.shippingRateId, SHIPPING_RATE_ID_PATTERN) ||
-		!isSafeNonNegativeInteger(draft.shippingNetAmount) ||
+		!isSafeNonNegativeInteger(draft.shippingGrossAmount) ||
 		paid.shippingRate.id !== draft.shippingRateId ||
-		paid.shippingRate.netAmount !== draft.shippingNetAmount ||
-		netShipping !== draft.shippingNetAmount ||
-		(draft.shippingMode === 'paid' ? draft.shippingNetAmount <= 0 : draft.shippingNetAmount !== 0)
+		paid.shippingRate.grossAmount !== expectedShippingGross ||
+		draft.shippingGrossAmount !== expectedShippingGross ||
+		paid.amounts.shipping !== expectedShippingGross
 	) {
 		comparisonFail('PAID_CHECKOUT_SHIPPING_MISMATCH');
 	}

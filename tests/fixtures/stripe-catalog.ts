@@ -139,7 +139,7 @@ export function stripeShippingRate(overrides: ShippingRateOverrides = {}): Strip
 		created: 1_752_600_000,
 		delivery_estimate: null,
 		display_name: 'Standard shipping',
-		fixed_amount: { amount: 937, currency: 'eur' },
+		fixed_amount: { amount: 800, currency: 'eur' },
 		livemode: false,
 		metadata: { ...metadata },
 		tax_behavior: 'exclusive',

@@ -10,6 +10,14 @@ import {
 } from '../../../../tests/fixtures/stripe-catalog';
 import { parseStripeCatalog, parseStripeShippingRates } from './parse';
 
+function paidShippingRate(overrides: Partial<Stripe.ShippingRate> = {}): Stripe.ShippingRate {
+	return stripeShippingRate({
+		fixed_amount: { amount: 1_000, currency: 'eur' },
+		tax_behavior: 'inclusive',
+		...overrides
+	});
+}
+
 function productIdFor(price: Stripe.Price): string {
 	return typeof price.product === 'string' ? price.product : price.product.id;
 }
@@ -20,7 +28,7 @@ async function parse(products: readonly Stripe.Product[], prices: readonly Strip
 		async (productId) => prices.filter((price) => productIdFor(price) === productId),
 		STRIPE_CATALOG_LOADED_AT,
 		parseStripeShippingRates({
-			paid: { configuredId: 'shr_paid', rate: stripeShippingRate() },
+			paid: { configuredId: 'shr_paid', rate: paidShippingRate() },
 			free: {
 				configuredId: 'shr_free',
 				rate: stripeShippingRate({
@@ -59,8 +67,8 @@ describe('parseStripeCatalog', () => {
 		expect(snapshot.loadedAt).toEqual(STRIPE_CATALOG_LOADED_AT);
 		expect(snapshot.stale).toBe(false);
 		expect(snapshot.shippingRates).toEqual({
-			paid: { id: 'shr_paid', netAmountCents: 937 },
-			free: { id: 'shr_free', netAmountCents: 0 }
+			paid: { id: 'shr_paid', grossAmountCents: 1_000 },
+			free: { id: 'shr_free', grossAmountCents: 0 }
 		});
 		expect(snapshot.diagnostics).toEqual([]);
 		expect(snapshot.products).toHaveLength(1);
@@ -322,7 +330,7 @@ describe('parseStripeCatalog', () => {
 	it('normalizes configured paid and free Stripe Shipping Rates', () => {
 		expect(
 			parseStripeShippingRates({
-				paid: { configuredId: 'shr_paid', rate: stripeShippingRate() },
+				paid: { configuredId: 'shr_paid', rate: paidShippingRate() },
 				free: {
 					configuredId: 'shr_free',
 					rate: stripeShippingRate({
@@ -333,30 +341,35 @@ describe('parseStripeCatalog', () => {
 				}
 			})
 		).toEqual({
-			paid: { id: 'shr_paid', netAmountCents: 937 },
-			free: { id: 'shr_free', netAmountCents: 0 }
+			paid: { id: 'shr_paid', grossAmountCents: 1_000 },
+			free: { id: 'shr_free', grossAmountCents: 0 }
 		});
 	});
 
 	it.each([
-		['wrong configured ID', 'paid', stripeShippingRate({ id: 'shr_other' })],
-		['inactive paid rate', 'paid', stripeShippingRate({ active: false })],
+		['wrong configured ID', 'paid', paidShippingRate({ id: 'shr_other' })],
+		['inactive paid rate', 'paid', paidShippingRate({ active: false })],
 		[
 			'wrong paid type',
 			'paid',
-			{ ...stripeShippingRate(), type: 'calculated' } as unknown as Stripe.ShippingRate
+			{ ...paidShippingRate(), type: 'calculated' } as unknown as Stripe.ShippingRate
 		],
 		[
 			'wrong paid currency',
 			'paid',
-			stripeShippingRate({ fixed_amount: { amount: 937, currency: 'usd' } })
+			paidShippingRate({ fixed_amount: { amount: 1_000, currency: 'usd' } })
 		],
-		['inclusive paid tax', 'paid', stripeShippingRate({ tax_behavior: 'inclusive' })],
-		['wrong paid tax code', 'paid', stripeShippingRate({ tax_code: 'txcd_99999999' })],
+		['exclusive paid tax', 'paid', paidShippingRate({ tax_behavior: 'exclusive' })],
+		['wrong paid tax code', 'paid', paidShippingRate({ tax_code: 'txcd_99999999' })],
+		[
+			'wrong paid amount',
+			'paid',
+			paidShippingRate({ fixed_amount: { amount: 999, currency: 'eur' } })
+		],
 		[
 			'zero paid amount',
 			'paid',
-			stripeShippingRate({ fixed_amount: { amount: 0, currency: 'eur' } })
+			paidShippingRate({ fixed_amount: { amount: 0, currency: 'eur' } })
 		],
 		[
 			'positive free amount',
@@ -365,11 +378,20 @@ describe('parseStripeCatalog', () => {
 				id: 'shr_free',
 				fixed_amount: { amount: 1, currency: 'eur' }
 			})
+		],
+		[
+			'inclusive free tax',
+			'free',
+			stripeShippingRate({
+				id: 'shr_free',
+				fixed_amount: { amount: 0, currency: 'eur' },
+				tax_behavior: 'inclusive'
+			})
 		]
 	] as const)('rejects %s', (_name, kind, rate) => {
 		const paid = {
 			configuredId: 'shr_paid',
-			rate: kind === 'paid' ? rate : stripeShippingRate()
+			rate: kind === 'paid' ? rate : paidShippingRate()
 		};
 		const free = {
 			configuredId: 'shr_free',

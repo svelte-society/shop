@@ -81,13 +81,13 @@ function refundEvent(id = 'evt_refund'): Stripe.Event {
 
 function draftInput(): NewCheckoutDraft {
 	return {
-		contractVersion: 3,
+		contractVersion: 4,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
-		shippingRateId: 'shr_paid_8_eur',
-		shippingNetAmount: 800,
+		shippingRateId: 'shr_paid_10_eur',
+		shippingGrossAmount: 1000,
 		createdAt: new Date('2026-07-16T11:00:00.000Z'),
 		expiresAt: new Date('2026-07-16T13:00:00.000Z'),
 		lines: [
@@ -110,7 +110,7 @@ function draftInput(): NewCheckoutDraft {
 
 function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 	return {
-		contractVersion: 3,
+		contractVersion: 4,
 		checkoutSessionId: 'cs_paid',
 		paymentIntentId: 'pi_paid',
 		customerId: 'cus_paid',
@@ -118,7 +118,7 @@ function paidSnapshot(draftId: string): PaidCheckoutSnapshot {
 		currency: 'eur',
 		paymentStatus: 'paid',
 		destinationCountry: 'SE',
-		shippingRate: { id: 'shr_paid_8_eur', netAmount: 800 },
+		shippingRate: { id: 'shr_paid_10_eur', grossAmount: 1_000 },
 		amounts: {
 			subtotal: 2_000,
 			discount: 0,

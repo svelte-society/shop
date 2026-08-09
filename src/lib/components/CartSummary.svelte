@@ -36,13 +36,17 @@
 
 	<div class="price-rows">
 		<div class="price-row">
-			<span>Merchandise</span><strong>{formatEur(cartDisplayPrice.merchandise.grossCents)}</strong>
+			<span>Merchandise {destination.region === 'eu' ? '(incl. VAT)' : ''}</span><strong
+				>{formatEur(cartDisplayPrice.merchandise.grossCents)}</strong
+			>
 		</div>
 		<div class="price-row">
-			<span>Shipping</span><strong>{formatEur(cartDisplayPrice.shipping.grossCents)}</strong>
+			<span>Shipping {destination.region === 'eu' ? '(incl. VAT)' : ''}</span><strong
+				>{formatEur(cartDisplayPrice.shipping.grossCents)}</strong
+			>
 		</div>
 		<div class="price-row">
-			<span>{destination.region === 'eu' ? 'VAT' : 'EU VAT'}</span><strong
+			<span>{destination.region === 'eu' ? 'Included VAT' : 'EU VAT'}</span><strong
 				>{formatEur(cartDisplayPrice.totalVatCents)}</strong
 			>
 		</div>

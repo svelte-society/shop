@@ -41,7 +41,7 @@ test('homepage presents the approved responsive collection journey', async ({ pa
 	]) {
 		await expect(page.getByText(supportedWork, { exact: true })).toBeVisible();
 	}
-	await expect(page.getByText(/€11\.71 for one item/)).toBeVisible();
+	await expect(page.getByText(/€10\.00 including €2\.00 VAT for one item/)).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Apparel' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 3, name: 'Accessories' })).toBeVisible();
 	const destinationTrigger = page.getByRole('button', {
@@ -178,6 +178,7 @@ test('apparel requires a size before adding the selected variant', async ({ page
 	await page.goto('/products/community-tee');
 
 	await expect(page.getByRole('heading', { level: 1, name: 'Community Tee' })).toBeVisible();
+	await expect(page.getByText('Includes €5.00 VAT.')).toBeVisible();
 	await expect(page.getByRole('status', { name: 'Variant status' })).toHaveText(
 		'Choose a size to continue.'
 	);

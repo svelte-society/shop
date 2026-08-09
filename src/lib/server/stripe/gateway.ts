@@ -1,6 +1,6 @@
 import type { PaymentStatus } from '$lib/domain/orders';
 
-export const CHECKOUT_CONTRACT_VERSION = 3;
+export const CHECKOUT_CONTRACT_VERSION = 4;
 
 export type CreateCheckoutInput = {
 	draftId: string;
@@ -25,7 +25,7 @@ export interface StripeCheckoutGateway {
 }
 
 export type PaidCheckoutSnapshot = {
-	contractVersion: 3;
+	contractVersion: 4;
 	checkoutSessionId: string;
 	paymentIntentId: string;
 	customerId: string;
@@ -33,7 +33,7 @@ export type PaidCheckoutSnapshot = {
 	currency: 'eur';
 	paymentStatus: 'paid';
 	destinationCountry: string;
-	shippingRate: { id: string; netAmount: number };
+	shippingRate: { id: string; grossAmount: number };
 	amounts: {
 		subtotal: number;
 		discount: number;

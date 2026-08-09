@@ -15,7 +15,7 @@ const PRIVATE_ENV = {
 } as const;
 
 const PAID_CHECKOUT: PaidCheckoutSnapshot = {
-	contractVersion: 3,
+	contractVersion: 4,
 	checkoutSessionId: 'cs_test_verified',
 	paymentIntentId: 'pi_test_verified',
 	customerId: 'cus_test_verified',
@@ -23,7 +23,7 @@ const PAID_CHECKOUT: PaidCheckoutSnapshot = {
 	currency: 'eur',
 	paymentStatus: 'paid',
 	destinationCountry: 'SE',
-	shippingRate: { id: 'shr_paid_8_eur', netAmount: 800 },
+	shippingRate: { id: 'shr_paid_10_eur', grossAmount: 1_000 },
 	amounts: {
 		subtotal: 2_000,
 		discount: 0,
@@ -46,13 +46,13 @@ function draftFixture(overrides: Partial<CheckoutDraftWithLines> = {}): Checkout
 	return {
 		id: 'draft-test-verified',
 		checkoutSessionId: 'cs_test_verified',
-		contractVersion: 3,
+		contractVersion: 4,
 		destinationCountry: 'SE',
 		currency: 'eur',
 		totalUnitCount: 1,
 		shippingMode: 'paid',
-		shippingRateId: 'shr_paid_8_eur',
-		shippingNetAmount: 800,
+		shippingRateId: 'shr_paid_10_eur',
+		shippingGrossAmount: 1000,
 		createdAt: new Date('2026-07-22T09:00:00.000Z'),
 		expiresAt: new Date('2026-07-23T09:00:00.000Z'),
 		completedAt: null,
