@@ -22,9 +22,11 @@
 			option.displayName.toLowerCase().includes(query.trim().toLowerCase())
 		)
 	);
-	let europeanDestinations = $derived(destinations.filter((option) => option.region === 'eu'));
+	let euDestinations = $derived(destinations.filter((option) => option.region === 'eu'));
+	let ukDestinations = $derived(destinations.filter((option) => option.region === 'uk'));
 	let asianDestinations = $derived(destinations.filter((option) => option.region === 'asia'));
-	let filteredEuropeanDestinations = $derived(filtered.filter((option) => option.region === 'eu'));
+	let filteredEuDestinations = $derived(filtered.filter((option) => option.region === 'eu'));
+	let filteredUkDestinations = $derived(filtered.filter((option) => option.region === 'uk'));
 	let filteredAsianDestinations = $derived(filtered.filter((option) => option.region === 'asia'));
 	let destinationFlag = $derived(countryFlag(destination.countryCode));
 
@@ -139,7 +141,7 @@
 				<div class="destination-groups">
 					<fieldset>
 						<legend>EU countries</legend>
-						{#each europeanDestinations as option (option.countryCode)}
+						{#each euDestinations as option (option.countryCode)}
 							<label class:filtered-out={!matchesQuery(option)} class="destination-option">
 								<input
 									type="radio"
@@ -151,8 +153,27 @@
 								<span>{option.displayName}</span>
 							</label>
 						{/each}
-						{#if !filteredEuropeanDestinations.length}
+						{#if !filteredEuDestinations.length}
 							<p class="empty-result">No EU countries match your search.</p>
+						{/if}
+					</fieldset>
+
+					<fieldset>
+						<legend>United Kingdom</legend>
+						{#each ukDestinations as option (option.countryCode)}
+							<label class:filtered-out={!matchesQuery(option)} class="destination-option">
+								<input
+									type="radio"
+									name="country"
+									value={option.countryCode}
+									checked={option.countryCode === destination.countryCode}
+									required
+								/>
+								<span>{option.displayName}</span>
+							</label>
+						{/each}
+						{#if !filteredUkDestinations.length}
+							<p class="empty-result">The United Kingdom does not match your search.</p>
 						{/if}
 					</fieldset>
 

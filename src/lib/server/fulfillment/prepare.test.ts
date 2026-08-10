@@ -356,7 +356,7 @@ describe('fulfillment preparation', () => {
 		expect((setup.approvals as CapturingApprovals).creates).toEqual([]);
 	});
 
-	it.each(['GB', 'US'])(
+	it.each(['CA', 'US'])(
 		'blocks unsupported local destination %s before Stripe',
 		async (country) => {
 			const setup = service({ order: orderFixture({ destinationCountry: country }) });

@@ -21,6 +21,21 @@ describe('pricing destination resolution', () => {
 		).toMatchObject({ countryCode: 'JP', source: 'cloudflare_hint' });
 	});
 
+	it('resolves Great Britain as a supported non-EU UK destination', () => {
+		expect(
+			resolvePricingDestination({
+				cookieValue: undefined,
+				cloudflareCountry: 'GB'
+			})
+		).toMatchObject({
+			countryCode: 'GB',
+			region: 'uk',
+			vatBasisPoints: 0,
+			requiresImportChargeCopy: true,
+			source: 'cloudflare_hint'
+		});
+	});
+
 	it.each(['jp', 'US', 'JPN', ' JP', 'JP '])(
 		'ignores an invalid Cloudflare hint %j',
 		(cloudflareCountry) => {
@@ -48,11 +63,19 @@ describe('pricing destination resolution', () => {
 			[...SUPPORTED_DESTINATIONS].sort()
 		);
 		expect(options).toContainEqual({ countryCode: 'DE', displayName: 'Germany', region: 'eu' });
+		expect(options).toContainEqual({
+			countryCode: 'GB',
+			displayName: 'United Kingdom',
+			region: 'uk'
+		});
 		expect(options).toContainEqual({ countryCode: 'JP', displayName: 'Japan', region: 'asia' });
 		expect(options.map(({ countryCode }) => countryCode)).not.toContain('US');
+		const uk = options.findIndex(({ region }) => region === 'uk');
 		const firstAsia = options.findIndex(({ region }) => region === 'asia');
-		expect(firstAsia).toBeGreaterThan(0);
-		expect(options.slice(0, firstAsia).every(({ region }) => region === 'eu')).toBe(true);
+		expect(uk).toBeGreaterThan(0);
+		expect(firstAsia).toBeGreaterThan(uk);
+		expect(options.slice(0, uk).every(({ region }) => region === 'eu')).toBe(true);
+		expect(options.slice(uk, firstAsia).every(({ region }) => region === 'uk')).toBe(true);
 		expect(options.slice(firstAsia).every(({ region }) => region === 'asia')).toBe(true);
 	});
 });

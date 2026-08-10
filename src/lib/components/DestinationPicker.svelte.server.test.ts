@@ -13,6 +13,7 @@ const destination = {
 const destinations = [
 	{ countryCode: 'DE' as const, displayName: 'Germany', region: 'eu' as const },
 	{ countryCode: 'SE' as const, displayName: 'Sweden', region: 'eu' as const },
+	{ countryCode: 'GB' as const, displayName: 'United Kingdom', region: 'uk' as const },
 	{ countryCode: 'JP' as const, displayName: 'Japan', region: 'asia' as const }
 ];
 

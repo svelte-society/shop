@@ -183,7 +183,7 @@ STYRIA_BRAND_NAME=Svelte Society
 ```
 
 The reviewed destination policy is source controlled in `SUPPORTED_DESTINATIONS`. It includes the
-EU except Slovenia plus the supported Asian destinations; the United States is not selectable.
+EU except Slovenia, Great Britain, and the supported Asian destinations; the United States is not selectable.
 
 ### Plunk
 

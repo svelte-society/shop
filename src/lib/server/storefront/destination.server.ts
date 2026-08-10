@@ -35,12 +35,16 @@ export function resolvePricingDestination(input: {
 	return { ...pricingDestination('SE'), source: 'fallback' };
 }
 
+const DESTINATION_REGION_ORDER = { eu: 0, uk: 1, asia: 2 } as const;
+
 export function destinationOptions(): readonly DestinationOption[] {
 	return SUPPORTED_DESTINATIONS.map((countryCode) => {
 		const { displayName, region } = pricingDestination(countryCode);
 		return { countryCode, displayName, region };
 	}).sort((left, right) => {
-		if (left.region !== right.region) return left.region === 'eu' ? -1 : 1;
+		if (left.region !== right.region) {
+			return DESTINATION_REGION_ORDER[left.region] - DESTINATION_REGION_ORDER[right.region];
+		}
 		return left.displayName.localeCompare(right.displayName, 'en');
 	});
 }

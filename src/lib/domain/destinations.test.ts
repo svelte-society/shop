@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	ASIA_DESTINATIONS,
 	EU_DESTINATIONS,
+	UK_DESTINATIONS,
 	SUPPORTED_DESTINATIONS,
 	isSupportedDestination
 } from './destinations';
@@ -33,6 +34,7 @@ const expectedDestinations = [
 	'SK',
 	'ES',
 	'SE',
+	'GB',
 	'AE',
 	'AF',
 	'AM',
@@ -85,8 +87,10 @@ const expectedDestinations = [
 describe('Styria-supported destinations', () => {
 	it('exports the reviewed regional lists', () => {
 		expect(EU_DESTINATIONS).toEqual(expectedDestinations.slice(0, 26));
-		expect(ASIA_DESTINATIONS).toEqual(expectedDestinations.slice(26));
+		expect(UK_DESTINATIONS).toEqual(['GB']);
+		expect(ASIA_DESTINATIONS).toEqual(expectedDestinations.slice(27));
 		expect(Object.isFrozen(EU_DESTINATIONS)).toBe(true);
+		expect(Object.isFrozen(UK_DESTINATIONS)).toBe(true);
 		expect(Object.isFrozen(ASIA_DESTINATIONS)).toBe(true);
 	});
 
@@ -102,6 +106,6 @@ describe('Styria-supported destinations', () => {
 		expect(isSupportedDestination('JP')).toBe(true);
 		expect(isSupportedDestination('US')).toBe(false);
 		expect(isSupportedDestination('SI')).toBe(false);
-		expect(isSupportedDestination('GB')).toBe(false);
+		expect(isSupportedDestination('GB')).toBe(true);
 	});
 });

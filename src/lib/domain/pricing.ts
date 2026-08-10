@@ -1,11 +1,16 @@
-import { ASIA_DESTINATIONS, EU_DESTINATIONS, type MarketDestination } from './destinations';
+import {
+	ASIA_DESTINATIONS,
+	EU_DESTINATIONS,
+	UK_DESTINATIONS,
+	type MarketDestination
+} from './destinations';
 import type { PublicCatalogProduct, PublicCatalogVariant } from './catalog';
 
 export const VAT_TABLE_REVIEWED_AT = '2026-07-22';
 export const VAT_TABLE_SOURCE =
 	'https://europa.eu/youreurope/business/finance-and-tax/vat/vat-rules-rates/index_en.htm';
 
-export type DestinationRegion = 'eu' | 'asia';
+export type DestinationRegion = 'eu' | 'uk' | 'asia';
 export type PricingDestination = {
 	countryCode: MarketDestination;
 	displayName: string;
@@ -58,14 +63,15 @@ const EU_VAT_BASIS_POINTS = Object.freeze({
 
 export function pricingDestination(countryCode: MarketDestination): PricingDestination {
 	const eu = (EU_DESTINATIONS as readonly string[]).includes(countryCode);
+	const uk = (UK_DESTINATIONS as readonly string[]).includes(countryCode);
 	const asia = (ASIA_DESTINATIONS as readonly string[]).includes(countryCode);
-	if (!eu && !asia) throw new Error('PRICING_DESTINATION_INVALID');
+	if (!eu && !uk && !asia) throw new Error('PRICING_DESTINATION_INVALID');
 	const displayName = new Intl.DisplayNames(['en'], { type: 'region' }).of(countryCode);
 	if (!displayName) throw new Error('PRICING_DESTINATION_INVALID');
 	return {
 		countryCode,
 		displayName,
-		region: eu ? 'eu' : 'asia',
+		region: eu ? 'eu' : uk ? 'uk' : 'asia',
 		vatBasisPoints: eu ? EU_VAT_BASIS_POINTS[countryCode as keyof typeof EU_VAT_BASIS_POINTS] : 0,
 		requiresImportChargeCopy: !eu
 	};

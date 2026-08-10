@@ -100,13 +100,18 @@ describe('ProductPurchase', () => {
 		await expect.element(page.getByText('Includes €3.80 VAT.')).toBeVisible();
 	});
 
-	it('explains that the destination-projected price for Japan excludes EU VAT', async () => {
-		const japan = pricingDestination('JP');
-		render(ProductPurchase, { product: pricePublicProduct(apparel, japan) });
+	it.each(['GB', 'JP'] as const)(
+		'explains that the destination-projected price for %s excludes EU VAT',
+		async (country) => {
+			const nonEuDestination = pricingDestination(country);
+			render(ProductPurchase, { product: pricePublicProduct(apparel, nonEuDestination) });
 
-		await expect.element(page.getByText('€20.00')).toBeVisible();
-		await expect.element(page.getByText('EU VAT excluded. Import taxes may apply.')).toBeVisible();
-	});
+			await expect.element(page.getByText('€20.00')).toBeVisible();
+			await expect
+				.element(page.getByText('EU VAT excluded. Import taxes may apply.'))
+				.toBeVisible();
+		}
+	);
 
 	it('keeps apparel out of the cart until a size is selected', async () => {
 		const cartController = createCart(isolatedStorage);

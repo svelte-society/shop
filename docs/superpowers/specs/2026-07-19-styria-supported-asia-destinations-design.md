@@ -198,6 +198,10 @@ Deployment verification must create a new sandbox Checkout Session and confirm:
 - Automatic refunds, returns, replacements, or Styria cancellations.
 - Expanding to Africa, Oceania, Canada, Latin America, the United Kingdom, or Switzerland solely because Styria describes worldwide service.
 
+### 2026-08-10 United Kingdom addendum
+
+The original United Kingdom exclusion above applied while the only available evidence was Styria's broad worldwide-service claim. Styria's reviewed [Delivery](https://styriashirts.eu/delivery) page, updated 15 July 2026, now lists Great Britain explicitly in both its rate table and its 4–6-working-day delivery estimate. That country-specific evidence supersedes the original exclusion for ISO country code `GB`. The shop therefore supports `GB` as a separate non-EU region with import-charge disclosures; it does not infer support for any other previously excluded country.
+
 ## Launch Gate
 
 Before enabling the expanded list, the operator must review the exact codes in Coolify against current Styria availability and obtain qualified tax/legal confirmation for the non-EU sales model and the Styria dropshipping supply chain. Implementation can enforce the configured list, but it cannot establish carrier availability or legal obligations by itself.

@@ -194,6 +194,18 @@ describe('buildStyriaPayload', () => {
 		expect(build({ order, fulfillment }).shipping_address.country).toBe('Japan');
 	});
 
+	it('converts Great Britain using Styria’s country name', () => {
+		const fulfillment = fulfillmentFixture();
+		fulfillment.address.countryCode = 'GB';
+		fulfillment.address.city = 'London';
+		fulfillment.address.postalCode = 'SW1A 1AA';
+		fulfillment.address.state = 'Greater London';
+		const order = orderFixture();
+		order.destinationCountry = 'GB';
+
+		expect(build({ order, fulfillment }).shipping_address.country).toBe('United Kingdom');
+	});
+
 	it('copies checkout design placements and binds the immutable design reference', () => {
 		const order = orderFixture();
 		const payload = build({ order });
@@ -235,9 +247,9 @@ describe('buildStyriaPayload', () => {
 		expect(() => build({ fulfillment: missingState })).toThrowError(StyriaPayloadError);
 
 		const unsupported = fulfillmentFixture();
-		unsupported.address.countryCode = 'GB';
+		unsupported.address.countryCode = 'CA';
 		const unsupportedOrder = orderFixture();
-		unsupportedOrder.destinationCountry = 'GB';
+		unsupportedOrder.destinationCountry = 'CA';
 		expect(() => build({ order: unsupportedOrder, fulfillment: unsupported })).toThrowError(
 			expect.objectContaining({ code: 'STYRIA_COUNTRY_UNSUPPORTED' })
 		);

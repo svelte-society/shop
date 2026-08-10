@@ -56,6 +56,7 @@ describe('configured policy documents', () => {
 		expect(shipping).toContain('Where we deliver, what shipping costs');
 		expect(shipping).toContain('EUR');
 		expect(shipping).toContain('European Union except Slovenia');
+		expect(shipping).toContain('Great Britain');
 		expect(shipping).toContain('Asian countries available in the delivery-country picker');
 		expect(shipping).not.toContain('United States');
 		expect(shipping).toContain('selected delivery country');
@@ -63,6 +64,7 @@ describe('configured policy documents', () => {
 		expect(shipping).not.toMatch(/EUR\s+\d/u);
 		expect(shipping).toContain('two or more items');
 		expect(shipping).toContain('Reviewed EU estimate');
+		expect(shipping).toContain('Great Britain: 4–6 working days.');
 		expect(shipping).toContain('Reviewed Asia estimate');
 		expect(shipping).toContain('final amount is confirmed at checkout');
 		expect(shipping).toContain('customs duties, brokerage fees, or carrier charges');
@@ -177,6 +179,7 @@ describe('configured policy documents', () => {
 			'receipt',
 			'invoice',
 			'European Union except Slovenia',
+			'Great Britain',
 			'selected destinations across Asia',
 			'prepare your order for production',
 			'merch@sveltesociety.dev',

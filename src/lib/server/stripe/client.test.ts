@@ -235,7 +235,7 @@ describe('Stripe fulfillment details', () => {
 
 	it('rejects an unsupported destination with a stable error', async () => {
 		const session = sessionFixture();
-		session.customer.shipping.address.country = 'GB';
+		session.customer.shipping.address.country = 'CA';
 
 		await expectStableCode(
 			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(

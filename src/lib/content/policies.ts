@@ -56,7 +56,7 @@ function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Where we ship',
 				paragraphs: [
-					'We currently ship to the European Union except Slovenia, and to the Asian countries available in the delivery-country picker. If a country is not available at checkout, we cannot ship there.',
+					'We currently ship to the European Union except Slovenia, Great Britain, and the Asian countries available in the delivery-country picker. If a country is not available at checkout, we cannot ship there.',
 					'Available destinations may change if a carrier route is paused.'
 				]
 			},
@@ -71,6 +71,7 @@ function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 				heading: 'Delivery estimates',
 				paragraphs: [
 					`European Union: ${sentence(config.deliveryEstimateEu)}`,
+					'Great Britain: 4–6 working days.',
 					`Supported Asian destinations: ${sentence(config.deliveryEstimateAsia)}`,
 					'These times are estimates, not guarantees. We send tracking when the carrier provides it, although tracking may not be available for every destination.'
 				]
@@ -257,7 +258,7 @@ function termsDocument(config: PolicyContentConfig): PolicyDocument {
 			{
 				heading: 'Delivery',
 				paragraphs: [
-					'We deliver to the European Union except Slovenia, and to selected destinations across Asia. The delivery-country picker shows the countries currently available.',
+					'We deliver to the European Union except Slovenia, Great Britain, and selected destinations across Asia. The delivery-country picker shows the countries currently available.',
 					'After payment, we prepare your order for production. Delivery times are estimates, not guarantees. We send tracking when it becomes available.'
 				]
 			},

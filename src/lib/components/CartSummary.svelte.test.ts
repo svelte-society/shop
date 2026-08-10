@@ -113,4 +113,28 @@ describe('CartSummary checkout action', () => {
 		const totalRow = page.getByText('Estimated total', { exact: true }).element().parentElement;
 		expect(totalRow?.textContent).toBe('Estimated total€47.60');
 	});
+	it('keeps UK totals VAT-exclusive and warns that import charges may apply', async () => {
+		const destination = pricingDestination('GB');
+		render(CartSummary, {
+			totalUnits: 1,
+			cartDisplayPrice: displayCartPrice(
+				[{ netUnitCents: 2_000, quantity: 1 }],
+				destination,
+				1_000
+			),
+			destination,
+			checkoutEnabled: true
+		});
+
+		await expect.element(page.getByText('Merchandise', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('Shipping', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('EU VAT', { exact: true })).toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'Estimated for delivery to United Kingdom. Checkout confirms the final total; import charges may apply.'
+				)
+			)
+			.toBeVisible();
+	});
 });

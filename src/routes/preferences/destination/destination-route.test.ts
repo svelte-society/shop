@@ -62,6 +62,14 @@ describe('POST /preferences/destination', () => {
 		]);
 	});
 
+	it('stores Great Britain as a supported UK destination', async () => {
+		const { response, sets } = await post('country=GB&returnTo=%2Fproducts');
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/products');
+		expect(sets[0]).toMatchObject({ name: 'shop_destination_v1', value: 'GB' });
+	});
+
 	it('uses the injected secure cookie setting', async () => {
 		const { response, sets } = await post('country=DE&returnTo=%2Fcart', {
 			secure: false

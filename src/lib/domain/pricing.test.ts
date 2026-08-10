@@ -8,7 +8,12 @@ import {
 	VAT_TABLE_REVIEWED_AT
 } from './pricing';
 import type { PublicCatalogProduct } from './catalog';
-import { ASIA_DESTINATIONS, EU_DESTINATIONS, type MarketDestination } from './destinations';
+import {
+	ASIA_DESTINATIONS,
+	EU_DESTINATIONS,
+	UK_DESTINATIONS,
+	type MarketDestination
+} from './destinations';
 
 const product: PublicCatalogProduct = {
 	slug: 'community-tee',
@@ -42,6 +47,7 @@ describe('destination pricing', () => {
 		['DE', 2_380, 1_000, 3_380],
 		['FI', 2_510, 1_000, 3_510],
 		['HU', 2_540, 1_000, 3_540],
+		['GB', 2_000, 1_000, 3_000],
 		['JP', 2_000, 1_000, 3_000]
 	] as const)('projects %s with integer cents', (country, merchandise, shipping, total) => {
 		const destination = pricingDestination(country);
@@ -54,7 +60,7 @@ describe('destination pricing', () => {
 		});
 	});
 
-	it.each([...EU_DESTINATIONS, ...ASIA_DESTINATIONS])(
+	it.each([...EU_DESTINATIONS, ...UK_DESTINATIONS, ...ASIA_DESTINATIONS])(
 		'keeps the paid shipping gross fixed at €10 for %s',
 		(country) => {
 			expect(
@@ -69,6 +75,7 @@ describe('destination pricing', () => {
 		['DE', 840, 160],
 		['FI', 797, 203],
 		['HU', 787, 213],
+		['GB', 1_000, 0],
 		['JP', 1_000, 0]
 	] as const)('backs included shipping VAT out of the fixed gross for %s', (country, net, vat) => {
 		expect(
@@ -127,13 +134,20 @@ describe('destination pricing', () => {
 		).toThrowError('INVALID_CENTS');
 	});
 
-	it('projects EU and Asia destination metadata', () => {
+	it('projects EU, UK, and Asia destination metadata', () => {
 		expect(pricingDestination('SE')).toMatchObject({
 			countryCode: 'SE',
 			displayName: 'Sweden',
 			region: 'eu',
 			vatBasisPoints: 2_500,
 			requiresImportChargeCopy: false
+		});
+		expect(pricingDestination('GB')).toMatchObject({
+			countryCode: 'GB',
+			displayName: 'United Kingdom',
+			region: 'uk',
+			vatBasisPoints: 0,
+			requiresImportChargeCopy: true
 		});
 		expect(pricingDestination('JP')).toMatchObject({
 			countryCode: 'JP',
@@ -144,9 +158,12 @@ describe('destination pricing', () => {
 		});
 	});
 
-	it('discloses Swedish VAT and Japanese import charges exactly', () => {
+	it('discloses Swedish VAT and non-EU import charges exactly', () => {
 		expect(pricingDisclosure(pricingDestination('SE'))).toBe(
 			'Includes 25% Sweden VAT. Exact tax is confirmed from your delivery address at checkout.'
+		);
+		expect(pricingDisclosure(pricingDestination('GB'))).toBe(
+			'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
 		);
 		expect(pricingDisclosure(pricingDestination('JP'))).toBe(
 			'EU VAT excluded. Import VAT, duties, brokerage, or carrier fees may be charged on arrival.'
