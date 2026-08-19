@@ -21,6 +21,7 @@ import { createStripeOrderGateway } from '../../src/lib/server/stripe/paid-check
 import { createStripeWebhookService } from '../../src/lib/server/stripe/webhook.server';
 import { createStripeFixtureClient } from '../fixtures/catalog-server';
 import {
+	liveLinkPaidCheckoutProviderFixture,
 	paidCheckoutProviderFixture,
 	type PaidCheckoutFixtureOptions
 } from '../fixtures/stripe-paid-checkout';
@@ -214,9 +215,9 @@ describe('checkout to Stripe webhook intake', () => {
 		expect(JSON.stringify(order)).not.toContain('+46701234567');
 	});
 
-	it('records and refunds a payment whose opaque Charge identifier starts with py_', async () => {
+	it('records and refunds a live-shape Link payment whose Charge identifier starts with py_', async () => {
 		const draft = createDraft(1);
-		const fixture = paidCheckoutProviderFixture({
+		const fixture = liveLinkPaidCheckoutProviderFixture({
 			sessionId: SESSION_ID,
 			draftId: draft.id,
 			chargeId: 'py_test_link_payment',

@@ -439,3 +439,45 @@ export function paidCheckoutProviderFixture(
 		refundPaymentIntent: structuredClone(paymentIntent)
 	};
 }
+
+export function liveLinkPaidCheckoutProviderFixture(
+	options: PaidCheckoutFixtureOptions = {}
+): PaidCheckoutProviderFixture {
+	const fixture = paidCheckoutProviderFixture({
+		...options,
+		chargeId: options.chargeId ?? 'py_test_link_payment'
+	});
+	const customer = fixture.session.customer;
+	const customerDetails = fixture.session.customer_details;
+	const shippingDetails = fixture.session.collected_information?.shipping_details;
+	if (
+		typeof customer !== 'object' ||
+		customer === null ||
+		customer.shipping === null ||
+		customerDetails === null ||
+		customerDetails.address === null ||
+		shippingDetails === null ||
+		shippingDetails === undefined
+	) {
+		throw new Error('Fixture requires expanded customer and shipping details');
+	}
+
+	customerDetails.name = null;
+	shippingDetails.address = {
+		...structuredClone(shippingDetails.address),
+		line2: '',
+		state: null
+	};
+	customer.shipping.address = {
+		...structuredClone(customer.shipping.address),
+		line2: null,
+		state: ''
+	};
+	customerDetails.address = {
+		...structuredClone(customerDetails.address),
+		line2: '',
+		state: ''
+	};
+
+	return fixture;
+}

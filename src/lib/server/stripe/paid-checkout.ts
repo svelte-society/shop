@@ -177,8 +177,14 @@ type NormalizedAddress = {
 	state: string | null;
 };
 
-function optionalExactString(value: unknown): string | null {
-	if (value === null) return null;
+function normalizeOptionalAddressLine(value: unknown): string | null {
+	if (value === null || value === '') return null;
+	if (!isExactNonEmptyString(value)) fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	return value;
+}
+
+function normalizeOptionalCustomerName(value: unknown): string | null {
+	if (value === null || value === '') return null;
 	if (!isExactNonEmptyString(value)) fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	return value;
 }
@@ -199,8 +205,8 @@ function normalizeShippingAddress(value: unknown): NormalizedAddress {
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
-	const line2 = optionalExactString(value.line2);
-	const state = optionalExactString(value.state);
+	const line2 = normalizeOptionalAddressLine(value.line2);
+	const state = normalizeOptionalAddressLine(value.state);
 	return {
 		city: value.city,
 		country: value.country,
@@ -298,7 +304,6 @@ function validateCustomer(session: UnknownRecord): {
 		customer.deleted === true ||
 		!isProviderId(customer.id, CUSTOMER_ID_PATTERN) ||
 		!isExactNonEmptyString(customer.email) ||
-		!isExactNonEmptyString(customer.name) ||
 		!isExactNonEmptyString(customer.phone) ||
 		!isRecord(customer.shipping) ||
 		!isExactNonEmptyString(customer.shipping.name) ||
@@ -306,18 +311,25 @@ function validateCustomer(session: UnknownRecord): {
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
+	const customerName = normalizeOptionalCustomerName(customer.name);
 
 	const customerDetails = session.customer_details;
 	if (
 		!isRecord(customerDetails) ||
 		!isExactNonEmptyString(customerDetails.email) ||
-		!isExactNonEmptyString(customerDetails.name) ||
 		!isExactNonEmptyString(customerDetails.phone) ||
 		!TAX_EXEMPT_VALUES.has(customerDetails.tax_exempt as string) ||
 		customerDetails.tax_exempt !== customer.tax_exempt ||
 		customerDetails.email !== customer.email ||
-		customerDetails.name !== customer.name ||
 		customerDetails.phone !== customer.phone
+	) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	const customerDetailsName = normalizeOptionalCustomerName(customerDetails.name);
+	if (
+		customerName !== null &&
+		customerDetailsName !== null &&
+		customerDetailsName !== customerName
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}

@@ -8,6 +8,7 @@ import {
 	type StripeOrderClient
 } from './paid-checkout';
 import {
+	liveLinkPaidCheckoutProviderFixture,
 	paidCheckoutProviderFixture,
 	reconcilePaidCheckoutProviderTotals,
 	stripeLinePage,
@@ -204,6 +205,79 @@ describe('Stripe paid Checkout normalization', () => {
 			paymentIntentId: 'pi_test_paid',
 			paymentStatus: 'paid'
 		});
+	});
+
+	it('normalizes the live Link Checkout customer shape with independent address copies', async () => {
+		const fixture = liveLinkPaidCheckoutProviderFixture();
+		const customer = expandedCustomer(fixture);
+		const customerDetails = fixture.session.customer_details;
+		const shippingDetails = fixture.session.collected_information?.shipping_details;
+		if (!customer.shipping || !customerDetails || !shippingDetails) throw new Error();
+
+		expect(customerDetails.name).toBeNull();
+		expect(shippingDetails.address).not.toBe(customer.shipping.address);
+		expect(shippingDetails.address).not.toBe(customerDetails.address);
+		expect(shippingDetails.address).toMatchObject({ line2: '', state: null });
+		expect(customer.shipping.address).toMatchObject({ line2: null, state: '' });
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			checkoutSessionId: 'cs_test_paid',
+			paymentIntentId: 'pi_test_paid',
+			paymentStatus: 'paid'
+		});
+	});
+
+	it.each([
+		['expanded Customer null', null, 'Fixture Customer'],
+		['expanded Customer empty', '', 'Fixture Customer'],
+		['Session customer details null', 'Fixture Customer', null],
+		['Session customer details empty', 'Fixture Customer', '']
+	] as const)(
+		'accepts an independently absent %s name',
+		async (_label, customerName, detailsName) => {
+			const fixture = paidCheckoutProviderFixture();
+			const customerDetails = fixture.session.customer_details;
+			if (!customerDetails) throw new Error();
+			expandedCustomer(fixture).name = customerName;
+			customerDetails.name = detailsName;
+
+			await expect(
+				createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+					fixture.session.id
+				)
+			).resolves.toMatchObject({ customerId: 'cus_test_paid', destinationCountry: 'SE' });
+		}
+	);
+
+	it.each([
+		['expanded Customer', 'customer', undefined],
+		['expanded Customer', 'customer', ' '],
+		['expanded Customer', 'customer', 'Fixture Customer '],
+		['expanded Customer', 'customer', 123],
+		['Session customer details', 'details', undefined],
+		['Session customer details', 'details', ' '],
+		['Session customer details', 'details', 'Fixture Customer '],
+		['Session customer details', 'details', 123]
+	] as const)('rejects malformed %s name value %#', async (_label, target, value) => {
+		const fixture = paidCheckoutProviderFixture();
+		const customerDetails = fixture.session.customer_details;
+		if (!customerDetails) throw new Error();
+		const record =
+			target === 'customer'
+				? (expandedCustomer(fixture) as unknown as Record<string, unknown>)
+				: (customerDetails as unknown as Record<string, unknown>);
+		record.name = value;
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
 	});
 
 	it.each(['', ' py_test_paid', 'py_test_paid '])(
@@ -699,6 +773,29 @@ describe('Stripe paid Checkout normalization', () => {
 	])('rejects %s even when provider identity copies agree', async (_label, mutate) => {
 		const fixture = paidCheckoutProviderFixture();
 		mutate(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
+	it.each([
+		['line2', undefined],
+		['line2', ' '],
+		['line2', ' Suite 1'],
+		['line2', 123],
+		['state', undefined],
+		['state', ' '],
+		['state', 'Stockholm '],
+		['state', 123]
+	] as const)('rejects malformed optional address %s value %#', async (field, value) => {
+		const fixture = paidCheckoutProviderFixture();
+		const shippingDetails = fixture.session.collected_information?.shipping_details;
+		if (!shippingDetails) throw new Error();
+		(shippingDetails.address as unknown as Record<string, unknown>)[field] = value;
 
 		await expectStableCode(
 			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
