@@ -193,6 +193,7 @@ export type PaidCheckoutProviderFixture = {
 export type PaidCheckoutFixtureOptions = {
 	sessionId?: string;
 	paymentIntentId?: string;
+	chargeId?: string;
 	customerId?: string;
 	draftId?: string;
 	country?: string;
@@ -321,7 +322,7 @@ export function paidCheckoutProviderFixture(
 		destination_country: country
 	};
 	const charge: StripeFixtureCharge = {
-		id: 'ch_test_paid',
+		id: options.chargeId ?? 'ch_test_paid',
 		object: 'charge',
 		amount: amountTotal,
 		amount_captured: amountTotal,

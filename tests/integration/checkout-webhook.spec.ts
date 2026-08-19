@@ -46,8 +46,14 @@ function checkoutEvent(eventId: string, sessionId = SESSION_ID): Stripe.Event {
 	return {
 		id: eventId,
 		type: 'checkout.session.completed',
-		data: { object: { object: 'checkout.session', id: sessionId } }
-	} as Stripe.Event;
+		data: {
+			object: {
+				object: 'checkout.session',
+				id: sessionId,
+				metadata: { product_type: 'merch' }
+			}
+		}
+	} as unknown as Stripe.Event;
 }
 
 function refundEvent(eventId: string, paymentIntentId: string): Stripe.Event {
@@ -156,6 +162,30 @@ async function intakePaidOrder(
 }
 
 describe('checkout to Stripe webhook intake', () => {
+	it('ignores a non-merch Checkout payment in a shared Stripe account', async () => {
+		const fixture = paidCheckoutProviderFixture();
+		const service = webhookService(fixture);
+		const nonMerchEvent = {
+			id: 'evt_test_non_merch',
+			type: 'checkout.session.completed',
+			data: {
+				object: {
+					object: 'checkout.session',
+					id: 'cs_test_non_merch',
+					metadata: { product_type: 'services' }
+				}
+			}
+		} as unknown as Stripe.Event;
+
+		await expect(service.handle(JSON.stringify(nonMerchEvent), 'sig_test')).resolves.toEqual({
+			duplicate: false
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
+			count: 0
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 0 });
+	});
+
 	it('records a paid EU consumer order from the complete provider snapshot', async () => {
 		const { draft, order } = await intakePaidOrder('evt_test_eu_consumer', {
 			quantity: 1,
@@ -182,6 +212,51 @@ describe('checkout to Stripe webhook intake', () => {
 		expect(JSON.stringify(order)).not.toContain('fixture.customer@example.test');
 		expect(JSON.stringify(order)).not.toContain('Provider Fixture Street');
 		expect(JSON.stringify(order)).not.toContain('+46701234567');
+	});
+
+	it('records and refunds a payment whose opaque Charge identifier starts with py_', async () => {
+		const draft = createDraft(1);
+		const fixture = paidCheckoutProviderFixture({
+			sessionId: SESSION_ID,
+			draftId: draft.id,
+			chargeId: 'py_test_link_payment',
+			shippingGrossAmount: 1000,
+			lines: [
+				{
+					id: 'li_mug',
+					priceId: 'price_accessory_one',
+					quantity: 1,
+					unitAmount: 2_000,
+					taxAmount: 500
+				}
+			]
+		});
+		const service = webhookService(fixture);
+
+		await expect(
+			service.handle(JSON.stringify(checkoutEvent('evt_test_py_paid')), 'sig_test')
+		).resolves.toEqual({ duplicate: false });
+		expect(new SqliteOrderRepository(database).findByCheckoutSession(SESSION_ID)).toMatchObject({
+			paymentStatus: 'paid',
+			fulfillmentStatus: 'pending_review'
+		});
+
+		const charge = fixture.refundPaymentIntent.latest_charge;
+		if (typeof charge !== 'object' || charge === null) throw new Error('TEST_CHARGE_NOT_EXPANDED');
+		charge.amount_refunded = charge.amount;
+		charge.refunded = true;
+		await expect(
+			service.handle(
+				JSON.stringify(refundEvent('evt_test_py_refunded', fixture.refundPaymentIntent.id)),
+				'sig_test'
+			)
+		).resolves.toEqual({ duplicate: false });
+
+		expect(new SqliteOrderRepository(database).findByCheckoutSession(SESSION_ID)).toMatchObject({
+			paymentStatus: 'refunded',
+			fulfillmentStatus: 'pending_review'
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
 	});
 
 	it('records a paid supported Asian customer without EU tax', async () => {

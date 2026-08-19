@@ -11,7 +11,6 @@ import {
 const CHECKOUT_SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]+$/;
 const PAYMENT_INTENT_ID_PATTERN = /^pi_[A-Za-z0-9_]+$/;
 const CUSTOMER_ID_PATTERN = /^cus_[A-Za-z0-9_]+$/;
-const CHARGE_ID_PATTERN = /^ch_[A-Za-z0-9_]+$/;
 const LINE_ITEM_ID_PATTERN = /^li_[A-Za-z0-9_]+$/;
 const PRICE_ID_PATTERN = /^price_[A-Za-z0-9_]+$/;
 const SHIPPING_RATE_ID_PATTERN = /^shr_[A-Za-z0-9_]+$/;
@@ -523,7 +522,7 @@ function validatePaymentIntent(
 	if (
 		!isRecord(charge) ||
 		charge.object !== 'charge' ||
-		!isProviderId(charge.id, CHARGE_ID_PATTERN) ||
+		!isExactNonEmptyString(charge.id) ||
 		!isSafeNonNegativeInteger(charge.amount) ||
 		!isSafeNonNegativeInteger(charge.amount_captured) ||
 		!isSafeNonNegativeInteger(charge.amount_refunded) ||
@@ -750,7 +749,7 @@ function normalizeRefundStatus(requestedPaymentIntentId: string, value: unknown)
 	if (
 		!isRecord(charge) ||
 		charge.object !== 'charge' ||
-		!isProviderId(charge.id, CHARGE_ID_PATTERN) ||
+		!isExactNonEmptyString(charge.id) ||
 		charge.status !== 'succeeded' ||
 		charge.paid !== true ||
 		charge.captured !== true ||

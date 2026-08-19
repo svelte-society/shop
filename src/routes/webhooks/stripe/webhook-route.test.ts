@@ -95,7 +95,13 @@ function paidRequest(webhookSecret: string, eventId: string): Request {
 		id: eventId,
 		object: 'event',
 		type: 'checkout.session.completed',
-		data: { object: { id: 'cs_runtime_readiness', object: 'checkout.session' } }
+		data: {
+			object: {
+				id: 'cs_runtime_readiness',
+				metadata: { product_type: 'merch' },
+				object: 'checkout.session'
+			}
+		}
 	});
 	const signature = Stripe.webhooks.generateTestHeaderString({
 		payload: body,
@@ -154,7 +160,13 @@ describe('POST /webhooks/stripe', () => {
 		const body = JSON.stringify({
 			id: 'evt_missing_database',
 			type: 'checkout.session.completed',
-			data: { object: { object: 'checkout.session', id: 'cs_missing_database' } }
+			data: {
+				object: {
+					object: 'checkout.session',
+					id: 'cs_missing_database',
+					metadata: { product_type: 'merch' }
+				}
+			}
 		});
 		const signature = Stripe.webhooks.generateTestHeaderString({
 			payload: body,

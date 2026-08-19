@@ -44,7 +44,7 @@ const WEBHOOK_SECRET = 'whsec_test_contract';
 const NOW = new Date('2026-07-16T12:00:00.000Z');
 
 type FixtureEventObject =
-	| Pick<Stripe.Checkout.Session, 'id' | 'object'>
+	| Pick<Stripe.Checkout.Session, 'id' | 'metadata' | 'object'>
 	| Pick<Stripe.Charge, 'id' | 'object' | 'payment_intent'>
 	| Pick<Stripe.Product, 'id' | 'object'>;
 
@@ -68,7 +68,11 @@ function checkoutEvent(
 		| 'checkout.session.completed'
 		| 'checkout.session.async_payment_succeeded' = 'checkout.session.completed'
 ): Stripe.Event {
-	return event(id, type, { id: 'cs_paid', object: 'checkout.session' });
+	return event(id, type, {
+		id: 'cs_paid',
+		metadata: { product_type: 'merch' },
+		object: 'checkout.session'
+	});
 }
 
 function refundEvent(id = 'evt_refund'): Stripe.Event {
@@ -355,6 +359,37 @@ describe('Stripe webhook service', () => {
 			count: 0
 		});
 	});
+
+	it.each([
+		['checkout.session.completed', 'evt_non_merch_completed', {}],
+		[
+			'checkout.session.async_payment_succeeded',
+			'evt_non_merch_async',
+			{ product_type: 'services' }
+		]
+	] as const)(
+		'acknowledges a non-merch %s event without provider or database work',
+		async (type, eventId, metadata) => {
+			const route = fixture({
+				event: event(eventId, type, {
+					id: 'cs_non_merch',
+					metadata,
+					object: 'checkout.session'
+				})
+			});
+
+			await expect(route.service.handle(RAW_BODY, SIGNATURE)).resolves.toEqual({
+				duplicate: false
+			});
+			expect(route.paidCalls).toEqual([]);
+			expect(route.refundCalls).toEqual([]);
+			expect(route.readinessCalls).toBe(0);
+			expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
+				count: 0
+			});
+			expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 0 });
+		}
+	);
 
 	it('checks local readiness on every relevant event before cached processing work', async () => {
 		const readiness = vi

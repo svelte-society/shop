@@ -92,7 +92,7 @@ function verifyEventShape(value: unknown): Stripe.Event {
 	return value as unknown as Stripe.Event;
 }
 
-function checkoutSessionId(event: Stripe.Event): string {
+function checkoutSessionId(event: Stripe.Event): string | null {
 	const object = event.data.object as unknown;
 	if (
 		!isRecord(object) ||
@@ -102,6 +102,7 @@ function checkoutSessionId(event: Stripe.Event): string {
 	) {
 		invalidEvent();
 	}
+	if (!isRecord(object.metadata) || object.metadata.product_type !== 'merch') return null;
 	return object.id;
 }
 
@@ -304,6 +305,7 @@ export function createStripeWebhookService(
 			const isRefundEvent = REFUND_EVENT_TYPES.has(event.type);
 			if (!isPaidEvent && !isRefundEvent) return { duplicate: false };
 			const sessionId = isPaidEvent ? checkoutSessionId(event) : null;
+			if (isPaidEvent && sessionId === null) return { duplicate: false };
 			const intentId = isRefundEvent ? paymentIntentId(event) : null;
 			await requireReadiness();
 

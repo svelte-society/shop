@@ -194,6 +194,32 @@ describe('Stripe paid Checkout normalization', () => {
 		]);
 	});
 
+	it('accepts an opaque py_ Charge identifier for a succeeded Checkout payment', async () => {
+		const { snapshot } = await normalizedSnapshot(
+			paidCheckoutProviderFixture({ chargeId: 'py_test_paid' })
+		);
+
+		expect(snapshot).toMatchObject({
+			checkoutSessionId: 'cs_test_paid',
+			paymentIntentId: 'pi_test_paid',
+			paymentStatus: 'paid'
+		});
+	});
+
+	it.each(['', ' py_test_paid', 'py_test_paid '])(
+		'rejects a malformed expanded Charge identifier %#',
+		async (chargeId) => {
+			const fixture = paidCheckoutProviderFixture({ chargeId });
+
+			await expectStableCode(
+				createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+					fixture.session.id
+				),
+				'STRIPE_PAID_CHECKOUT_PAYMENT_INTENT_INVALID'
+			);
+		}
+	);
+
 	it('normalizes an arbitrary positive Stripe Price while preserving the dynamic Shipping Rate ID', async () => {
 		const fixture = paidCheckoutProviderFixture({
 			country: 'DE',
@@ -1456,6 +1482,20 @@ describe('refund status normalization', () => {
 		expect(client.paymentIntentRetrieveCalls).toEqual([
 			{ id: 'pi_test_paid', params: { expand: ['latest_charge'] } }
 		]);
+	});
+
+	it('accepts an opaque py_ Charge identifier while reconciling a refund', async () => {
+		const fixture = paidCheckoutProviderFixture({ chargeId: 'py_test_paid' });
+		const charge = fixture.refundPaymentIntent.latest_charge;
+		if (typeof charge !== 'object' || !charge) throw new Error();
+		charge.amount_refunded = 1_000;
+		charge.refunded = false;
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrieveRefundStatus(
+				'pi_test_paid'
+			)
+		).resolves.toBe('partially_refunded');
 	});
 
 	it.each([
