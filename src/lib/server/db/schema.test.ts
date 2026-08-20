@@ -760,7 +760,7 @@ describe('initial schema CHECK constraints', () => {
 		);
 	});
 
-	it('enforces the fixed approval actor on inserts and updates', () => {
+	it('allows only the manual and automatic approval actors on inserts and updates', () => {
 		insertDraft(database);
 		insertOrder(database);
 		const insert = database.prepare(
@@ -771,6 +771,7 @@ describe('initial schema CHECK constraints', () => {
 			insert.run('approval_invalid', 'order_default', 'hash', 'operator', '2026-07-16')
 		).toThrow(/CHECK constraint failed/);
 		insert.run('approval_valid', 'order_default', 'hash', 'codex-admin', '2026-07-16');
+		insert.run('approval_auto', 'order_default', 'hash', 'system-auto', '2026-07-16');
 		expect(() =>
 			database.prepare("UPDATE submission_approvals SET actor = 'operator'").run()
 		).toThrow(/CHECK constraint failed/);

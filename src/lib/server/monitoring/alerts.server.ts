@@ -5,6 +5,8 @@ import type { ShopDatabase } from '$lib/server/db/types';
 export type AlertCode =
 	| 'ORDER_PENDING_REVIEW'
 	| 'STYRIA_REVIEW_REQUIRED'
+	| 'STYRIA_PAYMENT_REQUIRED'
+	| 'STYRIA_UNEXPECTED_AUTO_PAID'
 	| 'SCHEDULER_FAILED'
 	| 'SHIPPING_EMAIL_UNSENT'
 	| 'BACKUP_FAILED'
@@ -31,6 +33,8 @@ export interface AlertService {
 const alertCodes = new Set<AlertCode>([
 	'ORDER_PENDING_REVIEW',
 	'STYRIA_REVIEW_REQUIRED',
+	'STYRIA_PAYMENT_REQUIRED',
+	'STYRIA_UNEXPECTED_AUTO_PAID',
 	'SCHEDULER_FAILED',
 	'SHIPPING_EMAIL_UNSENT',
 	'BACKUP_FAILED',
@@ -44,7 +48,11 @@ const alertCodes = new Set<AlertCode>([
 	'WITHDRAWAL_MESSAGE_UNSENT',
 	'WITHDRAWAL_DATA_UNREADABLE'
 ]);
-const dailyCodes = new Set<AlertCode>(['ORDER_PENDING_REVIEW', 'BACKUP_MISSED']);
+const dailyCodes = new Set<AlertCode>([
+	'ORDER_PENDING_REVIEW',
+	'STYRIA_PAYMENT_REQUIRED',
+	'BACKUP_MISSED'
+]);
 const SAFE_SUBJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 const DAILY_BUCKET_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const HOURLY_BUCKET_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}$/u;
@@ -52,6 +60,10 @@ const HOURLY_BUCKET_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}$/u;
 const nextActions: Record<AlertCode, string> = {
 	ORDER_PENDING_REVIEW: 'Open Codex, inspect the order, and decide the fulfillment action.',
 	STYRIA_REVIEW_REQUIRED: 'Open Codex and reconcile the Styria submission before any retry.',
+	STYRIA_PAYMENT_REQUIRED:
+		'Log in to Styria and pay the prepared order at https://styriashirts.eu/unpaid-orders.',
+	STYRIA_UNEXPECTED_AUTO_PAID:
+		'Check the Styria credit balance: the integrated order entered production without manual payment.',
 	SCHEDULER_FAILED: 'Inspect the named job run and correct its stable failure code.',
 	SHIPPING_EMAIL_UNSENT: 'Inspect the shipping email outbox job and Plunk delivery status.',
 	BACKUP_FAILED: 'Inspect the backup job run and storage configuration before the next cadence.',

@@ -634,7 +634,7 @@ export class SqlitePaidOrderUnitOfWork implements PaidOrderUnitOfWork {
 				production_json, quantity, ?, currency, ?
 			FROM checkout_draft_lines WHERE draft_id = ? AND line_index = ?
 		`);
-		const findAlert = this.database.prepare(`
+		const findOutboxJob = this.database.prepare(`
 			SELECT kind, order_id FROM outbox_jobs WHERE idempotency_key = ?
 		`);
 
@@ -712,18 +712,20 @@ export class SqlitePaidOrderUnitOfWork implements PaidOrderUnitOfWork {
 				createdAt: event.processedAt
 			});
 
-			const idempotencyKey = `paid-order-alert:${order.id}`;
-			const alert = findAlert.get(idempotencyKey) as
-				{ kind: unknown; order_id: unknown } | undefined;
-			if (!alert) {
-				this.outbox.enqueue({
-					kind: 'paid-order-alert',
-					idempotencyKey,
-					orderId: order.id,
-					nextAttemptAt: event.processedAt
-				});
-			} else if (alert.kind !== 'paid-order-alert' || alert.order_id !== order.id) {
-				fail('OUTBOX_IDEMPOTENCY_CONFLICT');
+			for (const kind of ['paid-order-alert', 'styria-create'] as const) {
+				const idempotencyKey = `${kind}:${order.id}`;
+				const existingJob = findOutboxJob.get(idempotencyKey) as
+					{ kind: unknown; order_id: unknown } | undefined;
+				if (!existingJob) {
+					this.outbox.enqueue({
+						kind,
+						idempotencyKey,
+						orderId: order.id,
+						nextAttemptAt: event.processedAt
+					});
+				} else if (existingJob.kind !== kind || existingJob.order_id !== order.id) {
+					fail('OUTBOX_IDEMPOTENCY_CONFLICT');
+				}
 			}
 
 			this.events.complete(

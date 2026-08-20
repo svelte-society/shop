@@ -386,4 +386,148 @@ describe('migrate', () => {
 			{ name: '0003_styria_sync_cursor.sql' }
 		]);
 	});
+
+	it('adds automatic submission approvals and queues existing paid orders without losing approvals', () => {
+		const directory = temporaryDirectory();
+		for (const name of [
+			'0001_initial.sql',
+			'0002_support_note_text.sql',
+			'0003_styria_sync_cursor.sql',
+			'0004_operational_alert_metadata.sql',
+			'0005_withdrawal_cases.sql',
+			'0006_production_details.sql',
+			'0007_dynamic_destination_pricing.sql',
+			'0008_inclusive_shipping.sql'
+		]) {
+			writeFileSync(
+				join(directory, name),
+				readFileSync(join(initialMigrationsDirectory, name), 'utf8')
+			);
+		}
+		const database = openDatabase(':memory:');
+		migrate(database, directory);
+		database.exec(`
+			INSERT INTO checkout_drafts (
+				id, stripe_checkout_session_id, contract_version, currency, total_unit_count,
+				shipping_mode, destination_country, shipping_rate_id, shipping_gross_amount,
+				created_at, expires_at, completed_at
+			) VALUES (
+				'draft_auto', 'cs_auto', 4, 'eur', 1, 'paid', 'SE', 'shr_auto', 500,
+				'2026-08-19T09:00:00.000Z', '2026-08-19T10:00:00.000Z',
+				'2026-08-19T09:05:00.000Z'
+			);
+			INSERT INTO orders (
+				id, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id,
+				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
+				shipping_tax_amount, tax_amount, total_amount, destination_country,
+				payment_status, fulfillment_status, updated_at
+			) VALUES (
+				'order_auto', 'cs_auto', 'pi_auto', 'cus_auto', 'draft_auto', 'eur',
+				2000, 0, 500, 100, 400, 3000, 'SE', 'paid', 'pending_review',
+				'2026-08-19T09:05:00.000Z'
+			);
+			INSERT INTO submission_approvals (
+				id, order_id, payload_hash, actor, expires_at, used_at
+			) VALUES (
+				'approval_manual', 'order_auto', 'hash', 'codex-admin',
+				'2026-08-19T09:15:00.000Z', '2026-08-19T09:10:00.000Z'
+			);
+		`);
+		writeFileSync(
+			join(directory, '0009_automatic_styria_submission.sql'),
+			readFileSync(join(initialMigrationsDirectory, '0009_automatic_styria_submission.sql'), 'utf8')
+		);
+
+		migrate(database, directory);
+
+		expect(database.prepare('SELECT * FROM submission_approvals').get()).toMatchObject({
+			id: 'approval_manual',
+			order_id: 'order_auto',
+			actor: 'codex-admin',
+			used_at: '2026-08-19T09:10:00.000Z'
+		});
+		database
+			.prepare(
+				`INSERT INTO submission_approvals (id, order_id, payload_hash, actor, expires_at)
+				 VALUES ('approval_auto', 'order_auto', 'hash-auto', 'system-auto',
+				 '2026-08-19T09:20:00.000Z')`
+			)
+			.run();
+		expect(() =>
+			database
+				.prepare(
+					`INSERT INTO submission_approvals (id, order_id, payload_hash, actor, expires_at)
+					 VALUES ('approval_bad', 'order_auto', 'hash-bad', 'operator',
+					 '2026-08-19T09:20:00.000Z')`
+				)
+				.run()
+		).toThrow(/CHECK constraint failed/);
+		expect(
+			database
+				.prepare(
+					`SELECT kind, idempotency_key, order_id, next_attempt_at
+					 FROM outbox_jobs WHERE idempotency_key = 'styria-create:order_auto'`
+				)
+				.get()
+		).toEqual({
+			kind: 'styria-create',
+			idempotency_key: 'styria-create:order_auto',
+			order_id: 'order_auto',
+			next_attempt_at: '2026-08-19T09:05:00.000Z'
+		});
+		expect(database.pragma('foreign_key_check')).toEqual([]);
+		migrate(database, directory);
+		expect(
+			database
+				.prepare("SELECT COUNT(*) AS count FROM outbox_jobs WHERE kind = 'styria-create'")
+				.get()
+		).toEqual({ count: 1 });
+	});
+
+	it('rolls back automatic-submission migration on a conflicting queue key', () => {
+		const directory = temporaryDirectory();
+		writeFileSync(
+			join(directory, '0001_initial.sql'),
+			`CREATE TABLE orders (id TEXT PRIMARY KEY, payment_status TEXT NOT NULL,
+				fulfillment_status TEXT NOT NULL, styria_order_id TEXT, updated_at TEXT NOT NULL);
+			 CREATE TABLE submission_approvals (
+				id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), payload_hash TEXT NOT NULL,
+				actor TEXT NOT NULL CHECK (actor = 'codex-admin'), expires_at TEXT NOT NULL, used_at TEXT
+			 );
+			 CREATE TABLE outbox_jobs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
+				order_id TEXT REFERENCES orders(id), attempt_count INTEGER NOT NULL DEFAULT 0,
+				next_attempt_at TEXT NOT NULL, completed_at TEXT, last_error_code TEXT
+			 );`
+		);
+		const database = openDatabase(':memory:');
+		migrate(database, directory);
+		database.exec(`
+			INSERT INTO orders VALUES (
+				'order_conflict', 'paid', 'pending_review', NULL, '2026-08-19T09:05:00.000Z'
+			);
+			INSERT INTO outbox_jobs (kind, idempotency_key, order_id, next_attempt_at) VALUES (
+				'wrong-kind', 'styria-create:order_conflict', 'order_conflict',
+				'2026-08-19T09:05:00.000Z'
+			);
+		`);
+		writeFileSync(
+			join(directory, '0009_automatic_styria_submission.sql'),
+			readFileSync(join(initialMigrationsDirectory, '0009_automatic_styria_submission.sql'), 'utf8')
+		);
+
+		expect(() => migrate(database, directory)).toThrow();
+		expect(
+			database.prepare("SELECT name FROM _migrations WHERE name LIKE '0009_%'").get()
+		).toBeUndefined();
+		expect(() =>
+			database
+				.prepare(
+					`INSERT INTO submission_approvals (id, order_id, payload_hash, actor, expires_at)
+					 VALUES ('auto_after_rollback', 'order_conflict', 'hash', 'system-auto',
+					 '2026-08-19T09:20:00.000Z')`
+				)
+				.run()
+		).toThrow(/CHECK constraint failed/);
+	});
 });

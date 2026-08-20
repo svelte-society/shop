@@ -67,6 +67,7 @@ function runtimeEnvironment(databasePath: string, bootstrap: 'true' | 'false') {
 		CHECKOUT_ENABLED: 'false',
 		MCP_ENABLED: 'false',
 		SCHEDULER_ENABLED: 'false',
+		STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 		DATABASE_BOOTSTRAP: bootstrap,
 		PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 		SUPPORT_EMAIL: 'merch@sveltesociety.dev',

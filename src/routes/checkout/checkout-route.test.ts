@@ -211,6 +211,7 @@ describe('POST /checkout', () => {
 			...BASE_ENV,
 			MCP_ENABLED: 'false',
 			SCHEDULER_ENABLED: 'true',
+			STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 			DATABASE_BOOTSTRAP: 'false',
 			DATABASE_PATH: databasePath,
 			PLUNK_SECRET_KEY: 'plunk-checkout',

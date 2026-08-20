@@ -143,6 +143,7 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 		if (
 			!exactBoolean(environment, 'MCP_ENABLED') ||
 			!exactBoolean(environment, 'SCHEDULER_ENABLED') ||
+			!exactBoolean(environment, 'STYRIA_AUTO_SUBMIT_ENABLED') ||
 			environment.DATABASE_BOOTSTRAP !== 'false' ||
 			!exactValue(environment, 'DATABASE_PATH') ||
 			!isAbsolute(environment.DATABASE_PATH as string) ||
@@ -162,6 +163,12 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 			return false;
 		}
 		if (publicConfig.checkoutEnabled && !publicConfig.storefrontEnabled) return false;
+		if (
+			environment.STYRIA_AUTO_SUBMIT_ENABLED === 'true' &&
+			environment.SCHEDULER_ENABLED !== 'true'
+		) {
+			return false;
+		}
 
 		const fulfillmentEnabled =
 			environment.MCP_ENABLED === 'true' || environment.SCHEDULER_ENABLED === 'true';
@@ -184,6 +191,12 @@ function productionConfigurationIsValid(environment: Record<string, string | und
 			environment.MCP_ENABLED === 'true' &&
 			(!MCP_BEARER_PATTERN.test(environment.MCP_BEARER_TOKEN ?? '') ||
 				!exactValue(environment, 'STYRIA_BRAND_NAME'))
+		) {
+			return false;
+		}
+		if (
+			environment.STYRIA_AUTO_SUBMIT_ENABLED === 'true' &&
+			!exactValue(environment, 'STYRIA_BRAND_NAME')
 		) {
 			return false;
 		}

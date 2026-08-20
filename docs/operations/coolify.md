@@ -100,6 +100,7 @@ STOREFRONT_ENABLED=false
 CHECKOUT_ENABLED=false
 MCP_ENABLED=false
 SCHEDULER_ENABLED=false
+STYRIA_AUTO_SUBMIT_ENABLED=false
 TEST_CATALOG_FIXTURE=false
 SUPPORT_EMAIL=merch@sveltesociety.dev
 ADMIN_EMAIL=merch@sveltesociety.dev
@@ -180,10 +181,65 @@ STYRIA_SECRET_KEY=<secret>
 STYRIA_BASE_URL=https://styriashirts.eu
 STYRIA_TIMEOUT_MS=10000
 STYRIA_BRAND_NAME=Svelte Society
+STYRIA_AUTO_SUBMIT_ENABLED=false
 ```
 
 The reviewed destination policy is source controlled in `SUPPORTED_DESTINATIONS`. It includes the
 EU except Slovenia, Great Britain, and the supported Asian destinations; the United States is not selectable.
+
+Keep `STYRIA_AUTO_SUBMIT_ENABLED=false` during deployment and migration. When enabled, each confirmed
+paid merch order is prepared and created in Styria by the scheduler; production payment remains a manual
+operator action at <https://styriashirts.eu/unpaid-orders>. Styria documents that integrated orders consume
+available account credits automatically. Confirm the account has no usable credits, or that automatic credit
+use is disabled, before enabling this flag. An order returned as `paid` is recorded as `in_production` and
+raises `STYRIA_UNEXPECTED_AUTO_PAID` instead of pretending manual payment is still required.
+
+### Automatic Styria submission rollout
+
+1. Deploy stop-first with `SCHEDULER_ENABLED=true` and `STYRIA_AUTO_SUBMIT_ENABLED=false`. Require both
+   health endpoints to return `200`. Migration `0009` creates one PII-free `styria-create:<order-id>` job
+   for every existing paid order still in `pending_review`; the disabled worker leaves those jobs untouched.
+2. Confirm the Styria credit prerequisite above. Run these read-only checks against `/data/shop.sqlite`;
+   do not export customer, address, or line-item data:
+
+   ```sql
+   SELECT COUNT(*) AS candidates
+   FROM orders
+   WHERE payment_status = 'paid'
+     AND fulfillment_status = 'pending_review'
+     AND styria_order_id IS NULL;
+
+   SELECT o.id
+   FROM orders o
+   LEFT JOIN outbox_jobs j ON j.idempotency_key = 'styria-create:' || o.id
+   WHERE o.payment_status = 'paid'
+     AND o.fulfillment_status = 'pending_review'
+     AND o.styria_order_id IS NULL
+     AND (j.id IS NULL OR j.kind <> 'styria-create' OR j.order_id <> o.id);
+   ```
+
+   The second query must return no rows.
+3. Set `STYRIA_AUTO_SUBMIT_ENABLED=true` and redeploy stop-first. The scheduler handles one Styria create
+   per minute before draining email alerts. For the first order, require local status
+   `awaiting_vendor_payment`, a non-null `styria_order_id`, provider status `received`, and a completed
+   queue job before logging in to Styria and paying it.
+4. If an order becomes `review_required`, do not re-enable or replay its create job. Use the MCP
+   inspection and `reconcile_styria_order` tools; a timeout after submission can mean Styria created the
+   order even though the response never reached this application.
+5. To stop new automatic submissions, set `STYRIA_AUTO_SUBMIT_ENABLED=false` and redeploy. Paid-order
+   intake and durable queueing continue, so no payment is lost and the backlog can be reviewed before a
+   later re-enable.
+
+After the first enabled run, use this PII-free reconciliation view:
+
+```sql
+SELECT o.id, o.fulfillment_status, o.styria_order_id, o.styria_status,
+       o.last_error_code, j.completed_at, j.attempt_count,
+       j.last_error_code AS job_error
+FROM orders o
+JOIN outbox_jobs j ON j.idempotency_key = 'styria-create:' || o.id
+ORDER BY o.updated_at, o.id;
+```
 
 ### Plunk
 

@@ -713,6 +713,15 @@ describe('SqlitePaidOrderUnitOfWork', () => {
 				next_attempt_at: '2026-07-16T08:30:00.000Z',
 				completed_at: null,
 				last_error_code: null
+			},
+			{
+				kind: 'styria-create',
+				idempotency_key: `styria-create:${order.id}`,
+				order_id: order.id,
+				attempt_count: 0,
+				next_attempt_at: '2026-07-16T08:30:00.000Z',
+				completed_at: null,
+				last_error_code: null
 			}
 		]);
 		expect(
@@ -772,7 +781,7 @@ describe('SqlitePaidOrderUnitOfWork', () => {
 			count: 2
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
-			count: 1
+			count: 2
 		});
 		expect(
 			database.prepare('SELECT action, prior_state, next_state FROM order_events ORDER BY id').all()
@@ -791,8 +800,8 @@ describe('SqlitePaidOrderUnitOfWork', () => {
 		drafts.attachSession(draft.id, 'cs_paid');
 		stripeEvents.begin('evt_paid', 'checkout.session.completed', now);
 		database.exec(`
-			CREATE TRIGGER reject_paid_alert BEFORE INSERT ON outbox_jobs
-			WHEN NEW.kind = 'paid-order-alert'
+			CREATE TRIGGER reject_styria_create BEFORE INSERT ON outbox_jobs
+			WHEN NEW.kind = 'styria-create'
 			BEGIN
 				SELECT RAISE(ABORT, 'test late failure');
 			END
@@ -865,6 +874,53 @@ describe('SqliteOutboxRepository', () => {
 		expect(claimed.map((job) => job.idempotencyKey)).toEqual(['due-first-id', 'due-later-id']);
 		expect(claimed.every((job) => job.nextAttemptAt > now)).toBe(true);
 		expect(outbox.claimDue(now, 2)).toEqual([]);
+	});
+
+	it('claims due jobs by an explicit include or exclude kind filter', () => {
+		outbox.enqueue(
+			outboxInput({ kind: 'styria-create', idempotencyKey: 'styria-create:order-test' })
+		);
+		outbox.enqueue(outboxInput());
+		outbox.enqueue(outboxInput({ kind: 'future-kind', idempotencyKey: 'future-kind:order-test' }));
+
+		expect(outbox.claimDue(now, 10, { exclude: ['styria-create'] }).map((job) => job.kind)).toEqual(
+			['paid-order-alert', 'future-kind']
+		);
+		expect(outbox.claimDue(now, 10, { include: ['styria-create'] }).map((job) => job.kind)).toEqual(
+			['styria-create']
+		);
+		expect(() => outbox.claimDue(now, 10, { include: [] })).toThrowError(
+			'OUTBOX_CLAIM_KINDS_INVALID'
+		);
+		expect(() =>
+			outbox.claimDue(now, 10, { include: ['styria-create', 'styria-create'] })
+		).toThrowError('OUTBOX_CLAIM_KINDS_INVALID');
+	});
+
+	it('deduplicates Styria payment-required alerts by UTC day', () => {
+		const idempotencyKey = 'alert:STYRIA_PAYMENT_REQUIRED:order-test:2026-07-16';
+		outbox.enqueueOperationalAlert({
+			kind: 'operational-alert',
+			idempotencyKey,
+			orderId: null,
+			nextAttemptAt: now,
+			code: 'STYRIA_PAYMENT_REQUIRED',
+			subjectId: 'order-test',
+			observedAt: now
+		});
+		outbox.enqueueOperationalAlert({
+			kind: 'operational-alert',
+			idempotencyKey,
+			orderId: null,
+			nextAttemptAt: new Date('2026-07-16T23:59:59.000Z'),
+			code: 'STYRIA_PAYMENT_REQUIRED',
+			subjectId: 'order-test',
+			observedAt: new Date('2026-07-16T23:59:59.000Z')
+		});
+
+		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
+			count: 1
+		});
 	});
 
 	it('serializes overlapping claims across barrier-synchronized Node processes', async () => {

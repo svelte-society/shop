@@ -13,10 +13,14 @@ import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import { SqliteApprovalRepository } from '$lib/server/fulfillment/approvals.server';
+import { FulfillmentPreparationService } from '$lib/server/fulfillment/prepare.server';
 import { SqliteFulfillmentRepository } from '$lib/server/fulfillment/repository.server';
+import { FulfillmentSubmissionService } from '$lib/server/fulfillment/submit.server';
 import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { PaidOrderAlertOutboxWorker } from '$lib/server/jobs/outbox-worker.server';
 import { OutboxScheduler, type Scheduler } from '$lib/server/jobs/scheduler.server';
+import { DurableStyriaSubmissionWorker } from '$lib/server/jobs/styria-submission-worker.server';
 import { WithdrawalMessageWorker } from '$lib/server/jobs/withdrawal-worker.server';
 import { SqliteWithdrawalRetentionJob } from '$lib/server/jobs/withdrawal-retention.server';
 import { SqliteOperationalChecksJob } from '$lib/server/jobs/stale-orders.server';
@@ -144,6 +148,13 @@ function schedulerEnabled(environment: RuntimeEnvironment): boolean {
 	throw new Error('APPLICATION_CONFIG_INVALID');
 }
 
+function automaticStyriaSubmissionEnabled(environment: RuntimeEnvironment): boolean {
+	const value = environment.STYRIA_AUTO_SUBMIT_ENABLED;
+	if (value === undefined || value === 'false') return false;
+	if (value === 'true') return true;
+	throw new Error('APPLICATION_CONFIG_INVALID');
+}
+
 function databaseBootstrapEnabled(environment: RuntimeEnvironment): boolean {
 	const value = environment.DATABASE_BOOTSTRAP;
 	if (value === undefined || value === 'false') return false;
@@ -195,6 +206,7 @@ function createRuntimeScheduler(
 	alerts: SqliteAlertService,
 	withdrawal: WithdrawalRuntime
 ): Scheduler {
+	const automaticStyriaSubmission = automaticStyriaSubmissionEnabled(environment);
 	const outbox = new SqliteOutboxRepository(database);
 	const stripe = createStripeFulfillmentGateway(
 		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'))
@@ -227,9 +239,35 @@ function createRuntimeScheduler(
 			replyTo: supportEmail
 		},
 		shipping: { stripe, sender, supportEmail },
-		alerts
+		alerts,
+		automaticStyriaSubmission
 	});
 	const fulfillment = new SqliteFulfillmentRepository(database);
+	const styriaSubmission = automaticStyriaSubmission
+		? (() => {
+				const automaticFulfillment = new SqliteFulfillmentRepository(database, 'system-auto');
+				const automaticShared = {
+					fulfillment: automaticFulfillment,
+					stripe,
+					brandName: requiredEnvironmentValue(environment, 'STYRIA_BRAND_NAME'),
+					comment: 'Automatically prepared after confirmed Stripe payment'
+				};
+				return new DurableStyriaSubmissionWorker({
+					outbox,
+					fulfillment: automaticFulfillment,
+					preparation: new FulfillmentPreparationService({
+						...automaticShared,
+						approvals: new SqliteApprovalRepository(database, 'system-auto')
+					}),
+					submission: new FulfillmentSubmissionService({
+						...automaticShared,
+						styria,
+						alerts
+					}),
+					alerts
+				});
+			})()
+		: undefined;
 	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
 	const backupStore = createBackupStore({
 		endpoint: requiredEnvironmentValue(environment, 'S3_ENDPOINT'),
@@ -268,6 +306,7 @@ function createRuntimeScheduler(
 		database,
 		leases: new SqliteLeaseRepository(database),
 		worker,
+		styriaSubmission,
 		withdrawalWorker: withdrawal.worker,
 		withdrawalRetention: withdrawal.retention,
 		styriaSync,
@@ -396,6 +435,10 @@ export function createApplicationLifecycle(
 		const databasePath = requiredEnvironmentValue(options.environment, 'DATABASE_PATH');
 		const bootstrap = databaseBootstrapEnabled(options.environment);
 		const enableScheduler = schedulerEnabled(options.environment);
+		const enableAutomaticStyriaSubmission = automaticStyriaSubmissionEnabled(options.environment);
+		if (enableAutomaticStyriaSubmission && !enableScheduler) {
+			throw new Error('APPLICATION_CONFIG_INVALID');
+		}
 		const database = open(databasePath, { fileMustExist: !bootstrap });
 		try {
 			applyMigrations(database, migrationsDirectory);

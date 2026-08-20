@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { mapStyriaStatus } from '$lib/domain/fulfillment';
 import type { FulfillmentStatus, OrderEvent, OrderWithLines } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
 import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
@@ -121,16 +122,26 @@ class MemoryFulfillment {
 		};
 	}
 
-	recordSubmitted(orderId: string, styriaOrderId: string, status: string, at: Date): void {
+	recordSubmitted(
+		orderId: string,
+		styriaOrderId: string,
+		status: string,
+		at: Date
+	): FulfillmentStatus {
 		this.calls.push('recordSubmitted');
 		if (this.recordFailures-- > 0) throw new RepositoryError('STYRIA_SUBMISSION_RECORD_FAILED');
 		if (orderId !== this.order.id) throw new RepositoryError('ORDER_NOT_FOUND');
-		this.order.fulfillmentStatus = 'awaiting_vendor_payment';
+		this.order.fulfillmentStatus = mapStyriaStatus({
+			status,
+			deleted: false,
+			trackingNumber: null
+		});
 		this.order.styriaOrderId = styriaOrderId;
 		this.order.styriaStatus = status;
 		this.order.submittedAt = new Date(at);
 		this.order.updatedAt = new Date(at);
 		this.order.lastErrorCode = null;
+		return this.order.fulfillmentStatus;
 	}
 
 	requireReview(orderId: string, errorCode: string, at: Date): void {
@@ -304,6 +315,19 @@ describe('Styria submission reconciliation', () => {
 		});
 
 		expect(state.fulfillment.calls).toEqual(['inspect', 'recordSubmitted']);
+	});
+
+	it('reports the truthful in-production state when Styria already consumed account credits', async () => {
+		const state = setup('submitting');
+		state.styria.matches = [remoteOrder({ status: 'paid' })];
+
+		await expect(state.service.reconcile('order_reconcile', now)).resolves.toEqual({
+			outcome: 'reconciled',
+			matches: 1,
+			fulfillmentStatus: 'in_production'
+		});
+
+		expect(state.fulfillment.order.fulfillmentStatus).toBe('in_production');
 	});
 
 	it('rejects a provider order with different design placement names', async () => {

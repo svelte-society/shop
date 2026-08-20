@@ -388,7 +388,7 @@ describe('checkout to Stripe webhook intake', () => {
 			count: 1
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
-			count: 1
+			count: 2
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM order_events').get()).toEqual({
 			count: 1
@@ -473,7 +473,7 @@ describe('checkout to Stripe webhook intake', () => {
 			count: 1
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
-			count: 1
+			count: 2
 		});
 		expect(
 			database
@@ -533,7 +533,7 @@ describe('checkout to Stripe webhook intake', () => {
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 1 });
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
-			count: 1
+			count: 2
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM stripe_events').get()).toEqual({
 			count: 3

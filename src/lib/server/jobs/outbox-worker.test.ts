@@ -284,6 +284,33 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		expect(requests).toHaveLength(1);
 	});
 
+	it('describes the automatic Styria queue when automatic submission is enabled', async () => {
+		insertOrder(database, { id: 'order_auto_queue' });
+		enqueueAlert(outbox, 'order_auto_queue');
+		const requests: CapturedRequest[] = [];
+		const fetch: typeof globalThis.fetch = async (input, init) => {
+			requests.push({ input, init });
+			return successfulResponse('delivery_auto_queue');
+		};
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			alertEmail,
+			automaticStyriaSubmission: true
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 1, rescheduled: 0 });
+		expect(JSON.parse(String(requests[0].init?.body))).toEqual(
+			expect.objectContaining({
+				subject: 'Svelte Society Shop: paid order queued for Styria',
+				body: expect.stringContaining(
+					'Queued for automatic preparation in Styria. Wait for the payment-required alert.'
+				)
+			})
+		);
+	});
+
 	it('reschedules a transient Plunk failure without blocking the rest of the claimed batch', async () => {
 		insertOrder(database, { id: 'order_first_fails' });
 		insertOrder(database, { id: 'order_second_succeeds', quantities: [2] });
@@ -433,6 +460,40 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			next_attempt_at: '2026-07-16T08:32:00.000Z',
 			completed_at: null,
 			last_error_code: 'OUTBOX_JOB_KIND_UNSUPPORTED'
+		});
+	});
+
+	it('leaves Styria creation jobs due for the dedicated worker while processing ordinary mail', async () => {
+		insertOrder(database, { id: 'order_worker_isolation' });
+		outbox.enqueue({
+			kind: 'styria-create',
+			idempotencyKey: 'styria-create:order_worker_isolation',
+			orderId: 'order_worker_isolation',
+			nextAttemptAt: now
+		});
+		enqueueAlert(outbox, 'order_worker_isolation');
+		const fetch = vi.fn(async () => successfulResponse('delivery_isolated'));
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			alertEmail
+		});
+
+		await expect(worker.drain(now)).resolves.toEqual({ completed: 1, rescheduled: 0 });
+		expect(fetch).toHaveBeenCalledOnce();
+		expect(
+			database
+				.prepare(
+					`SELECT attempt_count, next_attempt_at, completed_at, last_error_code
+					FROM outbox_jobs WHERE kind = 'styria-create'`
+				)
+				.get()
+		).toEqual({
+			attempt_count: 0,
+			next_attempt_at: now.toISOString(),
+			completed_at: null,
+			last_error_code: null
 		});
 	});
 

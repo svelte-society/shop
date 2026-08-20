@@ -26,8 +26,10 @@ const inputSchema = safeToolSchema(
 const outputSchema = v.strictObject({
 	orderId: v.optional(v.string()),
 	styriaOrderId: v.optional(v.string()),
-	fulfillmentStatus: v.optional(v.literal('awaiting_vendor_payment')),
-	manualPaymentRequired: v.optional(v.literal(true)),
+	fulfillmentStatus: v.optional(
+		v.picklist(['awaiting_vendor_payment', 'in_production', 'review_required'])
+	),
+	manualPaymentRequired: v.optional(v.boolean()),
 	error: toolErrorSchema
 });
 

@@ -4,7 +4,7 @@ export type { FulfillmentStatus } from './orders';
 
 const ALLOWED: Record<FulfillmentStatus, readonly FulfillmentStatus[]> = {
 	pending_review: ['submitting', 'review_required', 'cancelled'],
-	submitting: ['awaiting_vendor_payment', 'review_required'],
+	submitting: ['awaiting_vendor_payment', 'in_production', 'review_required'],
 	submitted: [
 		'awaiting_vendor_payment',
 		'in_production',

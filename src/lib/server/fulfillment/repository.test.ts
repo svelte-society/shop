@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import type { FulfillmentActor } from './approvals.server';
 import { SqliteFulfillmentRepository } from './repository.server';
 
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
@@ -389,6 +390,94 @@ describe('beginSubmission', () => {
 		]);
 	});
 
+	it('consumes only a system approval and attributes the automatic transition to system-auto', () => {
+		seedOrder(database);
+		seedApproval(database, { actor: 'system-auto' });
+		const automatic = new SqliteFulfillmentRepository(database, 'system-auto');
+
+		automatic.beginSubmission('order_one', 'approval_one', 'payload-hash-one', now);
+
+		expect(orderState(database).fulfillment_status).toBe('submitting');
+		expect(events(database)).toEqual([
+			expect.objectContaining({
+				actor: 'system-auto',
+				action: 'fulfillment_submission_started',
+				next_state: 'submitting'
+			})
+		]);
+	});
+
+	it.each([
+		['codex-admin', 'system-auto'],
+		['system-auto', 'codex-admin']
+	] satisfies Array<[FulfillmentActor, FulfillmentActor]>)(
+		'rejects a %s submission repository consuming a %s authorization',
+		(expectedActor, approvalActor) => {
+			seedOrder(database);
+			seedApproval(database, { actor: approvalActor });
+			const actorBoundRepository = new SqliteFulfillmentRepository(database, expectedActor);
+
+			expect(() =>
+				actorBoundRepository.beginSubmission('order_one', 'approval_one', 'payload-hash-one', now)
+			).toThrowError('SUBMISSION_APPROVAL_ACTOR_INVALID');
+			expect(orderState(database).fulfillment_status).toBe('pending_review');
+			expect(
+				database
+					.prepare('SELECT used_at FROM submission_approvals WHERE id = ?')
+					.get('approval_one')
+			).toEqual({ used_at: null });
+		}
+	);
+
+	it.each(['partially_refunded', 'refunded'] as const)(
+		'atomically rejects automatic submission when payment is %s',
+		(paymentStatus) => {
+			seedOrder(database, { paymentStatus });
+			seedApproval(database, { actor: 'system-auto' });
+			const automatic = new SqliteFulfillmentRepository(database, 'system-auto');
+
+			expect(() =>
+				automatic.beginSubmission('order_one', 'approval_one', 'payload-hash-one', now)
+			).toThrowError('AUTOMATIC_SUBMISSION_PAYMENT_NOT_PAID');
+
+			expect(orderState(database)).toEqual(
+				expect.objectContaining({
+					payment_status: paymentStatus,
+					fulfillment_status: 'pending_review'
+				})
+			);
+			expect(
+				database
+					.prepare('SELECT used_at FROM submission_approvals WHERE id = ?')
+					.get('approval_one')
+			).toEqual({ used_at: null });
+			expect(events(database)).toEqual([]);
+		}
+	);
+
+	it('preserves the manually authorized review path for a refunded order', () => {
+		seedOrder(database, { paymentStatus: 'refunded' });
+		seedApproval(database, { actor: 'codex-admin' });
+
+		repository.beginSubmission('order_one', 'approval_one', 'payload-hash-one', now);
+
+		expect(orderState(database)).toEqual(
+			expect.objectContaining({
+				payment_status: 'refunded',
+				fulfillment_status: 'submitting'
+			})
+		);
+		expect(events(database)).toEqual([
+			expect.objectContaining({ actor: 'codex-admin', action: 'fulfillment_submission_started' })
+		]);
+	});
+
+	it('rejects an untrusted configured actor', () => {
+		expect(
+			() => new SqliteFulfillmentRepository(database, 'customer' as FulfillmentActor)
+		).toThrowError('SUBMISSION_APPROVAL_ACTOR_INVALID');
+	});
+
 	it('rejects an expired approval without consuming it or changing order state', () => {
 		seedOrder(database);
 		seedApproval(database, { expiresAt: now });
@@ -580,6 +669,79 @@ describe('provider-result mutations', () => {
 		]);
 		expect(JSON.stringify(events(database))).not.toContain('styria-123');
 		expect(JSON.stringify(events(database))).not.toContain('received');
+	});
+
+	it.each(['paid', 'printing'])(
+		'records confirmed provider status %s directly as in production with its provider ID',
+		(styriaStatus) => {
+			seedOrder(database, { status: 'submitting' });
+
+			repository.recordSubmitted('order_one', 'styria-123', styriaStatus, now);
+
+			expect(orderState(database)).toEqual(
+				expect.objectContaining({
+					fulfillment_status: 'in_production',
+					styria_order_id: 'styria-123',
+					styria_status: styriaStatus,
+					submitted_at: now.toISOString(),
+					last_error_code: null
+				})
+			);
+			expect(events(database)).toEqual([
+				expect.objectContaining({
+					action: 'styria_submission_recorded',
+					next_state: 'in_production',
+					result: 'succeeded'
+				})
+			]);
+		}
+	);
+
+	it('preserves a confirmed provider ID while routing an unknown initial status to review', () => {
+		seedOrder(database, { status: 'submitting' });
+
+		repository.recordSubmitted('order_one', 'styria-123', 'provider surprise', now);
+
+		expect(orderState(database)).toEqual(
+			expect.objectContaining({
+				fulfillment_status: 'review_required',
+				styria_order_id: 'styria-123',
+				styria_status: 'provider surprise',
+				last_error_code: 'STYRIA_STATUS_REVIEW_REQUIRED'
+			})
+		);
+		expect(events(database)).toEqual([
+			expect.objectContaining({
+				next_state: 'review_required',
+				result: 'failed',
+				error_code: 'STYRIA_STATUS_REVIEW_REQUIRED'
+			})
+		]);
+	});
+
+	it('preserves the provider ID but requires review when an automatic order is refunded in flight', () => {
+		seedOrder(database, { status: 'submitting', paymentStatus: 'partially_refunded' });
+		const automaticRepository = new SqliteFulfillmentRepository(database, 'system-auto');
+
+		automaticRepository.recordSubmitted('order_one', 'styria-123', 'received', now);
+
+		expect(orderState(database)).toEqual(
+			expect.objectContaining({
+				payment_status: 'partially_refunded',
+				fulfillment_status: 'review_required',
+				styria_order_id: 'styria-123',
+				styria_status: 'received',
+				last_error_code: 'AUTOMATIC_SUBMISSION_PAYMENT_NOT_PAID'
+			})
+		);
+		expect(events(database)).toEqual([
+			expect.objectContaining({
+				actor: 'system-auto',
+				next_state: 'review_required',
+				result: 'failed',
+				error_code: 'AUTOMATIC_SUBMISSION_PAYMENT_NOT_PAID'
+			})
+		]);
 	});
 
 	it('supports legacy submitted and review-repair outgoing transitions without creating submitted', () => {

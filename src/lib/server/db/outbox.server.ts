@@ -12,7 +12,7 @@ export interface OutboxRepository {
 	enqueue(input: NewOutboxJob): void;
 	enqueueOperationalAlert(input: OperationalAlertOutboxInput): void;
 	ensureShipping(orderId: string, trackingNumber: string, now: Date): boolean;
-	claimDue(now: Date, limit: number): OutboxJob[];
+	claimDue(now: Date, limit: number, filter?: OutboxClaimFilter): OutboxJob[];
 	complete(id: number, now: Date): void;
 	reschedule(id: number, attemptCount: number, nextAttemptAt: Date, errorCode: string): void;
 	beginEmailDelivery(input: EmailDeliveryReference): boolean;
@@ -23,6 +23,9 @@ export interface OutboxRepository {
 		outboxJobId?: number
 	): void;
 }
+
+export type OutboxClaimFilter =
+	{ include: readonly string[]; exclude?: never } | { exclude: readonly string[]; include?: never };
 
 export type OperationalAlertOutboxInput = NewOutboxJob & {
 	code: AlertCode;
@@ -233,7 +236,14 @@ export class SqliteOutboxRepository implements OutboxRepository {
 		}
 		const observedBucket = input.observedAt
 			.toISOString()
-			.slice(0, input.code === 'ORDER_PENDING_REVIEW' || input.code === 'BACKUP_MISSED' ? 10 : 13);
+			.slice(
+				0,
+				input.code === 'ORDER_PENDING_REVIEW' ||
+					input.code === 'STYRIA_PAYMENT_REQUIRED' ||
+					input.code === 'BACKUP_MISSED'
+					? 10
+					: 13
+			);
 		const keyBucket = parsed.observedAt.toISOString().slice(0, observedBucket.length);
 		if (observedBucket !== keyBucket) fail('OUTBOX_JOB_INVALID');
 
@@ -318,16 +328,34 @@ export class SqliteOutboxRepository implements OutboxRepository {
 		}
 	}
 
-	claimDue(now: Date, limit: number): OutboxJob[] {
+	claimDue(now: Date, limit: number, filter?: OutboxClaimFilter): OutboxJob[] {
 		const nowTimestamp = isoTimestamp(now, 'OUTBOX_CLAIM_INVALID');
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
 			fail('OUTBOX_CLAIM_LIMIT_INVALID');
 		}
+		const kinds = filter?.include ?? filter?.exclude;
+		if (
+			filter !== undefined &&
+			(!filter ||
+				(typeof filter !== 'object' && typeof filter !== 'function') ||
+				(filter.include === undefined) === (filter.exclude === undefined) ||
+				!Array.isArray(kinds) ||
+				kinds.length < 1 ||
+				kinds.length > 20 ||
+				kinds.some((kind) => !isNonEmptyString(kind) || kind !== kind.trim()) ||
+				new Set(kinds).size !== kinds.length)
+		) {
+			fail('OUTBOX_CLAIM_KINDS_INVALID');
+		}
 		const leaseDate = new Date(now.getTime() + CLAIM_LEASE_MILLISECONDS);
 		const leaseTimestamp = isoTimestamp(leaseDate, 'OUTBOX_CLAIM_INVALID');
+		const kindPredicate = filter
+			? ` AND kind ${filter.include ? 'IN' : 'NOT IN'} (${kinds?.map(() => '?').join(', ')})`
+			: '';
 		const findDue = this.database.prepare(`
 			SELECT * FROM outbox_jobs
 			WHERE completed_at IS NULL AND next_attempt_at <= ?
+			${kindPredicate}
 			ORDER BY next_attempt_at, id
 			LIMIT ?
 		`);
@@ -337,7 +365,7 @@ export class SqliteOutboxRepository implements OutboxRepository {
 			WHERE id = ? AND completed_at IS NULL AND next_attempt_at <= ?
 		`);
 		const claim = this.database.transaction(() => {
-			const rows = findDue.all(nowTimestamp, limit) as OutboxRow[];
+			const rows = findDue.all(nowTimestamp, ...(kinds ?? []), limit) as OutboxRow[];
 			for (const row of rows) {
 				if (reserve.run(leaseTimestamp, row.id, nowTimestamp).changes !== 1) {
 					fail('OUTBOX_CLAIM_CONFLICT');

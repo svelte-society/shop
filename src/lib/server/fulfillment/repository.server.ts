@@ -11,9 +11,11 @@ import { isConciseSupportText } from '$lib/domain/support';
 import { SqliteOrderEventRepository } from '$lib/server/audit/order-events.server';
 import { SqliteOrderRepository } from '$lib/server/db/orders.server';
 import type { ShopDatabase } from '$lib/server/db/types';
+import type { FulfillmentActor } from './approvals.server';
 
-const ACTOR = 'codex-admin';
+const SUPPORT_ACTOR = 'codex-admin';
 const REVIEW_ERROR_CODE = 'STYRIA_STATUS_REVIEW_REQUIRED';
+const AUTOMATIC_PAYMENT_REVIEW_ERROR_CODE = 'AUTOMATIC_SUBMISSION_PAYMENT_NOT_PAID';
 
 const fulfillmentStatuses = new Set<FulfillmentStatus>([
 	'pending_review',
@@ -60,7 +62,7 @@ export type NewSupportNote = {
 
 export type SupportNote = NewSupportNote & {
 	id: number;
-	actor: typeof ACTOR;
+	actor: typeof SUPPORT_ACTOR;
 };
 
 export type OrderWithLinesAndEvents = OrderWithLines & {
@@ -175,7 +177,7 @@ function mapSupportNote(row: SupportNoteRow, orderId: string): SupportNote {
 		!supportOutcomes.has(row.outcome as SupportOutcome) ||
 		(row.note !== null && !isConciseSupportText(row.note, 160)) ||
 		(row.external_reference !== null && !isConciseSupportText(row.external_reference, 120)) ||
-		row.actor !== ACTOR
+		row.actor !== SUPPORT_ACTOR
 	) {
 		fail('SUPPORT_NOTE_ROW_INVALID');
 	}
@@ -185,7 +187,7 @@ function mapSupportNote(row: SupportNoteRow, orderId: string): SupportNote {
 		outcome: row.outcome as SupportOutcome,
 		note: row.note as string | null,
 		externalReference: row.external_reference as string | null,
-		actor: ACTOR,
+		actor: SUPPORT_ACTOR,
 		createdAt: dateFromIso(row.created_at, 'SUPPORT_NOTE_ROW_INVALID')
 	};
 }
@@ -194,7 +196,13 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 	private readonly orders: SqliteOrderRepository;
 	private readonly audit: SqliteOrderEventRepository;
 
-	constructor(private readonly database: ShopDatabase) {
+	constructor(
+		private readonly database: ShopDatabase,
+		private readonly actor: FulfillmentActor = 'codex-admin'
+	) {
+		if (actor !== 'codex-admin' && actor !== 'system-auto') {
+			fail('SUBMISSION_APPROVAL_ACTOR_INVALID');
+		}
 		this.orders = new SqliteOrderRepository(database);
 		this.audit = new SqliteOrderEventRepository(database);
 	}
@@ -255,7 +263,7 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 				dateFromIso(approval.used_at, 'SUBMISSION_APPROVAL_ROW_INVALID');
 				fail('SUBMISSION_APPROVAL_USED');
 			}
-			if (approval.actor !== ACTOR) fail('SUBMISSION_APPROVAL_ACTOR_INVALID');
+			if (approval.actor !== this.actor) fail('SUBMISSION_APPROVAL_ACTOR_INVALID');
 			if (approval.order_id !== orderId) fail('SUBMISSION_APPROVAL_ORDER_MISMATCH');
 			if (approval.payload_hash !== payloadHash) fail('SUBMISSION_APPROVAL_HASH_MISMATCH');
 			if (
@@ -267,6 +275,9 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 
 			const order = this.orders.findById(orderId);
 			if (!order) fail('ORDER_NOT_FOUND');
+			if (this.actor === 'system-auto' && order.paymentStatus !== 'paid') {
+				fail('AUTOMATIC_SUBMISSION_PAYMENT_NOT_PAID');
+			}
 			assertTransition(order.fulfillmentStatus, 'submitting');
 			requireCurrentTimestamp(order, timestamp);
 			if (consumeApproval.run(timestamp, approvalId).changes !== 1) {
@@ -280,7 +291,7 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			}
 			this.audit.append({
 				orderId,
-				actor: ACTOR,
+				actor: this.actor,
 				action: 'fulfillment_submission_started',
 				priorState: order.fulfillmentStatus,
 				nextState: 'submitting',
@@ -307,30 +318,45 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			fail('STYRIA_SUBMISSION_INVALID');
 		}
 		const timestamp = isoTimestamp(now, 'STYRIA_SUBMISSION_INVALID');
+		const providerNext = mapStyriaStatus({
+			status: styriaStatus,
+			deleted: false,
+			trackingNumber: null
+		});
 		const update = this.database.prepare(`
 			UPDATE orders SET
-				fulfillment_status = 'awaiting_vendor_payment',
+				fulfillment_status = ?,
 				styria_order_id = ?,
 				styria_status = ?,
 				submitted_at = COALESCE(submitted_at, ?),
 				updated_at = ?,
-				last_error_code = NULL
+				last_error_code = ?
 			WHERE id = ? AND fulfillment_status = ? AND updated_at = ?
 		`);
 		const record = this.database.transaction(() => {
 			const order = this.orders.findById(orderId);
 			if (!order) fail('ORDER_NOT_FOUND');
-			assertTransition(order.fulfillmentStatus, 'awaiting_vendor_payment');
+			const automaticPaymentInvalid =
+				this.actor === 'system-auto' && order.paymentStatus !== 'paid';
+			const next = automaticPaymentInvalid ? 'review_required' : providerNext;
+			const errorCode = automaticPaymentInvalid
+				? AUTOMATIC_PAYMENT_REVIEW_ERROR_CODE
+				: next === 'review_required'
+					? REVIEW_ERROR_CODE
+					: null;
+			assertTransition(order.fulfillmentStatus, next);
 			requireCurrentTimestamp(order, timestamp);
 			if (order.styriaOrderId !== null && order.styriaOrderId !== styriaOrderId) {
 				fail('STYRIA_ORDER_ID_CONFLICT');
 			}
 			if (
 				update.run(
+					next,
 					styriaOrderId,
 					styriaStatus,
 					timestamp,
 					timestamp,
+					errorCode,
 					orderId,
 					order.fulfillmentStatus,
 					order.updatedAt.toISOString()
@@ -340,12 +366,12 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			}
 			this.audit.append({
 				orderId,
-				actor: ACTOR,
+				actor: this.actor,
 				action: 'styria_submission_recorded',
 				priorState: order.fulfillmentStatus,
-				nextState: 'awaiting_vendor_payment',
-				result: 'succeeded',
-				errorCode: null,
+				nextState: next,
+				result: errorCode === null ? 'succeeded' : 'failed',
+				errorCode,
 				createdAt: now
 			});
 		});
@@ -388,7 +414,7 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			}
 			this.audit.append({
 				orderId,
-				actor: ACTOR,
+				actor: this.actor,
 				action: 'fulfillment_review_required',
 				priorState: order.fulfillmentStatus,
 				nextState: 'review_required',
@@ -462,7 +488,7 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			}
 			this.audit.append({
 				orderId,
-				actor: ACTOR,
+				actor: this.actor,
 				action: 'styria_status_updated',
 				priorState: order.fulfillmentStatus,
 				nextState: next,
@@ -493,7 +519,7 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 		const timestamp = isoTimestamp(input.createdAt, 'SUPPORT_NOTE_INVALID');
 		const insert = this.database.prepare(`
 			INSERT INTO support_notes (order_id, outcome, note, external_reference, actor, created_at)
-			VALUES (?, ?, ?, ?, '${ACTOR}', ?)
+			VALUES (?, ?, ?, ?, '${SUPPORT_ACTOR}', ?)
 		`);
 		const record = this.database.transaction(() => {
 			const order = this.orders.findById(input.orderId);
@@ -502,7 +528,7 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 			insert.run(input.orderId, input.outcome, input.note, input.externalReference, timestamp);
 			this.audit.append({
 				orderId: input.orderId,
-				actor: ACTOR,
+				actor: SUPPORT_ACTOR,
 				action: 'support_note_recorded',
 				priorState: order.fulfillmentStatus,
 				nextState: order.fulfillmentStatus,

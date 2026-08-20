@@ -1,3 +1,4 @@
+import { mapStyriaStatus } from '$lib/domain/fulfillment';
 import type { FulfillmentStatus, OrderWithLines } from '$lib/domain/orders';
 import { emptyProductionDetails, normalizeProductionDetails } from '$lib/domain/production';
 import type {
@@ -242,6 +243,11 @@ export class StyriaReconciliationService implements ReconciliationService {
 		const matches = providerMatches.filter((match) => match.external_id === evidence.externalId);
 
 		if (matches.length === 1 && isConsistentStyriaOrder(matches[0], evidence)) {
+			const fulfillmentStatus = mapStyriaStatus({
+				status: matches[0].status,
+				deleted: matches[0].deleted,
+				trackingNumber: matches[0].shipping.trackingNumber
+			});
 			try {
 				this.dependencies.fulfillment.recordSubmitted(
 					orderId,
@@ -258,7 +264,7 @@ export class StyriaReconciliationService implements ReconciliationService {
 			return {
 				outcome: 'reconciled',
 				matches: 1,
-				fulfillmentStatus: 'awaiting_vendor_payment'
+				fulfillmentStatus
 			};
 		}
 

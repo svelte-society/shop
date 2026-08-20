@@ -659,7 +659,7 @@ describe('production-shaped backup and restore drill', () => {
 		);
 		expect(repository.loadEncryptedByReference('WDR-PURGEDBACKUPDRILL12345')).toBeNull();
 		expect(database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 8
+			count: 9
 		});
 
 		const readiness = await checkRuntimeReadiness({
@@ -672,6 +672,7 @@ describe('production-shaped backup and restore drill', () => {
 				CHECKOUT_ENABLED: 'false',
 				MCP_ENABLED: 'false',
 				SCHEDULER_ENABLED: 'false',
+				STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 				DATABASE_BOOTSTRAP: 'false',
 				PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 				SUPPORT_EMAIL: 'merch@sveltesociety.dev',

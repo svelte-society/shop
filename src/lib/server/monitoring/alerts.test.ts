@@ -77,6 +77,26 @@ describe('operational alerts', () => {
 		);
 	});
 
+	it('keeps vendor-payment reminders daily and points operators to unpaid Styria orders', () => {
+		alerts.enqueueAlert(
+			'STYRIA_PAYMENT_REQUIRED',
+			'order_123',
+			new Date('2026-08-19T08:00:00.000Z')
+		);
+		alerts.enqueueAlert(
+			'STYRIA_PAYMENT_REQUIRED',
+			'order_123',
+			new Date('2026-08-19T20:00:00.000Z')
+		);
+
+		const row = database.prepare('SELECT idempotency_key FROM outbox_jobs').get() as {
+			idempotency_key: string;
+		};
+		expect(row.idempotency_key).toBe('alert:STYRIA_PAYMENT_REQUIRED:order_123:2026-08-19');
+		const message = alertMessage(parseAlertIdempotencyKey(row.idempotency_key));
+		expect(message.html).toContain('https://styriashirts.eu/unpaid-orders');
+	});
+
 	it.each([
 		'customer@example.com',
 		'203.0.113.10',

@@ -384,7 +384,8 @@ describe('HTTP security hook', () => {
 			...WITHDRAWAL_RUNTIME_ENV,
 			DATABASE_PATH: ':memory:',
 			DATABASE_BOOTSTRAP: 'true',
-			SCHEDULER_ENABLED: 'false'
+			SCHEDULER_ENABLED: 'false',
+			STYRIA_AUTO_SUBMIT_ENABLED: 'false'
 		};
 		const handle = createComposedHandle(
 			application,

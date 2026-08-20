@@ -14,6 +14,7 @@ import type { StyriaOrderPayload } from '$lib/server/styria/types';
 import {
 	SqliteApprovalRepository,
 	type ApprovalRepository,
+	type FulfillmentActor,
 	type NewSubmissionApproval
 } from './approvals.server';
 import { FulfillmentPreparationService, type PreparationResult } from './prepare.server';
@@ -141,17 +142,23 @@ class StaticOrderReader implements Pick<FulfillmentRepository, 'inspect'> {
 
 class CurrentStripeFulfillment implements StripeFulfillmentGateway {
 	readonly calls: string[] = [];
+	readonly signals: Array<AbortSignal | undefined> = [];
 
 	constructor(readonly details = fulfillmentFixture()) {}
 
-	async retrieveFulfillmentDetails(checkoutSessionId: string): Promise<FulfillmentDetails> {
+	async retrieveFulfillmentDetails(
+		checkoutSessionId: string,
+		signal?: AbortSignal
+	): Promise<FulfillmentDetails> {
 		this.calls.push(checkoutSessionId);
+		this.signals.push(signal);
 		return structuredClone(this.details);
 	}
 }
 
 class CapturingApprovals implements ApprovalRepository {
 	readonly creates: NewSubmissionApproval[] = [];
+	constructor(readonly actor: FulfillmentActor = 'codex-admin') {}
 
 	create(input: NewSubmissionApproval): void {
 		this.creates.push(structuredClone(input));
@@ -301,6 +308,19 @@ describe('fulfillment preparation', () => {
 		expect(first.payload).not.toHaveProperty('email');
 	});
 
+	it('threads cancellation to Stripe and prepares a system-attributed authorization', async () => {
+		const approvals = new CapturingApprovals('system-auto');
+		const setup = service({ approvals });
+		const controller = new AbortController();
+
+		const result = await setup.service.prepare('order_prepare', now, controller.signal);
+
+		expect(result.status).toBe('ready');
+		expect(setup.stripe.signals).toEqual([controller.signal]);
+		expect(approvals.actor).toBe('system-auto');
+		expect(approvals.creates).toHaveLength(1);
+	});
+
 	it.each([
 		['partially_refunded' as const, 'PAYMENT_PARTIALLY_REFUNDED'],
 		['refunded' as const, 'PAYMENT_REFUNDED']
@@ -319,6 +339,20 @@ describe('fulfillment preparation', () => {
 				})
 			);
 			expect((setup.approvals as CapturingApprovals).creates).toHaveLength(1);
+		}
+	);
+
+	it.each(['partially_refunded', 'refunded'] satisfies PaymentStatus[])(
+		'blocks automatic preparation for %s payment before Stripe',
+		async (paymentStatus) => {
+			const approvals = new CapturingApprovals('system-auto');
+			const setup = service({ order: orderFixture({ paymentStatus }), approvals });
+
+			const result = await setup.service.prepare('order_prepare', now);
+
+			expectBlocked(result, 'PAYMENT_NOT_PAID_FOR_AUTOMATIC_SUBMISSION');
+			expect(setup.stripe.calls).toEqual([]);
+			expect(approvals.creates).toEqual([]);
 		}
 	);
 
@@ -396,6 +430,7 @@ describe('fulfillment preparation', () => {
 		});
 		const failure = service({
 			approvals: {
+				actor: 'codex-admin',
 				create() {
 					throw new Error('ada@example.test Sveltegatan 5 raw sqlite');
 				}

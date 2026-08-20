@@ -4,6 +4,7 @@ import type { ReadinessResult } from '$lib/server/health/readiness.server';
 import type { AlertService } from '$lib/server/monitoring/alerts.server';
 
 const PENDING_REVIEW_AGE_MS = 24 * 60 * 60_000;
+const SUBMITTING_AGE_MS = 15 * 60_000;
 export const BACKUP_CADENCE_GRACE_MS = 30 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -86,6 +87,7 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 		validateNow(now);
 		throwIfAborted(signal);
 		const pendingCutoff = new Date(now.getTime() - PENDING_REVIEW_AGE_MS).toISOString();
+		const submittingCutoff = new Date(now.getTime() - SUBMITTING_AGE_MS).toISOString();
 		const pendingReview = subjectIds(
 			this.dependencies.database
 				.prepare(
@@ -102,6 +104,36 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 				.prepare(
 					`SELECT id FROM orders
 					 WHERE fulfillment_status = 'review_required'
+					 ORDER BY updated_at, id`
+				)
+				.all() as SubjectRow[]
+		);
+		const submitting = subjectIds(
+			this.dependencies.database
+				.prepare(
+					`SELECT id FROM orders
+					 WHERE fulfillment_status = 'submitting'
+					 AND updated_at < ?
+					 ORDER BY updated_at, id`
+				)
+				.all(submittingCutoff) as SubjectRow[]
+		);
+		const vendorPaymentRequired = subjectIds(
+			this.dependencies.database
+				.prepare(
+					`SELECT id FROM orders
+					 WHERE fulfillment_status = 'awaiting_vendor_payment'
+					 AND payment_status = 'paid'
+					 ORDER BY updated_at, id`
+				)
+				.all() as SubjectRow[]
+		);
+		const nonPaidActiveFulfillment = subjectIds(
+			this.dependencies.database
+				.prepare(
+					`SELECT id FROM orders
+					 WHERE payment_status <> 'paid'
+					 AND fulfillment_status IN ('submitting', 'awaiting_vendor_payment', 'in_production')
 					 ORDER BY updated_at, id`
 				)
 				.all() as SubjectRow[]
@@ -126,6 +158,18 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 			this.dependencies.alerts.enqueueAlert('ORDER_PENDING_REVIEW', subjectId, now);
 		}
 		for (const subjectId of reviewRequired) {
+			throwIfAborted(signal);
+			this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', subjectId, now);
+		}
+		for (const subjectId of submitting) {
+			throwIfAborted(signal);
+			this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', subjectId, now);
+		}
+		for (const subjectId of vendorPaymentRequired) {
+			throwIfAborted(signal);
+			this.dependencies.alerts.enqueueAlert('STYRIA_PAYMENT_REQUIRED', subjectId, now);
+		}
+		for (const subjectId of nonPaidActiveFulfillment) {
 			throwIfAborted(signal);
 			this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', subjectId, now);
 		}

@@ -480,7 +480,7 @@ describe('Stripe webhook service', () => {
 			processing_status: 'completed'
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
-			count: 1
+			count: 2
 		});
 	});
 
@@ -534,7 +534,7 @@ describe('Stripe webhook service', () => {
 			count: 1
 		});
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
-			count: 1
+			count: 2
 		});
 	});
 

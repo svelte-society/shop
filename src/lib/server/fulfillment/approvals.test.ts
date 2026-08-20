@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
-import { SqliteApprovalRepository } from './approvals.server';
+import { SqliteApprovalRepository, type FulfillmentActor } from './approvals.server';
 
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
 const approvalId = 'A'.repeat(43);
@@ -64,6 +64,29 @@ describe('submission approval persistence', () => {
 			expires_at: '2026-07-17T10:10:00.000Z',
 			used_at: null
 		});
+	});
+
+	it('persists a system authorization only when the repository is constructed for system-auto', () => {
+		new SqliteApprovalRepository(database, 'system-auto').create({
+			approvalId,
+			orderId: 'order_approval',
+			payloadHash,
+			expiresAt
+		});
+
+		expect(
+			database.prepare('SELECT actor, payload_hash, used_at FROM submission_approvals').get()
+		).toEqual({
+			actor: 'system-auto',
+			payload_hash: payloadHash,
+			used_at: null
+		});
+	});
+
+	it('rejects an untrusted actor at construction', () => {
+		expect(
+			() => new SqliteApprovalRepository(database, 'customer' as FulfillmentActor)
+		).toThrowError('SUBMISSION_APPROVAL_ACTOR_INVALID');
 	});
 
 	it.each([

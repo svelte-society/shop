@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mapStyriaStatus } from '$lib/domain/fulfillment';
 import type { OrderEvent, OrderWithLines } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
 import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
@@ -186,7 +187,11 @@ class MemoryFulfillment {
 		this.calls.push('recordSubmitted');
 		if (this.recordFailures-- > 0) throw new RepositoryError('STYRIA_SUBMISSION_RECORD_FAILED');
 		if (orderId !== this.order.id) throw new RepositoryError('ORDER_NOT_FOUND');
-		this.order.fulfillmentStatus = 'awaiting_vendor_payment';
+		this.order.fulfillmentStatus = mapStyriaStatus({
+			status,
+			deleted: false,
+			trackingNumber: null
+		});
 		this.order.styriaOrderId = styriaOrderId;
 		this.order.styriaStatus = status;
 		this.order.submittedAt = new Date(at);
@@ -207,11 +212,16 @@ class MemoryFulfillment {
 
 class CurrentStripe implements StripeFulfillmentGateway {
 	readonly calls: string[] = [];
+	readonly signals: Array<AbortSignal | undefined> = [];
 
 	constructor(readonly details = fulfillmentFixture()) {}
 
-	async retrieveFulfillmentDetails(checkoutSessionId: string): Promise<FulfillmentDetails> {
+	async retrieveFulfillmentDetails(
+		checkoutSessionId: string,
+		signal?: AbortSignal
+	): Promise<FulfillmentDetails> {
 		this.calls.push(checkoutSessionId);
+		this.signals.push(signal);
 		return structuredClone(this.details);
 	}
 }
@@ -219,21 +229,29 @@ class CurrentStripe implements StripeFulfillmentGateway {
 class FakeStyria implements StyriaGateway {
 	readonly calls: string[] = [];
 	readonly createPayloads: StyriaOrderPayload[] = [];
+	readonly searchSignals: Array<AbortSignal | undefined> = [];
+	readonly createSignals: Array<AbortSignal | undefined> = [];
 	searchMatches: StyriaOrder[] = [];
 	searchError: unknown = null;
 	createError: unknown = null;
 	createResult: StyriaOrder = remoteOrder();
 	assertNoTransaction: (() => boolean) | null = null;
 
-	async searchByExternalId(externalId: string, createdAfter: Date): Promise<StyriaOrder[]> {
+	async searchByExternalId(
+		externalId: string,
+		createdAfter: Date,
+		signal?: AbortSignal
+	): Promise<StyriaOrder[]> {
 		this.calls.push(`search:${externalId}:${createdAfter.toISOString()}`);
+		this.searchSignals.push(signal);
 		if (this.assertNoTransaction?.()) throw new Error('network called inside transaction');
 		if (this.searchError) throw this.searchError;
 		return structuredClone(this.searchMatches);
 	}
 
-	async create(payload: StyriaOrderPayload): Promise<StyriaOrder> {
+	async create(payload: StyriaOrderPayload, signal?: AbortSignal): Promise<StyriaOrder> {
 		this.calls.push('create');
+		this.createSignals.push(signal);
 		if (this.assertNoTransaction?.()) throw new Error('network called inside transaction');
 		this.createPayloads.push(structuredClone(payload));
 		if (this.createError) throw this.createError;
@@ -426,6 +444,43 @@ describe('fulfillment submission provider sequence', () => {
 		expect(state.fulfillment.calls).toEqual(['inspect', 'beginSubmission', 'recordSubmitted']);
 		expect(state.fulfillment.order.fulfillmentStatus).toBe('awaiting_vendor_payment');
 	});
+
+	it('threads one cancellation signal through Stripe, Styria search, and Styria create', async () => {
+		const state = setup();
+		const controller = new AbortController();
+
+		await state.service.submit(
+			{ orderId: 'order_submit', approvalId: 'approval_valid' },
+			now,
+			controller.signal
+		);
+
+		expect((state.stripe as CurrentStripe).signals).toEqual([controller.signal]);
+		expect(state.styria.searchSignals).toEqual([controller.signal]);
+		expect(state.styria.createSignals).toEqual([controller.signal]);
+	});
+
+	it.each(['paid', 'printing'])(
+		'reports confirmed provider status %s as in production without manual payment',
+		async (status) => {
+			const state = setup();
+			state.styria.createResult = remoteOrder({ status });
+
+			await expect(submit(state.service)).resolves.toEqual({
+				orderId: 'order_submit',
+				styriaOrderId: 'styria-1042',
+				fulfillmentStatus: 'in_production',
+				manualPaymentRequired: false
+			});
+			expect(state.fulfillment.order).toEqual(
+				expect.objectContaining({
+					fulfillmentStatus: 'in_production',
+					styriaOrderId: 'styria-1042',
+					styriaStatus: status
+				})
+			);
+		}
+	);
 
 	it('blocks an inconsistent single preflight match without creating', async () => {
 		const state = setup();

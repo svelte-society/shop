@@ -9,7 +9,7 @@ import {
 	StyriaPayloadError
 } from '$lib/server/styria/payload';
 import type { StyriaOrderPayload } from '$lib/server/styria/types';
-import type { ApprovalRepository } from './approvals.server';
+import type { ApprovalRepository, FulfillmentActor } from './approvals.server';
 import type { FulfillmentRepository } from './repository.server';
 
 const APPROVAL_LIFETIME_MS = 10 * 60 * 1_000;
@@ -41,7 +41,7 @@ export type BlockedPreparationResult = {
 export type PreparationResult = ReadyPreparationResult | BlockedPreparationResult;
 
 export interface PreparationService {
-	prepare(orderId: string, now?: Date): Promise<PreparationResult>;
+	prepare(orderId: string, now?: Date, signal?: AbortSignal): Promise<PreparationResult>;
 }
 
 export type PreparationDependencies = {
@@ -123,7 +123,7 @@ function hasImmutableDesign(order: OrderWithLines): boolean {
 	);
 }
 
-function localBlockers(order: OrderWithLines): PreparationNotice[] {
+function localBlockers(order: OrderWithLines, actor: FulfillmentActor): PreparationNotice[] {
 	const blockers: PreparationNotice[] = [];
 	if (order.fulfillmentStatus !== 'pending_review') {
 		blockers.push({
@@ -141,6 +141,12 @@ function localBlockers(order: OrderWithLines): PreparationNotice[] {
 		blockers.push({
 			code: 'DESTINATION_COUNTRY_UNSUPPORTED',
 			message: 'The destination country is not supported for fulfillment.'
+		});
+	}
+	if (actor === 'system-auto' && order.paymentStatus !== 'paid') {
+		blockers.push({
+			code: 'PAYMENT_NOT_PAID_FOR_AUTOMATIC_SUBMISSION',
+			message: 'Automatic submission requires a fully paid order.'
 		});
 	}
 	return blockers;
@@ -186,7 +192,11 @@ function payloadBlocker(code: string): PreparationNotice {
 export class FulfillmentPreparationService implements PreparationService {
 	constructor(private readonly dependencies: PreparationDependencies) {}
 
-	async prepare(orderId: string, now = new Date()): Promise<PreparationResult> {
+	async prepare(
+		orderId: string,
+		now = new Date(),
+		signal?: AbortSignal
+	): Promise<PreparationResult> {
 		if (!isExactString(orderId, 200) || !(now instanceof Date) || !Number.isFinite(now.getTime())) {
 			fail('FULFILLMENT_PREPARATION_INVALID');
 		}
@@ -200,12 +210,15 @@ export class FulfillmentPreparationService implements PreparationService {
 		if (!inspected) fail('FULFILLMENT_ORDER_NOT_FOUND');
 		const order: OrderWithLines = inspected;
 		const warnings = warningNotices(order);
-		const blockers = localBlockers(order);
+		const blockers = localBlockers(order, this.dependencies.approvals.actor);
 		if (blockers.length > 0) return blockedResult(orderId, warnings, blockers);
 
 		let details;
 		try {
-			details = await this.dependencies.stripe.retrieveFulfillmentDetails(order.checkoutSessionId);
+			details = await this.dependencies.stripe.retrieveFulfillmentDetails(
+				order.checkoutSessionId,
+				signal
+			);
 		} catch (error) {
 			if (error instanceof StripeFulfillmentError) {
 				if (error.code === 'STRIPE_FULFILLMENT_DESTINATION_UNSUPPORTED') {

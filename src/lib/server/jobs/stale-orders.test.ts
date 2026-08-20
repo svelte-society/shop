@@ -14,7 +14,9 @@ let database: ShopDatabase;
 
 function insertOrder(input: {
 	id: string;
-	status: 'pending_review' | 'review_required' | 'shipped';
+	status:
+		'pending_review' | 'submitting' | 'awaiting_vendor_payment' | 'review_required' | 'shipped';
+	paymentStatus?: 'paid' | 'partially_refunded' | 'refunded';
 	updatedAt: string;
 	trackingNumber?: string | null;
 }): void {
@@ -34,7 +36,7 @@ function insertOrder(input: {
 				checkout_draft_id, currency, subtotal_amount, discount_amount, shipping_amount,
 				shipping_tax_amount, tax_amount, total_amount, destination_country, payment_status, fulfillment_status,
 				tracking_number, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 200, 700, 3500, 'SE', 'paid', ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, 'eur', 2000, 0, 1000, 200, 700, 3500, 'SE', ?, ?, ?, ?)`
 		)
 		.run(
 			input.id,
@@ -42,6 +44,7 @@ function insertOrder(input: {
 			`pi_${input.id}`,
 			`cus_${input.id}`,
 			draftId,
+			input.paymentStatus ?? 'paid',
 			input.status,
 			input.trackingNumber ?? null,
 			input.updatedAt
@@ -121,6 +124,54 @@ describe('daily operational checks', () => {
 		expect(JSON.stringify(database.prepare('SELECT * FROM outbox_jobs').all())).not.toContain(
 			'private-tracking-value'
 		);
+	});
+
+	it('alerts stuck submissions and reminds operators to pay prepared Styria orders', async () => {
+		insertOrder({
+			id: 'stuck_submission',
+			status: 'submitting',
+			updatedAt: '2026-07-17T02:44:59.999Z'
+		});
+		insertOrder({
+			id: 'active_submission',
+			status: 'submitting',
+			updatedAt: '2026-07-17T02:45:00.000Z'
+		});
+		insertOrder({
+			id: 'pay_in_styria',
+			status: 'awaiting_vendor_payment',
+			updatedAt: '2026-07-17T02:59:00.000Z'
+		});
+		insertOrder({
+			id: 'refunded_in_styria',
+			status: 'awaiting_vendor_payment',
+			paymentStatus: 'refunded',
+			updatedAt: '2026-07-17T02:59:00.000Z'
+		});
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			readiness: async () => ({
+				ready: true,
+				checks: {
+					configuration: 'ok',
+					database: 'ok',
+					migrations: 'ok',
+					volume: 'ok',
+					disk: 'ok'
+				}
+			})
+		});
+
+		await job.run(NOW);
+
+		expect(alertKeys()).toContain('alert:STYRIA_REVIEW_REQUIRED:stuck_submission:2026-07-17T03');
+		expect(alertKeys()).toContain('alert:STYRIA_PAYMENT_REQUIRED:pay_in_styria:2026-07-17');
+		expect(alertKeys()).toContain('alert:STYRIA_REVIEW_REQUIRED:refunded_in_styria:2026-07-17T03');
+		expect(alertKeys()).not.toContain(
+			'alert:STYRIA_PAYMENT_REQUIRED:refunded_in_styria:2026-07-17'
+		);
+		expect(alertKeys().join(' ')).not.toContain('active_submission');
 	});
 
 	it('requires a completed run for the current 02:30 UTC backup cadence', async () => {

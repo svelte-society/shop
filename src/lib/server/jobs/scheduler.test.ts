@@ -62,6 +62,7 @@ const schedulerRuntimeEnvironment = {
 	DATABASE_PATH: ':memory:',
 	DATABASE_BOOTSTRAP: 'false',
 	SCHEDULER_ENABLED: 'true',
+	STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 	ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
 	STRIPE_SECRET_KEY: 'sk_test_scheduler_stripe',
 	STYRIA_APP_ID: 'scheduler-app',
@@ -494,7 +495,7 @@ describe('application runtime', () => {
 		expect(bootstrapRuntime?.scheduler).toBeNull();
 		expect(
 			bootstrapRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
-		).toHaveLength(8);
+		).toHaveLength(9);
 		await bootstrap.stop();
 
 		const production = createApplicationLifecycle({ migrationsDirectory });
@@ -512,7 +513,7 @@ describe('application runtime', () => {
 		expect(productionRuntime?.database.open).toBe(true);
 		expect(
 			productionRuntime?.database.prepare('SELECT name FROM _migrations ORDER BY name').all()
-		).toHaveLength(8);
+		).toHaveLength(9);
 		await production.stop();
 	});
 
@@ -543,7 +544,8 @@ describe('application runtime', () => {
 			{ name: '0005_withdrawal_cases.sql' },
 			{ name: '0006_production_details.sql' },
 			{ name: '0007_dynamic_destination_pricing.sql' },
-			{ name: '0008_inclusive_shipping.sql' }
+			{ name: '0008_inclusive_shipping.sql' },
+			{ name: '0009_automatic_styria_submission.sql' }
 		]);
 		await application.stop();
 		expect(application.current()).toBeNull();
@@ -563,7 +565,7 @@ describe('application runtime', () => {
 		expect(runtime?.scheduler).toBeNull();
 		expect(createScheduler).not.toHaveBeenCalled();
 		expect(runtime?.database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 8
+			count: 9
 		});
 		await application.stop();
 	});
@@ -966,6 +968,52 @@ describe('OutboxScheduler', () => {
 			{ result: 'completed', error_code: null }
 		]);
 		expect(database.prepare('SELECT * FROM job_leases').all()).toEqual([]);
+		await scheduler.stop();
+	});
+
+	it('prepares one Styria order before draining email and withdrawal jobs in the shared lane', async () => {
+		const sequence: string[] = [];
+		let sharedSignal: AbortSignal | undefined;
+		const styriaSubmission = {
+			drain: vi.fn(async (runAt: Date, signal?: AbortSignal) => {
+				sequence.push('styria');
+				expect(runAt).toEqual(initialNow);
+				sharedSignal = signal;
+				return { completed: 1, rescheduled: 0, reviewRequired: 0 };
+			})
+		};
+		const worker: OutboxWorker = {
+			drain: vi.fn(async (_runAt, limit, signal) => {
+				sequence.push('commerce');
+				expect(limit).toBe(3);
+				expect(signal).toBe(sharedSignal);
+				return { completed: 1, rescheduled: 0 };
+			})
+		};
+		const withdrawalWorker = {
+			drain: vi.fn(async (_runAt: Date, limit: number, signal?: AbortSignal) => {
+				sequence.push('withdrawal');
+				expect(limit).toBe(3);
+				expect(signal).toBe(sharedSignal);
+			})
+		};
+		const scheduler = new OutboxScheduler({
+			database,
+			leases: new SqliteLeaseRepository(database),
+			worker,
+			styriaSubmission,
+			withdrawalWorker,
+			enabled: true,
+			ownerId: 'scheduler-auto-styria',
+			clock: () => initialNow
+		});
+
+		await scheduler.runOutboxOnce();
+
+		expect(sequence).toEqual(['styria', 'commerce', 'withdrawal']);
+		expect(database.prepare('SELECT result, error_code FROM job_runs').all()).toEqual([
+			{ result: 'completed', error_code: null }
+		]);
 		await scheduler.stop();
 	});
 

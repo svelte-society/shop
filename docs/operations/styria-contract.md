@@ -45,3 +45,24 @@ The signed sandbox smoke subsequently confirmed that account responses return `d
 ## Non-production signed smoke record
 
 Signed list, detail, create, and unpaid-order deletion requests have now been exercised against the account sandbox. Do not record credentials, customer details, or raw returned order data here.
+
+## Paid-order automatic preparation
+
+The Stripe webhook never calls Styria directly. Recording a confirmed paid merch order and inserting its
+PII-free `styria-create:<order-id>` job happen in one SQLite transaction. With
+`STYRIA_AUTO_SUBMIT_ENABLED=true`, the scheduler claims one such job per minute, rebuilds the approved
+payload from the frozen order plus current Stripe fulfillment details, and performs the existing exact
+`external_id` search before any create call.
+
+`external_id` is the Stripe Checkout Session ID. A matching, consistent Styria order is recorded without a
+second create. A provider rejection, malformed response, timeout, connection reset, or any other uncertain
+outcome after local state enters `submitting` moves the order to `review_required`; automatic delivery then
+completes and cannot issue another create. Reconciliation through MCP is the only recovery path.
+
+The intended provider state after create is `received`, which maps locally to
+`awaiting_vendor_payment`. The operator then pays at <https://styriashirts.eu/unpaid-orders>. Styria's public
+pricing documentation says integrated orders automatically consume available credits. Automatic submission
+must therefore remain disabled until the production account has no usable credits or automatic credit use is
+disabled. If create/search returns `paid` or another production status, the application records the truthful
+`in_production` state and raises `STYRIA_UNEXPECTED_AUTO_PAID`; it never reports that manual payment is still
+required.

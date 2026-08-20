@@ -17,6 +17,7 @@ import { nextOutboxAttempt } from './backoff';
 
 const DEFAULT_BATCH_LIMIT = 25;
 const PAID_ORDER_ALERT_SUBJECT = 'Svelte Society Shop: paid order awaiting review';
+const AUTOMATIC_STYRIA_ALERT_SUBJECT = 'Svelte Society Shop: paid order queued for Styria';
 
 export interface OutboxWorker {
 	drain(
@@ -37,6 +38,7 @@ export type PaidOrderAlertOutboxWorkerDependencies = {
 	outbox: OutboxRepository;
 	plunk: PlunkGateway;
 	alertEmail: PaidOrderAlertEmailConfig;
+	automaticStyriaSubmission?: boolean;
 	shipping?: {
 		stripe: StripeFulfillmentGateway;
 		sender: ShippingEmailSender;
@@ -145,13 +147,15 @@ function throwIfAborted(signal?: AbortSignal): void {
 	throw signal.reason instanceof Error ? signal.reason : new Error('OUTBOX_DRAIN_ABORTED');
 }
 
-function paidOrderAlertHtml(order: PaidOrderAlert): string {
+function paidOrderAlertHtml(order: PaidOrderAlert, automaticStyriaSubmission: boolean): string {
 	return (
 		`<p>Internal order ID: ${order.id}</p>` +
 		`<p>Unit count: ${order.unitCount}</p>` +
 		`<p>Total: EUR ${(order.totalAmount / 100).toFixed(2)}</p>` +
 		`<p>Destination country: ${order.destinationCountry}</p>` +
-		'<p>Open Codex and use list_pending_orders.</p>'
+		(automaticStyriaSubmission
+			? '<p>Queued for automatic preparation in Styria. Wait for the payment-required alert.</p>'
+			: '<p>Open Codex and use list_pending_orders.</p>')
 	);
 }
 
@@ -164,7 +168,9 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 		signal?: AbortSignal
 	): Promise<{ completed: number; rescheduled: number }> {
 		throwIfAborted(signal);
-		const jobs = this.dependencies.outbox.claimDue(now, limit);
+		const jobs = this.dependencies.outbox.claimDue(now, limit, {
+			exclude: ['styria-create']
+		});
 		const settlements = await Promise.allSettled(
 			jobs.map(async (job): Promise<'completed' | 'rescheduled'> => {
 				try {
@@ -217,12 +223,15 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 
 	private async sendPaidOrderAlert(job: OutboxJob, now: Date, signal?: AbortSignal): Promise<void> {
 		const order = loadPaidOrderAlert(this.dependencies.database, job);
+		const automaticStyriaSubmission = this.dependencies.automaticStyriaSubmission === true;
 		const message = {
 			to: this.dependencies.alertEmail.to,
 			from: this.dependencies.alertEmail.from,
 			replyTo: this.dependencies.alertEmail.replyTo,
-			subject: PAID_ORDER_ALERT_SUBJECT,
-			html: paidOrderAlertHtml(order)
+			subject: automaticStyriaSubmission
+				? AUTOMATIC_STYRIA_ALERT_SUBJECT
+				: PAID_ORDER_ALERT_SUBJECT,
+			html: paidOrderAlertHtml(order, automaticStyriaSubmission)
 		};
 		if (signal) await this.dependencies.plunk.send(message, signal);
 		else await this.dependencies.plunk.send(message);

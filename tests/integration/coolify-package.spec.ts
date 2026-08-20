@@ -146,6 +146,7 @@ describe('Coolify production package', () => {
 		expect(compose).toContain('CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-false}');
 		expect(compose).toContain('MCP_ENABLED: ${MCP_ENABLED:-false}');
 		expect(compose).toContain('SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}');
+		expect(compose).toContain('STYRIA_AUTO_SUBMIT_ENABLED: ${STYRIA_AUTO_SUBMIT_ENABLED:-false}');
 		expect(compose).not.toMatch(/^\s*networks:/mu);
 		expect(plan).toContain(
 			'rtk docker compose --env-file .env.example -f docker-compose.coolify.yml config --quiet'

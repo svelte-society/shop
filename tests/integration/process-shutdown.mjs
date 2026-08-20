@@ -267,6 +267,7 @@ try {
 			DATABASE_PATH: databasePath,
 			DATABASE_BOOTSTRAP: 'false',
 			SCHEDULER_ENABLED: 'true',
+			STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 			SHUTDOWN_TIMEOUT: '30',
 			STOREFRONT_ENABLED: 'false',
 			CHECKOUT_ENABLED: 'false',

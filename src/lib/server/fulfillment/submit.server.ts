@@ -1,3 +1,4 @@
+import { mapStyriaStatus } from '$lib/domain/fulfillment';
 import { RepositoryError } from '$lib/domain/orders';
 import type {
 	FulfillmentRepository,
@@ -20,14 +21,29 @@ export const REJECTION_REVIEW_INSTRUCTION =
 export interface SubmissionService {
 	submit(
 		input: { orderId: string; approvalId: string },
-		now?: Date
-	): Promise<{
-		orderId: string;
-		styriaOrderId: string;
-		fulfillmentStatus: 'awaiting_vendor_payment';
-		manualPaymentRequired: true;
-	}>;
+		now?: Date,
+		signal?: AbortSignal
+	): Promise<SubmissionResult>;
 }
+
+type SubmissionIdentity = {
+	orderId: string;
+	styriaOrderId: string;
+};
+
+export type SubmissionResult = SubmissionIdentity &
+	(
+		| {
+				fulfillmentStatus: 'awaiting_vendor_payment';
+				manualPaymentRequired: true;
+		  }
+		| {
+				fulfillmentStatus: 'in_production' | 'review_required';
+				manualPaymentRequired: false;
+		  }
+	);
+
+type SubmissionFulfillmentStatus = SubmissionResult['fulfillmentStatus'];
 
 export type SubmissionDependencies = {
 	fulfillment: Pick<
@@ -69,13 +85,28 @@ function validDate(value: unknown): value is Date {
 	return value instanceof Date && Number.isFinite(value.getTime());
 }
 
-function successResult(orderId: string, order: StyriaOrder) {
-	return {
-		orderId,
-		styriaOrderId: order.id,
-		fulfillmentStatus: 'awaiting_vendor_payment' as const,
-		manualPaymentRequired: true as const
-	};
+function successResult(
+	orderId: string,
+	order: StyriaOrder,
+	fulfillmentStatus: SubmissionFulfillmentStatus
+): SubmissionResult {
+	const identity = { orderId, styriaOrderId: order.id };
+	if (fulfillmentStatus === 'awaiting_vendor_payment') {
+		return { ...identity, fulfillmentStatus, manualPaymentRequired: true };
+	}
+	return { ...identity, fulfillmentStatus, manualPaymentRequired: false };
+}
+
+function submittedFulfillmentStatus(styriaStatus: string): SubmissionFulfillmentStatus {
+	const status = mapStyriaStatus({ status: styriaStatus, deleted: false, trackingNumber: null });
+	if (
+		status !== 'awaiting_vendor_payment' &&
+		status !== 'in_production' &&
+		status !== 'review_required'
+	) {
+		fail('STYRIA_RESPONSE_INVALID');
+	}
+	return status;
 }
 
 export class FulfillmentSubmissionService implements SubmissionService {
@@ -117,7 +148,8 @@ export class FulfillmentSubmissionService implements SubmissionService {
 
 	async submit(
 		input: { orderId: string; approvalId: string },
-		now = new Date()
+		now = new Date(),
+		signal?: AbortSignal
 	): ReturnType<SubmissionService['submit']> {
 		if (
 			!input ||
@@ -138,7 +170,10 @@ export class FulfillmentSubmissionService implements SubmissionService {
 
 		let details;
 		try {
-			details = await this.dependencies.stripe.retrieveFulfillmentDetails(order.checkoutSessionId);
+			details = await this.dependencies.stripe.retrieveFulfillmentDetails(
+				order.checkoutSessionId,
+				signal
+			);
 		} catch {
 			fail('FULFILLMENT_DETAILS_RETRIEVAL_FAILED');
 		}
@@ -174,7 +209,8 @@ export class FulfillmentSubmissionService implements SubmissionService {
 		try {
 			const providerMatches = await this.dependencies.styria.searchByExternalId(
 				payload.external_id,
-				evidence.createdAfter
+				evidence.createdAfter,
+				signal
 			);
 			if (!Array.isArray(providerMatches)) throw new Error('invalid response');
 			matches = providerMatches.filter((match) => match.external_id === payload.external_id);
@@ -208,12 +244,13 @@ export class FulfillmentSubmissionService implements SubmissionService {
 				);
 			}
 			this.recordOrRequireReconciliation(input.orderId, matches[0], now);
-			return successResult(input.orderId, matches[0]);
+			const fulfillmentStatus = submittedFulfillmentStatus(matches[0].status);
+			return successResult(input.orderId, matches[0], fulfillmentStatus);
 		}
 
 		let created: StyriaOrder;
 		try {
-			created = await this.dependencies.styria.create(payload);
+			created = await this.dependencies.styria.create(payload, signal);
 		} catch (error) {
 			if (error instanceof StyriaError && error.code === 'STYRIA_REQUEST_REJECTED') {
 				this.reviewAndFail(
@@ -243,6 +280,7 @@ export class FulfillmentSubmissionService implements SubmissionService {
 			);
 		}
 		this.recordOrRequireReconciliation(input.orderId, created, now);
-		return successResult(input.orderId, created);
+		const fulfillmentStatus = submittedFulfillmentStatus(created.status);
+		return successResult(input.orderId, created, fulfillmentStatus);
 	}
 }

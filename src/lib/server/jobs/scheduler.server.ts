@@ -4,6 +4,7 @@ import type { AlertCode, AlertService } from '$lib/server/monitoring/alerts.serv
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { OperationalChecksJob } from './stale-orders.server';
+import type { StyriaSubmissionWorker } from './styria-submission-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
 import type { WithdrawalMessageWorker } from './withdrawal-worker.server';
 import type { WithdrawalRetentionJob } from './withdrawal-retention.server';
@@ -53,6 +54,7 @@ export type OutboxSchedulerOptions = {
 	database: ShopDatabase;
 	leases: LeaseRepository;
 	worker: OutboxWorker;
+	styriaSubmission?: StyriaSubmissionWorker;
 	withdrawalWorker?: Pick<WithdrawalMessageWorker, 'drain'>;
 	styriaSync?: StyriaSyncJob;
 	backup?: BackupService;
@@ -593,7 +595,12 @@ export class OutboxScheduler implements Scheduler {
 			}, OUTBOX_LEASE_HEARTBEAT_MS);
 			heartbeat.unref?.();
 
-			await this.options.worker.drain(now, OUTBOX_DRAIN_LIMIT, signal);
+			if (this.options.styriaSubmission) {
+				await this.options.styriaSubmission.drain(now, signal);
+			}
+			if (!signal.aborted) {
+				await this.options.worker.drain(now, OUTBOX_DRAIN_LIMIT, signal);
+			}
 			if (!signal.aborted) {
 				await this.options.withdrawalWorker?.drain(now, OUTBOX_DRAIN_LIMIT, signal);
 			}

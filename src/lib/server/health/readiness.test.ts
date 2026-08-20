@@ -30,6 +30,7 @@ beforeEach(async () => {
 		CHECKOUT_ENABLED: 'false',
 		MCP_ENABLED: 'false',
 		SCHEDULER_ENABLED: 'false',
+		STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 		DATABASE_BOOTSTRAP: 'false',
 		PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 		SUPPORT_EMAIL: 'merch@sveltesociety.dev',
@@ -283,6 +284,23 @@ describe('local readiness', () => {
 		const result = await checker()();
 
 		expect(result).toEqual({ ready: false, checks: allOkay });
+	});
+
+	it('requires the scheduler and Styria brand when automatic submission is enabled', async () => {
+		environment.STYRIA_AUTO_SUBMIT_ENABLED = 'true';
+		let result = await checker()();
+		expect(result.checks.configuration).toBe('failed');
+
+		enableFulfillment({ scheduler: true });
+		environment.STYRIA_AUTO_SUBMIT_ENABLED = 'true';
+		environment.STYRIA_BRAND_NAME = undefined;
+		result = await checker()();
+		expect(result.checks.configuration).toBe('failed');
+
+		environment.STYRIA_BRAND_NAME = 'Svelte Society';
+		scheduler = runningScheduler();
+		result = await checker()();
+		expect(result).toEqual({ ready: true, checks: allOkay });
 	});
 
 	it.each([

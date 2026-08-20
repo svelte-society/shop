@@ -9,6 +9,7 @@ const withdrawalEnvironment = {
 	DATABASE_PATH: ':memory:',
 	DATABASE_BOOTSTRAP: 'false',
 	SCHEDULER_ENABLED: 'false',
+	STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 	STOREFRONT_ENABLED: 'false',
 	CHECKOUT_ENABLED: 'false',
 	MCP_ENABLED: 'false',
@@ -32,6 +33,22 @@ const withdrawalEnvironment = {
 };
 
 describe('application withdrawal runtime', () => {
+	it('rejects automatic Styria submission when the scheduler is disabled', async () => {
+		const application = createApplicationLifecycle({ migrationsDirectory });
+
+		await expect(
+			application.start({
+				environment: {
+					...withdrawalEnvironment,
+					STYRIA_AUTO_SUBMIT_ENABLED: 'true'
+				},
+				building: false,
+				test: false
+			})
+		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
+		expect(application.current()).toBeNull();
+	});
+
 	it('constructs one withdrawal runtime with commerce and scheduler disabled and no Stripe or Styria', async () => {
 		const application = createApplicationLifecycle({ migrationsDirectory });
 		const options = {

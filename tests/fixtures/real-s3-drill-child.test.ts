@@ -88,7 +88,7 @@ it('runs production backup and restore clients against the parent HTTPS fixture'
 			count: 3
 		});
 		expect(restored.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 8
+			count: 9
 		});
 		const readiness = await checkRuntimeReadiness({
 			database: restored,
@@ -100,6 +100,7 @@ it('runs production backup and restore clients against the parent HTTPS fixture'
 				CHECKOUT_ENABLED: 'false',
 				MCP_ENABLED: 'false',
 				SCHEDULER_ENABLED: 'false',
+				STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 				DATABASE_BOOTSTRAP: 'false',
 				PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 				SUPPORT_EMAIL: 'merch@sveltesociety.dev',

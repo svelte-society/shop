@@ -1,8 +1,9 @@
 import type { ShopDatabase } from '$lib/server/db/types';
 
-const ACTOR = 'codex-admin';
 const APPROVAL_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PAYLOAD_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+export type FulfillmentActor = 'codex-admin' | 'system-auto';
 
 export type NewSubmissionApproval = {
 	approvalId: string;
@@ -12,6 +13,7 @@ export type NewSubmissionApproval = {
 };
 
 export interface ApprovalRepository {
+	readonly actor: FulfillmentActor;
 	create(input: NewSubmissionApproval): void;
 }
 
@@ -44,7 +46,14 @@ function approvalTimestamp(value: unknown): string {
 }
 
 export class SqliteApprovalRepository implements ApprovalRepository {
-	constructor(private readonly database: ShopDatabase) {}
+	constructor(
+		private readonly database: ShopDatabase,
+		readonly actor: FulfillmentActor = 'codex-admin'
+	) {
+		if (actor !== 'codex-admin' && actor !== 'system-auto') {
+			fail('SUBMISSION_APPROVAL_ACTOR_INVALID');
+		}
+	}
 
 	create(input: NewSubmissionApproval): void {
 		if (
@@ -63,9 +72,9 @@ export class SqliteApprovalRepository implements ApprovalRepository {
 				.prepare(
 					`INSERT INTO submission_approvals (
 						id, order_id, payload_hash, actor, expires_at, used_at
-					) VALUES (?, ?, ?, '${ACTOR}', ?, NULL)`
+					) VALUES (?, ?, ?, ?, ?, NULL)`
 				)
-				.run(input.approvalId, input.orderId, input.payloadHash, expiresAt);
+				.run(input.approvalId, input.orderId, input.payloadHash, this.actor, expiresAt);
 		} catch {
 			fail('SUBMISSION_APPROVAL_CREATE_FAILED');
 		}
