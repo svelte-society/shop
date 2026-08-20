@@ -204,6 +204,30 @@ describe('daily operational checks', () => {
 		expect(alertKeys()).toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
 	});
 
+	it('does not report a missed backup when backup scheduling is disabled', async () => {
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			backupsEnabled: false,
+			readiness: async () => ({
+				ready: true,
+				checks: {
+					configuration: 'ok',
+					database: 'ok',
+					migrations: 'ok',
+					volume: 'ok',
+					disk: 'ok'
+				}
+			})
+		});
+
+		await expect(job.run(NOW)).resolves.toMatchObject({
+			backupMissed: false,
+			retryAt: null
+		});
+		expect(alertKeys()).not.toContain('alert:BACKUP_MISSED:daily-backup:2026-07-17');
+	});
+
 	it('alerts a failed current-cadence backup and suppresses a genuinely active leased run', async () => {
 		const job = new SqliteOperationalChecksJob({
 			database,

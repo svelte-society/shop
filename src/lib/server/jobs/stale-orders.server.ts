@@ -29,6 +29,7 @@ export type OperationalChecksDependencies = {
 	database: ShopDatabase;
 	alerts: AlertService;
 	readiness: () => Promise<ReadinessResult>;
+	backupsEnabled?: boolean;
 	clock?: () => Date;
 };
 
@@ -178,42 +179,45 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 			this.dependencies.alerts.enqueueAlert('SHIPPING_EMAIL_UNSENT', subjectId, now);
 		}
 
-		const backupCadence = latestBackupCadence(now);
-		const nextBackupCadence = new Date(backupCadence.getTime() + DAY_MS);
-		const completedBackup = this.dependencies.database
-			.prepare(
-				`SELECT 1 FROM job_runs
+		let backupMissed = false;
+		let retryAt: Date | null = null;
+		if (this.dependencies.backupsEnabled !== false) {
+			const backupCadence = latestBackupCadence(now);
+			const nextBackupCadence = new Date(backupCadence.getTime() + DAY_MS);
+			const completedBackup = this.dependencies.database
+				.prepare(
+					`SELECT 1 FROM job_runs
 				 WHERE name = 'backup' AND result = 'completed'
 				 AND started_at >= ? AND started_at < ?
 				 AND finished_at IS NOT NULL AND finished_at <= ?
 				 LIMIT 1`
-			)
-			.get(backupCadence.toISOString(), nextBackupCadence.toISOString(), now.toISOString());
-		const activeBackup = this.dependencies.database
-			.prepare(
-				`SELECT jl.expires_at FROM job_runs jr
+				)
+				.get(backupCadence.toISOString(), nextBackupCadence.toISOString(), now.toISOString());
+			const activeBackup = this.dependencies.database
+				.prepare(
+					`SELECT jl.expires_at FROM job_runs jr
 				 JOIN job_leases jl ON jl.name = jr.name AND jl.owner_id = jr.owner_id
 				 WHERE jr.name = 'backup'
 				 AND jr.started_at >= ? AND jr.started_at < ? AND jr.started_at <= ?
 				 AND jr.finished_at IS NULL AND jr.result IS NULL
 				 AND jl.expires_at > ?
 				 LIMIT 1`
-			)
-			.get(
-				backupCadence.toISOString(),
-				nextBackupCadence.toISOString(),
-				now.toISOString(),
-				now.toISOString()
-			) as { expires_at: unknown } | undefined;
-		const retryAt =
-			completedBackup === undefined && activeBackup !== undefined
-				? retryDate(activeBackup.expires_at, now)
-				: null;
-		const graceElapsed = now.getTime() >= backupCadence.getTime() + BACKUP_CADENCE_GRACE_MS;
-		const backupMissed =
-			graceElapsed && completedBackup === undefined && activeBackup === undefined;
-		if (backupMissed) {
-			this.dependencies.alerts.enqueueAlert('BACKUP_MISSED', 'daily-backup', now);
+				)
+				.get(
+					backupCadence.toISOString(),
+					nextBackupCadence.toISOString(),
+					now.toISOString(),
+					now.toISOString()
+				) as { expires_at: unknown } | undefined;
+			retryAt =
+				completedBackup === undefined && activeBackup !== undefined
+					? retryDate(activeBackup.expires_at, now)
+					: null;
+			const graceElapsed = now.getTime() >= backupCadence.getTime() + BACKUP_CADENCE_GRACE_MS;
+			backupMissed = graceElapsed && completedBackup === undefined && activeBackup === undefined;
+			if (backupMissed) {
+				this.dependencies.alerts.enqueueAlert('BACKUP_MISSED', 'daily-backup', now);
+			}
 		}
 
 		throwIfAborted(signal);

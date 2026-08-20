@@ -197,6 +197,19 @@ function requiredBoolean(environment: RuntimeEnvironment, name: string): boolean
 	throw new Error('APPLICATION_CONFIG_INVALID');
 }
 
+function backupConfigurationIsDisabled(environment: RuntimeEnvironment): boolean {
+	const empty = (name: string): boolean => {
+		const value = environment[name];
+		return value === undefined || value === '';
+	};
+	return (
+		['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'].every(empty) &&
+		(empty('S3_REGION') || environment.S3_REGION === 'eu-north-1') &&
+		(empty('S3_PREFIX') || environment.S3_PREFIX === 'svelte-society-shop') &&
+		(empty('S3_FORCE_PATH_STYLE') || environment.S3_FORCE_PATH_STYLE === 'false')
+	);
+}
+
 function createRuntimeScheduler(
 	database: ShopDatabase,
 	environment: RuntimeEnvironment,
@@ -207,6 +220,7 @@ function createRuntimeScheduler(
 	withdrawal: WithdrawalRuntime
 ): Scheduler {
 	const automaticStyriaSubmission = automaticStyriaSubmissionEnabled(environment);
+	const backupsEnabled = !backupConfigurationIsDisabled(environment);
 	const outbox = new SqliteOutboxRepository(database);
 	const stripe = createStripeFulfillmentGateway(
 		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'))
@@ -269,24 +283,26 @@ function createRuntimeScheduler(
 			})()
 		: undefined;
 	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
-	const backupStore = createBackupStore({
-		endpoint: requiredEnvironmentValue(environment, 'S3_ENDPOINT'),
-		region: requiredEnvironmentValue(environment, 'S3_REGION'),
-		bucket: requiredEnvironmentValue(environment, 'S3_BUCKET'),
-		accessKeyId: requiredEnvironmentValue(environment, 'S3_ACCESS_KEY_ID'),
-		secretAccessKey: requiredEnvironmentValue(environment, 'S3_SECRET_ACCESS_KEY'),
-		forcePathStyle: requiredBoolean(environment, 'S3_FORCE_PATH_STYLE')
-	});
-	const backup = new SqliteBackupService({
-		database,
-		store: backupStore,
-		encryptionKeyBase64: requiredEnvironmentValue(environment, 'BACKUP_ENCRYPTION_KEY_BASE64'),
-		prefix: requiredEnvironmentValue(environment, 'S3_PREFIX'),
-		temporaryDirectory: environment.TMPDIR ?? tmpdir()
-	});
+	const backup = backupsEnabled
+		? new SqliteBackupService({
+				database,
+				store: createBackupStore({
+					endpoint: requiredEnvironmentValue(environment, 'S3_ENDPOINT'),
+					region: requiredEnvironmentValue(environment, 'S3_REGION'),
+					bucket: requiredEnvironmentValue(environment, 'S3_BUCKET'),
+					accessKeyId: requiredEnvironmentValue(environment, 'S3_ACCESS_KEY_ID'),
+					secretAccessKey: requiredEnvironmentValue(environment, 'S3_SECRET_ACCESS_KEY'),
+					forcePathStyle: requiredBoolean(environment, 'S3_FORCE_PATH_STYLE')
+				}),
+				encryptionKeyBase64: requiredEnvironmentValue(environment, 'BACKUP_ENCRYPTION_KEY_BASE64'),
+				prefix: requiredEnvironmentValue(environment, 'S3_PREFIX'),
+				temporaryDirectory: environment.TMPDIR ?? tmpdir()
+			})
+		: undefined;
 	const operationalChecks = new SqliteOperationalChecksJob({
 		database,
 		alerts,
+		backupsEnabled,
 		async readiness() {
 			const readiness = await import('$lib/server/health/readiness.server');
 			return readiness.checkRuntimeReadiness(

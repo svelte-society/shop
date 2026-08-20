@@ -114,7 +114,21 @@ function validStyriaTimeout(environment: Record<string, string | undefined>): bo
 	return Number.isSafeInteger(timeout) && timeout <= 10_000;
 }
 
+function backupConfigurationIsDisabled(environment: Record<string, string | undefined>): boolean {
+	const empty = (name: string): boolean => {
+		const value = environment[name];
+		return value === undefined || value === '';
+	};
+	return (
+		['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'].every(empty) &&
+		(empty('S3_REGION') || environment.S3_REGION === 'eu-north-1') &&
+		(empty('S3_PREFIX') || environment.S3_PREFIX === 'svelte-society-shop') &&
+		(empty('S3_FORCE_PATH_STYLE') || environment.S3_FORCE_PATH_STYLE === 'false')
+	);
+}
+
 function validBackupConfiguration(environment: Record<string, string | undefined>): boolean {
+	if (backupConfigurationIsDisabled(environment)) return true;
 	const forcePathStyle = environment.S3_FORCE_PATH_STYLE;
 	if (forcePathStyle !== 'true' && forcePathStyle !== 'false') return false;
 	const prefix = environment.S3_PREFIX;

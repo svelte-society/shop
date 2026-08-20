@@ -719,6 +719,39 @@ describe('application runtime', () => {
 		expect(runtime?.database.open).toBe(false);
 	});
 
+	it('starts automatic Styria submission without constructing wholly unconfigured backups', async () => {
+		closeDatabase();
+		const createBackupStore = vi.fn();
+		const application = createApplicationLifecycle({
+			migrationsDirectory,
+			checkReadiness: async () => ({ ready: true }),
+			createBackupStore
+		});
+		const environment = {
+			...schedulerRuntimeEnvironment,
+			STYRIA_AUTO_SUBMIT_ENABLED: 'true',
+			STYRIA_BRAND_NAME: 'Svelte Society',
+			S3_ENDPOINT: '',
+			S3_BUCKET: '',
+			S3_REGION: 'eu-north-1',
+			S3_ACCESS_KEY_ID: '',
+			S3_SECRET_ACCESS_KEY: '',
+			S3_PREFIX: 'svelte-society-shop',
+			S3_FORCE_PATH_STYLE: 'false',
+			BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString('base64')
+		};
+
+		const runtime = await application.start({ environment, building: false, test: false });
+
+		expect(runtime?.scheduler).toBeInstanceOf(OutboxScheduler);
+		expect(createBackupStore).not.toHaveBeenCalled();
+		await runtime?.scheduler?.runBackupOnce(initialNow);
+		expect(runtime?.database.prepare("SELECT 1 FROM job_runs WHERE name = 'backup'").all()).toEqual(
+			[]
+		);
+		await application.stop();
+	});
+
 	it.each([
 		{ building: true, test: false },
 		{ building: false, test: true }

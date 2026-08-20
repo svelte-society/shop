@@ -303,6 +303,44 @@ describe('local readiness', () => {
 		expect(result).toEqual({ ready: true, checks: allOkay });
 	});
 
+	it('allows the scheduler and automatic submission when backups are wholly unconfigured', async () => {
+		enableFulfillment({ scheduler: true });
+		environment = {
+			...environment,
+			STYRIA_AUTO_SUBMIT_ENABLED: 'true',
+			S3_ENDPOINT: '',
+			S3_BUCKET: '',
+			S3_REGION: 'eu-north-1',
+			S3_ACCESS_KEY_ID: '',
+			S3_SECRET_ACCESS_KEY: '',
+			S3_PREFIX: 'svelte-society-shop',
+			S3_FORCE_PATH_STYLE: 'false',
+			BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 9).toString('base64')
+		};
+		scheduler = runningScheduler();
+
+		await expect(checker()()).resolves.toEqual({ ready: true, checks: allOkay });
+	});
+
+	it('rejects partial backup configuration when backups would otherwise be disabled', async () => {
+		enableFulfillment({ scheduler: true });
+		environment = {
+			...environment,
+			S3_ENDPOINT: '',
+			S3_BUCKET: 'partially-configured',
+			S3_REGION: 'eu-north-1',
+			S3_ACCESS_KEY_ID: '',
+			S3_SECRET_ACCESS_KEY: '',
+			S3_PREFIX: 'svelte-society-shop',
+			S3_FORCE_PATH_STYLE: 'false',
+			BACKUP_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 9).toString('base64')
+		};
+		scheduler = runningScheduler();
+
+		const result = await checker()();
+		expect(result.checks.configuration).toBe('failed');
+	});
+
 	it.each([
 		['S3_ENDPOINT', undefined],
 		['S3_ENDPOINT', 'http://s3.readiness.test'],
