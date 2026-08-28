@@ -1211,7 +1211,7 @@ describe('WithdrawalWorkflowService', () => {
 				 case_id, kind, resend_of_message_id, idempotency_key, attempt_count,
 				 next_attempt_at, provider_delivery_id, completed_at, last_error_code
 				) VALUES ('case_123', 'ineligible_decision', NULL, 'failed-source', 1, ?, NULL, ?,
-				 'PLUNK_REQUEST_REJECTED')`
+				 'EMAIL_REQUEST_REJECTED')`
 			)
 			.run(submittedAt.toISOString(), submittedAt.toISOString());
 		const sourceMessageId = Number(inserted.lastInsertRowid);

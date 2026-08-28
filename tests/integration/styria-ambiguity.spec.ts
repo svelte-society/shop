@@ -16,9 +16,9 @@ const environment = {
 	STYRIA_APP_ID: 'app-ambiguity',
 	STYRIA_SECRET_KEY: 'secret-ambiguity',
 	STYRIA_BRAND_NAME: 'Svelte Society',
-	PLUNK_SECRET_KEY: 'plunk-test-ambiguity',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'shop@example.test',
+	RESEND_API_KEY: 're_test_ambiguity',
+	EMAIL_FROM_NAME: 'Svelte Society Shop',
+	EMAIL_FROM_ADDRESS: 'shop@example.test',
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 	WITHDRAWAL_DATA_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
@@ -54,7 +54,7 @@ describe('ambiguous Styria create reconciliation', () => {
 				retrieveFulfillmentDetails: vi.fn(async () => structuredClone(fulfillmentDetails))
 			}),
 			createStyriaGateway: () => styria,
-			createPlunkGateway: () => ({
+			createEmailGateway: () => ({
 				send: vi.fn(async () => ({ deliveryId: 'unused' }))
 			})
 		});

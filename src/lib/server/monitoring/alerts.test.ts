@@ -148,7 +148,7 @@ describe('operational alerts', () => {
 		expect(message.html).toContain('Subject: ord_123');
 		expect(message.html).toContain('Observed UTC: 2026-07-17T08:00:00.000Z');
 		expect(message.html).toContain(
-			'Inspect the shipping email outbox job and Plunk delivery status.'
+			'Inspect the shipping email outbox job and email-provider delivery status.'
 		);
 		expect(serialized).not.toContain('customer@example.com');
 		expect(serialized).not.toContain('private-tracking-value');

@@ -55,7 +55,7 @@ authoritative name inventory.
 | STRIPE_WEBHOOK_SECRET | Secret | OFF | ON | Stripe webhook verification |
 | STYRIA_APP_ID | Secret | OFF | ON | Styria API identity |
 | STYRIA_SECRET_KEY | Secret | OFF | ON | Styria request signing |
-| PLUNK_SECRET_KEY | Secret | OFF | ON | Plunk email API |
+| RESEND_API_KEY | Secret | OFF | ON | Resend transactional email API |
 | WITHDRAWAL_DATA_KEY | Secret | OFF | ON | Withdrawal PII encryption and receipt sessions |
 | MCP_BEARER_TOKEN | Secret | OFF | ON | Internal MCP bearer authentication |
 | S3_ACCESS_KEY_ID | Secret | OFF | ON | Encrypted backup storage |
@@ -86,45 +86,30 @@ fi
 ### Runtime, routing, and feature flags
 
 ```text
-HOST=0.0.0.0
-PORT=3000
-ORIGIN=https://shop.sveltesociety.dev
 PRODUCTION_ORIGIN=https://shop.sveltesociety.dev
-HOST_ALLOWLIST=shop.sveltesociety.dev
-ADDRESS_HEADER=X-Forwarded-For
-XFF_DEPTH=<operator-verified-positive-integer>
-BODY_SIZE_LIMIT=1M
-SHUTDOWN_TIMEOUT=30
-TMPDIR=/data/tmp
 STOREFRONT_ENABLED=false
 CHECKOUT_ENABLED=false
 MCP_ENABLED=false
 SCHEDULER_ENABLED=false
 STYRIA_AUTO_SUBMIT_ENABLED=false
-TEST_CATALOG_FIXTURE=false
-SUPPORT_EMAIL=merch@sveltesociety.dev
-ADMIN_EMAIL=merch@sveltesociety.dev
 ```
 
-`ADDRESS_HEADER=X-Forwarded-For` delegates address parsing to adapter-node. The
-application does not parse `X-Forwarded-For`. Determine `XFF_DEPTH` from the
-right side of the received chain: it is the verified number of trusted proxies
-between the public client and Node, not a guessed constant. Send a request from
-a known external address, inspect Cloudflare Tunnel's forwarding chain and the
-app's rate-limit/log address, and confirm the selected address is the known
-client. Repeat after any Cloudflare Tunnel/CDN topology change. Never trust a
-leftmost value supplied by the client.
+Compose derives `ORIGIN` from `PRODUCTION_ORIGIN`. It also fixes the adapter and container contract
+to host `0.0.0.0`, port `3000`, database `/data/shop.sqlite`, temporary directory `/data/tmp`, address
+header `X-Forwarded-For`, one trusted proxy hop, body limit `1M`, and shutdown timeout `30` seconds.
+The application does not parse `X-Forwarded-For`. If the Cloudflare Tunnel/CDN topology changes,
+review and change the Compose contract in source, then prove the selected rate-limit/log address
+from a known external client before deploying. Never trust a leftmost value supplied by the client.
 
 ### SQLite
 
 ```text
-DATABASE_PATH=/data/shop.sqlite
 DATABASE_BOOTSTRAP=false
 ```
 
-`DATABASE_BOOTSTRAP` is an explicit one-time switch, not a migration toggle for
-normal deployments. Normal releases and every rollback use `false`. With
-`false`, a missing database fails readiness and is not recreated.
+Compose fixes the database path to `/data/shop.sqlite`. `DATABASE_BOOTSTRAP` is an explicit one-time
+switch, not a migration toggle for normal deployments. Normal releases and every rollback use
+`false`. With `false`, a missing database fails readiness and is not recreated.
 
 ### Withdrawal encryption
 
@@ -178,11 +163,11 @@ Rotate the Coolify value and the Codex host value together.
 ```text
 STYRIA_APP_ID=<secret>
 STYRIA_SECRET_KEY=<secret>
-STYRIA_BASE_URL=https://styriashirts.eu
-STYRIA_TIMEOUT_MS=10000
-STYRIA_BRAND_NAME=Svelte Society
 STYRIA_AUTO_SUBMIT_ENABLED=false
 ```
+
+The Styria endpoint, request timeout, and order brand are reviewed source constants. Changing them
+requires code review and a deployment; they are not Coolify inputs.
 
 The reviewed destination policy is source controlled in `SUPPORTED_DESTINATIONS`. It includes the
 EU except Slovenia, Great Britain, and the supported Asian destinations; the United States is not selectable.
@@ -241,14 +226,22 @@ JOIN outbox_jobs j ON j.idempotency_key = 'styria-create:' || o.id
 ORDER BY o.updated_at, o.id;
 ```
 
-### Plunk
+### Resend
 
 ```text
-PLUNK_SECRET_KEY=<secret>
-PLUNK_BASE_URL=https://next-api.useplunk.com
-PLUNK_FROM_NAME=Svelte Society Shop
-PLUNK_FROM_EMAIL=merch@sveltesociety.dev
+RESEND_API_KEY=<runtime-secret>
 ```
+
+The Resend endpoint and sender identity are reviewed source constants. Before deploying, add and
+verify the source-controlled sender domain in Resend. Require both SPF and DKIM to show verified,
+and use a sending-access API key restricted to that domain. Keep the key runtime-only and never
+place it in a build argument or image layer. Sender changes require code review and a deployment.
+
+This is a clean provider cutover: configure the Resend API key in Coolify before deploying the new
+image, stop the scheduler, and deploy stop-first. Do not add an automatic legacy-provider fallback. Before
+enabling the scheduler, reconcile any incomplete email with `attempt_count > 0` against the old
+provider's delivery history; those rows may represent an accepted request whose response was lost.
+Never-attempted rows can drain through Resend after the synthetic receipt check succeeds.
 
 ### Backup storage
 
@@ -257,42 +250,33 @@ The enabled scheduler requires these encrypted-backup values:
 ```text
 S3_ENDPOINT=<https-endpoint>
 S3_BUCKET=<bucket>
-S3_REGION=eu-north-1
 S3_ACCESS_KEY_ID=<secret>
 S3_SECRET_ACCESS_KEY=<secret>
-S3_PREFIX=svelte-society-shop
-S3_FORCE_PATH_STYLE=false
 BACKUP_ENCRYPTION_KEY_BASE64=<secret>
 ```
+
+Compose fixes the S3 region to `eu-north-1`, object prefix to `svelte-society-shop`, and path-style
+mode to `false`. Changing those values requires a reviewed manifest change and deployment.
 
 Generate the backup key independently from `WITHDRAWAL_DATA_KEY`; never reuse either value for the
 other purpose.
 
-### Analytics and browser asset origins
+### Analytics
 
 ```text
 UMAMI_SCRIPT_URL=<exact-https-script-url-or-empty>
 UMAMI_CONNECT_ORIGIN=<exact-https-origin-or-empty>
 UMAMI_WEBSITE_ID=<site-id-or-empty>
-CATALOG_IMAGE_ORIGINS=<comma-separated-exact-https-origins>
-SOCIETY_ASSET_ORIGINS=<comma-separated-exact-https-origins>
 ```
+
+Approved browser asset origins are source-controlled CSP policy. Change them only through code
+review and deployment, never as an unreviewed Coolify override.
 
 ### Seller and policy content
 
-```text
-SELLER_LEGAL_NAME=Svelte Summit AB
-SELLER_REGISTRATION_NUMBER=559490-8336
-SELLER_VAT_NUMBER=SE559490833601
-SELLER_ADDRESS_LINE1=Hummelhaga 13
-SELLER_POSTAL_CODE=153 95
-SELLER_CITY=Järna
-SELLER_COUNTRY=Sweden
-SELLER_EMAIL=merch@sveltesociety.dev
-DELIVERY_ESTIMATE_EU=<reviewed-value>
-DELIVERY_ESTIMATE_ASIA=Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit
-POLICY_EFFECTIVE_DATE=<reviewed-ISO-date>
-```
+Seller identity, operator contact addresses, delivery estimates, and the policy effective date are
+reviewed source-controlled policy. Any change requires legal review, a code change, and a deployment;
+follow [the policy review runbook](policy-review.md).
 
 ## Withdrawal-only rollout gate
 
@@ -301,9 +285,9 @@ Deploy and prove the online withdrawal function before considering a commerce la
 receipt routes remain available independently of those flags.
 
 1. Confirm exactly one replica, one process, and the persistent `/data` volume. Set
-   `WITHDRAWAL_DATA_KEY`, the seller identity, support address, and Plunk values as reviewed
-   runtime variables. Leave `MCP_ENABLED=false` and `SCHEDULER_ENABLED=false` for the first route
-   check.
+   `WITHDRAWAL_DATA_KEY` and `RESEND_API_KEY` as reviewed runtime-only secrets. Confirm the
+   source-controlled seller, contact, and sender identity values before deploying. Leave
+   `MCP_ENABLED=false` and `SCHEDULER_ENABLED=false` for the first route check.
 2. Deploy stop-first. Require `GET /health/live` and `GET /health/ready` to return `200` while `/`
    remains unavailable because the storefront is off.
 3. Open `/withdraw` through public HTTPS. Submit a synthetic notice through review and explicit
@@ -313,7 +297,7 @@ receipt routes remain available independently of those flags.
    exists. If enabling internal MCP for operator verification, set one fresh bearer token, restart
    stop-first, and prove authenticated `list_withdrawal_cases` and `inspect_withdrawal_case`; then
    disable it again unless the reviewed operational workflow requires it.
-5. Inspect only PII-free aggregate state and structured logs. A Plunk outage may leave the receipt
+5. Inspect only PII-free aggregate state and structured logs. A Resend outage may leave the receipt
    queued, but must not remove the accepted case or browser receipt. Follow
    [withdrawal operations](withdrawals.md) for reconciliation and resend.
 

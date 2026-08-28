@@ -1,6 +1,7 @@
 import { building } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import type { Handle, HandleServerError } from '@sveltejs/kit';
+import { SHOP_CONFIG } from '$lib/config/shop';
 import {
 	applicationLifecycle,
 	type ApplicationLifecycle,
@@ -85,18 +86,6 @@ function httpsScriptOrigin(value: string | undefined): string | null {
 	}
 }
 
-function configuredOrigins(value: string | undefined): string[] {
-	if (typeof value !== 'string') return [];
-	return [
-		...new Set(
-			value
-				.split(',')
-				.map((entry) => exactHttpsOrigin(entry.trim()))
-				.filter((entry): entry is string => entry !== null)
-		)
-	];
-}
-
 function parseCsp(
 	value: string | null,
 	allowDevelopmentInlineStyles: boolean
@@ -125,7 +114,11 @@ function parseCsp(
 	return directives;
 }
 
-function addCspSources(directives: Map<string, string[]>, name: string, sources: string[]): void {
+function addCspSources(
+	directives: Map<string, string[]>,
+	name: string,
+	sources: readonly string[]
+): void {
 	const current = directives.get(name) ?? [];
 	for (const source of sources) {
 		if (!current.includes(source)) current.push(source);
@@ -141,8 +134,8 @@ function contentSecurityPolicy(
 	const directives = parseCsp(existing, !production);
 	const umamiScript = httpsScriptOrigin(environment.UMAMI_SCRIPT_URL);
 	const umamiConnect = exactHttpsOrigin(environment.UMAMI_CONNECT_ORIGIN?.trim() ?? '');
-	const catalogImages = configuredOrigins(environment.CATALOG_IMAGE_ORIGINS);
-	const societyAssets = configuredOrigins(environment.SOCIETY_ASSET_ORIGINS);
+	const catalogImages = SHOP_CONFIG.browser.catalogImageOrigins;
+	const societyAssets = SHOP_CONFIG.browser.societyAssetOrigins;
 
 	if (umamiScript) addCspSources(directives, 'script-src', [umamiScript]);
 	addCspSources(directives, 'connect-src', [

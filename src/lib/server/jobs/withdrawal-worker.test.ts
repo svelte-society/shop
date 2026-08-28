@@ -6,7 +6,11 @@ import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
-import { PlunkError, type PlunkGateway, type PlunkSendInput } from '$lib/server/plunk/gateway';
+import {
+	EmailGatewayError,
+	type EmailGateway,
+	type EmailSendInput
+} from '$lib/server/email/gateway';
 import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
 import { encryptWithdrawalPayload } from '$lib/server/withdrawals/crypto.server';
 import {
@@ -166,11 +170,11 @@ function invalidResendSource(
 	return insertResendChain(maximumResendTraversalDepth + 1, false);
 }
 
-function worker(plunk: PlunkGateway, caseReader = reader): WithdrawalMessageWorker {
+function worker(email: EmailGateway, caseReader = reader): WithdrawalMessageWorker {
 	return new WithdrawalMessageWorker({
 		repository,
 		reader: caseReader,
-		plunk,
+		email,
 		alerts,
 		from: { name: 'Svelte Society Shop', email: 'merch@sveltesociety.dev' },
 		supportEmail: 'merch@sveltesociety.dev',
@@ -197,12 +201,13 @@ function alertRows(code: string): unknown[] {
 }
 
 describe('WithdrawalMessageWorker', () => {
-	it('claims before asking the centralized reader to decrypt and persists Plunk acceptance', async () => {
+	it('claims before asking the centralized reader to decrypt and persists email provider acceptance', async () => {
 		const inspectActiveById = reader.inspectActiveById.bind(reader);
 		const inspect = vi.spyOn(reader, 'inspectActiveById');
-		const send = vi.fn(async (message: PlunkSendInput) => {
+		const send = vi.fn(async (message: EmailSendInput) => {
 			expect(message.to).toBe('private.customer@example.com');
 			expect(message.subject).toBe('Withdrawal notice received — WDR-AAAAAAAAAAAAAAAAAAAAAA');
+			expect(message.idempotencyKey).toBe('withdrawal:receipt:case_123');
 			return { deliveryId: 'delivery_accepted_123' };
 		});
 		inspect.mockImplementationOnce((caseId, now) => {
@@ -222,8 +227,10 @@ describe('WithdrawalMessageWorker', () => {
 
 	it('delivers a claimed pending resend whose completed chain is exactly at the traversal limit', async () => {
 		const sourceMessageId = insertResendChain(maximumResendTraversalDepth, false);
-		const send = vi.fn(async (message: PlunkSendInput) => {
+		const expectedIdempotencyKey = repository.getMessage(sourceMessageId)?.idempotencyKey;
+		const send = vi.fn(async (message: EmailSendInput) => {
 			expect(message.subject).toBe('Withdrawal notice received — WDR-AAAAAAAAAAAAAAAAAAAAAA');
+			expect(message.idempotencyKey).toBe(expectedIdempotencyKey);
 			return { deliveryId: 'delivery_pending_resend_at_limit' };
 		});
 
@@ -294,7 +301,7 @@ describe('WithdrawalMessageWorker', () => {
 			attemptCount: 1,
 			providerDeliveryId: null,
 			completedAt: null,
-			lastErrorCode: 'PLUNK_RESPONSE_INVALID',
+			lastErrorCode: 'EMAIL_RESPONSE_INVALID',
 			nextAttemptAt: new Date(start.getTime() + 60_000)
 		});
 		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toEqual([]);
@@ -310,7 +317,7 @@ describe('WithdrawalMessageWorker', () => {
 			attemptCount: 5,
 			providerDeliveryId: null,
 			completedAt: null,
-			lastErrorCode: 'PLUNK_RESPONSE_INVALID',
+			lastErrorCode: 'EMAIL_RESPONSE_INVALID',
 			nextAttemptAt: new Date(start.getTime() + 60 * 60_000)
 		});
 		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toEqual([
@@ -322,9 +329,10 @@ describe('WithdrawalMessageWorker', () => {
 		]);
 	});
 
-	it('backs transient Plunk failures off by 1, 5, 15, then 60 minutes capped at 60', async () => {
-		const send = vi.fn(async () => {
-			throw new PlunkError('PLUNK_TIMEOUT');
+	it('backs transient email failures off by 1, 5, 15, then 60 minutes capped at 60', async () => {
+		const send = vi.fn(async (message: EmailSendInput) => {
+			void message;
+			throw new EmailGatewayError('EMAIL_TIMEOUT');
 		});
 		const delivery = worker({ send });
 		const delays = [1, 5, 15, 60, 60];
@@ -335,9 +343,28 @@ describe('WithdrawalMessageWorker', () => {
 			const persisted = repository.getMessage(1);
 			expect(persisted?.attemptCount).toBe(index + 1);
 			expect(persisted?.nextAttemptAt).toEqual(new Date(attemptedAt.getTime() + minutes * 60_000));
-			expect(persisted?.lastErrorCode).toBe('PLUNK_TIMEOUT');
+			expect(persisted?.lastErrorCode).toBe('EMAIL_TIMEOUT');
 			attemptedAt = persisted!.nextAttemptAt;
 		}
+		expect(send.mock.calls.map(([message]) => message.idempotencyKey)).toEqual(
+			Array(5).fill('withdrawal:receipt:case_123')
+		);
+	});
+
+	it('keeps an email authentication or domain configuration failure queued for operator repair', async () => {
+		const send = vi.fn(async () => {
+			throw new EmailGatewayError('EMAIL_CONFIGURATION_INVALID');
+		});
+
+		await expect(worker({ send }).attemptReceipt(1, start)).resolves.toBe('queued');
+		expect(repository.getMessage(1)).toMatchObject({
+			attemptCount: 1,
+			providerDeliveryId: null,
+			completedAt: null,
+			lastErrorCode: 'EMAIL_CONFIGURATION_INVALID',
+			nextAttemptAt: new Date(start.getTime() + 60_000)
+		});
+		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toEqual([]);
 	});
 
 	it.each([
@@ -349,7 +376,7 @@ describe('WithdrawalMessageWorker', () => {
 	] as const)('permanently settles and immediately alerts a rejected %s', async (kind) => {
 		const id = messageId(kind);
 		const send = vi.fn(async () => {
-			throw new PlunkError('PLUNK_REQUEST_REJECTED');
+			throw new EmailGatewayError('EMAIL_REQUEST_REJECTED');
 		});
 		const delivery = worker({ send });
 
@@ -362,7 +389,7 @@ describe('WithdrawalMessageWorker', () => {
 			attemptCount: 1,
 			providerDeliveryId: null,
 			completedAt: start,
-			lastErrorCode: 'PLUNK_REQUEST_REJECTED'
+			lastErrorCode: 'EMAIL_REQUEST_REJECTED'
 		});
 		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toEqual([
 			{
@@ -382,7 +409,7 @@ describe('WithdrawalMessageWorker', () => {
 	] as const)('alerts the fifth transient %s attempt while keeping it retryable', async (kind) => {
 		const id = messageId(kind, 4);
 		const send = vi.fn(async () => {
-			throw new PlunkError('PLUNK_UNAVAILABLE');
+			throw new EmailGatewayError('EMAIL_UNAVAILABLE');
 		});
 
 		await worker({ send }).drain(start, 10);
@@ -391,7 +418,7 @@ describe('WithdrawalMessageWorker', () => {
 			attemptCount: 5,
 			providerDeliveryId: null,
 			completedAt: null,
-			lastErrorCode: 'PLUNK_UNAVAILABLE',
+			lastErrorCode: 'EMAIL_UNAVAILABLE',
 			nextAttemptAt: new Date(start.getTime() + 60 * 60_000)
 		});
 		expect(alertRows('WITHDRAWAL_MESSAGE_UNSENT')).toHaveLength(1);
@@ -416,11 +443,15 @@ describe('WithdrawalMessageWorker', () => {
 	it('leaves an aborted provider call unsettled and claimable after the five-minute lease', async () => {
 		const controller = new AbortController();
 		const send = vi.fn(
-			(_message: PlunkSendInput, signal?: AbortSignal): Promise<{ deliveryId: string }> =>
+			(_message: EmailSendInput, signal?: AbortSignal): Promise<{ deliveryId: string }> =>
 				new Promise((_, reject) => {
-					signal?.addEventListener('abort', () => reject(new PlunkError('PLUNK_UNAVAILABLE')), {
-						once: true
-					});
+					signal?.addEventListener(
+						'abort',
+						() => reject(new EmailGatewayError('EMAIL_UNAVAILABLE')),
+						{
+							once: true
+						}
+					);
 				})
 		);
 		const attempt = worker({ send }).attemptReceipt(1, start, controller.signal);

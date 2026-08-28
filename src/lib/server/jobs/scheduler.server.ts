@@ -18,7 +18,7 @@ export const WITHDRAWAL_DELIVERY_GUARD_NAME = 'withdrawal-delivery-guard';
 const OUTBOX_INTERVAL_MS = 60_000;
 const OUTBOX_LEASE_TTL_MS = 55_000;
 const OUTBOX_LEASE_HEARTBEAT_MS = 20_000;
-// Runtime cancellation aborts Styria and Plunk immediately. Scheduler-triggered Stripe retrievals
+// Runtime cancellation aborts Styria and the email provider immediately. Scheduler-triggered Stripe retrievals
 // disable retries and use a five-second request timeout, leaving 25 seconds of adapter-node's
 // SHUTDOWN_TIMEOUT=30 for worker settlement, lease release, and SQLite close.
 const OUTBOX_DRAIN_LIMIT = 3;

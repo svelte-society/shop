@@ -11,7 +11,7 @@ import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { BackupService } from '$lib/server/backups/service.server';
 import type { BackupStore } from '$lib/server/backups/s3.server';
-import { PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
+import { RESEND_DEFAULT_TIMEOUT_MS } from '$lib/server/email/resend.server';
 import type { LeaseRepository } from './leases.server';
 import type { OutboxWorker } from './outbox-worker.server';
 import type { StyriaSyncJob } from './styria-sync.server';
@@ -40,22 +40,8 @@ const migrationsDirectory = resolve('migrations');
 const initialNow = new Date('2026-07-16T08:30:00.000Z');
 const withdrawalRuntimeEnvironment = {
 	PRODUCTION_ORIGIN: 'https://merch.sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
-	PLUNK_SECRET_KEY: 'sk_test_scheduler',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 9).toString('base64'),
-	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
-	SELLER_REGISTRATION_NUMBER: '559999-0000',
-	SELLER_VAT_NUMBER: 'SE559999000001',
-	SELLER_ADDRESS_LINE1: 'Registered Street 1',
-	SELLER_POSTAL_CODE: '111 11',
-	SELLER_CITY: 'Stockholm',
-	SELLER_COUNTRY: 'Sweden',
-	SELLER_EMAIL: 'merch@sveltesociety.dev',
-	DELIVERY_ESTIMATE_EU: '3–7 business days',
-	DELIVERY_ESTIMATE_ASIA: '7–15 business days',
-	POLICY_EFFECTIVE_DATE: '2026-07-17'
+	RESEND_API_KEY: 're_test_scheduler',
+	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 9).toString('base64')
 };
 const schedulerRuntimeEnvironment = {
 	...withdrawalRuntimeEnvironment,
@@ -63,8 +49,7 @@ const schedulerRuntimeEnvironment = {
 	DATABASE_BOOTSTRAP: 'false',
 	SCHEDULER_ENABLED: 'true',
 	STYRIA_AUTO_SUBMIT_ENABLED: 'false',
-	ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
-	STRIPE_SECRET_KEY: 'sk_test_scheduler_stripe',
+	STRIPE_SECRET_KEY: 're_test_scheduler_stripe',
 	STYRIA_APP_ID: 'scheduler-app',
 	STYRIA_SECRET_KEY: 'scheduler-secret',
 	STYRIA_BASE_URL: 'https://styria.scheduler.test',
@@ -594,7 +579,7 @@ describe('application runtime', () => {
 		expect(openedDatabase).toBeUndefined();
 	});
 
-	it.each(['ADMIN_EMAIL', 'STRIPE_SECRET_KEY', 'STYRIA_APP_ID', 'STYRIA_SECRET_KEY'])(
+	it.each(['STRIPE_SECRET_KEY', 'STYRIA_APP_ID', 'STYRIA_SECRET_KEY'])(
 		'keeps scheduler off when readiness rejects missing %s',
 		async (missingName) => {
 			closeDatabase();
@@ -618,29 +603,20 @@ describe('application runtime', () => {
 		}
 	);
 
-	it.each(['PLUNK_SECRET_KEY', 'PLUNK_FROM_NAME', 'PLUNK_FROM_EMAIL', 'SUPPORT_EMAIL'])(
-		'fails withdrawal runtime startup when required sender config %s is missing',
-		async (missingName) => {
-			closeDatabase();
-			let openedDatabase: ShopDatabase | undefined;
-			const application = createApplicationLifecycle({
-				migrationsDirectory,
-				openDatabase(path) {
-					openedDatabase = openDatabase(path);
-					return openedDatabase;
-				}
-			});
+	it('fails withdrawal runtime startup when the Resend API key is missing', async () => {
+		closeDatabase();
+		const open = vi.fn(openDatabase);
+		const application = createApplicationLifecycle({ migrationsDirectory, openDatabase: open });
 
-			await expect(
-				application.start({
-					environment: { ...schedulerRuntimeEnvironment, [missingName]: undefined },
-					building: false,
-					test: false
-				})
-			).rejects.toThrow();
-			expect(openedDatabase?.open).toBe(false);
-		}
-	);
+		await expect(
+			application.start({
+				environment: { ...schedulerRuntimeEnvironment, RESEND_API_KEY: undefined },
+				building: false,
+				test: false
+			})
+		).rejects.toThrowError('APPLICATION_CONFIG_INVALID');
+		expect(open).not.toHaveBeenCalled();
+	});
 
 	it('rejects a Styria timeout that would violate the bounded 55-minute sync lease', async () => {
 		closeDatabase();
@@ -730,7 +706,6 @@ describe('application runtime', () => {
 		const environment = {
 			...schedulerRuntimeEnvironment,
 			STYRIA_AUTO_SUBMIT_ENABLED: 'true',
-			STYRIA_BRAND_NAME: 'Svelte Society',
 			S3_ENDPOINT: '',
 			S3_BUCKET: '',
 			S3_REGION: 'eu-north-1',
@@ -787,7 +762,11 @@ describe('application runtime', () => {
 
 		await expect(
 			application.start({
-				environment: { DATABASE_PATH: ':memory:', SCHEDULER_ENABLED: 'true' },
+				environment: {
+					...withdrawalRuntimeEnvironment,
+					DATABASE_PATH: ':memory:',
+					SCHEDULER_ENABLED: 'true'
+				},
 				building: false,
 				test: false
 			})
@@ -1176,7 +1155,7 @@ describe('OutboxScheduler', () => {
 		await scheduler.stop();
 	});
 
-	it('keeps three concurrent shipping jobs with Stripe retries plus Plunk inside the 55-second lease', async () => {
+	it('keeps three concurrent shipping jobs with Stripe retries plus email provider inside the 55-second lease', async () => {
 		const timers = timerHarness();
 		let current = initialNow;
 		const boundedDrain = deferred<{ completed: number; rescheduled: number }>();
@@ -1203,7 +1182,7 @@ describe('OutboxScheduler', () => {
 		await Promise.resolve();
 		expect(worker.drain).toHaveBeenCalledOnce();
 
-		current = new Date(initialNow.getTime() + 4 * PLUNK_DEFAULT_TIMEOUT_MS);
+		current = new Date(initialNow.getTime() + 4 * RESEND_DEFAULT_TIMEOUT_MS);
 		boundedDrain.resolve({ completed: 0, rescheduled: 0 });
 		await expect(activeRun).resolves.toBeUndefined();
 		expect(current.getTime() - initialNow.getTime()).toBe(40_000);

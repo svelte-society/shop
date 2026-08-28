@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parsePrivateConfig, parseWithdrawalConfig } from './private.server';
+import {
+	parsePrivateConfig,
+	parseSellerPolicyConfig,
+	parseWithdrawalConfig
+} from './private.server';
 import { parsePublicConfig } from './public';
+import { SHOP_CONFIG } from './shop';
 
 const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString(
 	'base64'
@@ -9,33 +14,119 @@ const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => i
 const validPublicEnv = {
 	STOREFRONT_ENABLED: 'true',
 	CHECKOUT_ENABLED: 'false',
-	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev'
-};
-
-const validPolicyEnv = {
-	SELLER_LEGAL_NAME: 'Svelte School AB',
-	SELLER_REGISTRATION_NUMBER: 'reviewed-registration',
-	SELLER_VAT_NUMBER: 'reviewed-vat-number',
-	SELLER_ADDRESS_LINE1: 'Reviewed street 1',
-	SELLER_POSTAL_CODE: '123 45',
-	SELLER_CITY: 'Reviewed city',
-	SELLER_COUNTRY: 'Sweden',
-	SELLER_EMAIL: 'merchant@example.com',
-	DELIVERY_ESTIMATE_EU: 'Reviewed EU estimate',
-	DELIVERY_ESTIMATE_ASIA: 'Reviewed Asia estimate',
-	POLICY_EFFECTIVE_DATE: '2026-07-17'
+	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev'
 };
 
 const validPrivateEnv = {
 	...validPublicEnv,
-	...validPolicyEnv,
 	WITHDRAWAL_DATA_KEY: withdrawalDataKey,
 	STRIPE_SECRET_KEY: 'sk_test_private_value',
 	STRIPE_WEBHOOK_SECRET: 'whsec_test_private_value',
 	STRIPE_PAID_SHIPPING_RATE_ID: 'shr_paid',
 	STRIPE_FREE_SHIPPING_RATE_ID: 'shr_free'
 };
+
+const legacyPolicyEnv = {
+	SELLER_LEGAL_NAME: 'Untrusted seller override',
+	SELLER_REGISTRATION_NUMBER: '',
+	SELLER_VAT_NUMBER: 'Untrusted VAT override',
+	SELLER_ADDRESS_LINE1: 'Untrusted address override',
+	SELLER_POSTAL_CODE: '000 00',
+	SELLER_CITY: 'Untrusted city override',
+	SELLER_COUNTRY: 'Untrusted country override',
+	SELLER_EMAIL: 'not-an-email',
+	DELIVERY_ESTIMATE_EU: '',
+	DELIVERY_ESTIMATE_ASIA: 'Untrusted delivery override',
+	POLICY_EFFECTIVE_DATE: 'not-a-date'
+};
+
+const sourceSellerPolicyConfig = {
+	sellerLegalName: 'Svelte Summit AB',
+	sellerRegistrationNumber: '559490-8336',
+	sellerVatNumber: 'SE559490833601',
+	sellerAddressLine1: 'Hummelhaga 13',
+	sellerPostalCode: '153 95',
+	sellerCity: 'Järna',
+	sellerCountry: 'Sweden',
+	sellerEmail: 'merch@sveltesociety.dev',
+	deliveryEstimateEu:
+		'Estimated delivery: usually 5–7 business days. Delivery times are estimates and aren’t guaranteed.',
+	deliveryEstimateAsia:
+		'Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit',
+	policyEffectiveDate: '2026-07-19'
+};
+
+describe('SHOP_CONFIG', () => {
+	it('owns the reviewed shop identity, policy, provider branding, and browser origins', () => {
+		expect(SHOP_CONFIG).toEqual({
+			contact: {
+				supportEmail: 'merch@sveltesociety.dev',
+				adminEmail: 'merch@sveltesociety.dev',
+				sellerEmail: 'merch@sveltesociety.dev'
+			},
+			email: {
+				fromName: 'Svelte Society Shop',
+				fromAddress: 'merch@sveltesociety.dev'
+			},
+			styria: { brandName: 'Svelte Society' },
+			sellerPolicy: {
+				legalName: 'Svelte Summit AB',
+				registrationNumber: '559490-8336',
+				vatNumber: 'SE559490833601',
+				addressLine1: 'Hummelhaga 13',
+				postalCode: '153 95',
+				city: 'Järna',
+				country: 'Sweden',
+				deliveryEstimateEu:
+					'Estimated delivery: usually 5–7 business days. Delivery times are estimates and aren’t guaranteed.',
+				deliveryEstimateAsia:
+					'Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit',
+				effectiveDate: '2026-07-19'
+			},
+			browser: {
+				catalogImageOrigins: ['https://raw.githubusercontent.com', 'https://wsrv.nl'],
+				societyAssetOrigins: []
+			}
+		});
+	});
+
+	it('keeps source-owned values syntactically safe for their runtime consumers', () => {
+		for (const email of [
+			SHOP_CONFIG.contact.supportEmail,
+			SHOP_CONFIG.contact.adminEmail,
+			SHOP_CONFIG.contact.sellerEmail,
+			SHOP_CONFIG.email.fromAddress
+		]) {
+			expect(email).toMatch(/^[^\s@]+@[^\s@]+\.[^\s@]+$/u);
+			expect(email).not.toMatch(/[\r\n]/u);
+		}
+
+		const effectiveDate = SHOP_CONFIG.sellerPolicy.effectiveDate;
+		expect(effectiveDate).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
+		expect(new Date(`${effectiveDate}T00:00:00.000Z`).toISOString().slice(0, 10)).toBe(
+			effectiveDate
+		);
+
+		for (const origin of [
+			...SHOP_CONFIG.browser.catalogImageOrigins,
+			...SHOP_CONFIG.browser.societyAssetOrigins
+		]) {
+			const parsed = new URL(origin);
+			expect(parsed.protocol).toBe('https:');
+			expect(parsed.origin).toBe(origin);
+		}
+
+		for (const value of [
+			SHOP_CONFIG.email.fromName,
+			SHOP_CONFIG.styria.brandName,
+			...Object.values(SHOP_CONFIG.sellerPolicy)
+		]) {
+			expect(value.trim()).toBe(value);
+			expect(value.length).toBeGreaterThan(0);
+			expect(value).not.toMatch(/[\r\n]/u);
+		}
+	});
+});
 
 describe('parseWithdrawalConfig', () => {
 	it('accepts only the canonical base64 representation of a 32-byte key at key version one', () => {
@@ -45,13 +136,13 @@ describe('parseWithdrawalConfig', () => {
 			productionOrigin: new URL('https://shop.sveltesociety.dev'),
 			supportEmail: 'merch@sveltesociety.dev',
 			seller: {
-				legalName: 'Svelte School AB',
-				registrationNumber: 'reviewed-registration',
-				addressLine1: 'Reviewed street 1',
-				postalCode: '123 45',
-				city: 'Reviewed city',
+				legalName: 'Svelte Summit AB',
+				registrationNumber: '559490-8336',
+				addressLine1: 'Hummelhaga 13',
+				postalCode: '153 95',
+				city: 'Järna',
 				country: 'Sweden',
-				email: 'merchant@example.com'
+				email: 'merch@sveltesociety.dev'
 			}
 		});
 	});
@@ -70,17 +161,23 @@ describe('parseWithdrawalConfig', () => {
 		).toThrowError('CONFIG_WITHDRAWAL_INVALID');
 	});
 
-	it.each([
-		'SELLER_LEGAL_NAME',
-		'SELLER_REGISTRATION_NUMBER',
-		'SELLER_ADDRESS_LINE1',
-		'SELLER_POSTAL_CODE',
-		'SELLER_CITY',
-		'SELLER_COUNTRY',
-		'SELLER_EMAIL'
-	])('rejects an incomplete seller identity without exposing policy errors: %s', (name) => {
-		expect(() => parseWithdrawalConfig({ ...validPrivateEnv, [name]: undefined })).toThrowError(
-			'CONFIG_WITHDRAWAL_INVALID'
+	it('uses source-owned seller values without seller or policy environment fields', () => {
+		expect(parseSellerPolicyConfig()).toEqual(sourceSellerPolicyConfig);
+		expect(parseWithdrawalConfig(validPrivateEnv).seller).toEqual({
+			legalName: 'Svelte Summit AB',
+			registrationNumber: '559490-8336',
+			addressLine1: 'Hummelhaga 13',
+			postalCode: '153 95',
+			city: 'Järna',
+			country: 'Sweden',
+			email: 'merch@sveltesociety.dev'
+		});
+	});
+
+	it('ignores legacy seller and policy environment overrides', () => {
+		expect(parseSellerPolicyConfig()).toEqual(sourceSellerPolicyConfig);
+		expect(parseWithdrawalConfig({ ...validPrivateEnv, ...legacyPolicyEnv })).toEqual(
+			parseWithdrawalConfig(validPrivateEnv)
 		);
 	});
 
@@ -133,13 +230,10 @@ describe('parseWithdrawalConfig', () => {
 		);
 	});
 
-	it('maps every public or policy validation error to its withdrawal-only error', () => {
-		expect(() =>
-			parseWithdrawalConfig({ ...validPrivateEnv, SUPPORT_EMAIL: 'not-an-email' })
-		).toThrowError('CONFIG_WITHDRAWAL_INVALID');
-		expect(() =>
-			parseWithdrawalConfig({ ...validPrivateEnv, POLICY_EFFECTIVE_DATE: 'not-a-date' })
-		).toThrowError('CONFIG_WITHDRAWAL_INVALID');
+	it.each([undefined, '', 'not-an-email'])('ignores the legacy support email value %j', (value) => {
+		expect(parseWithdrawalConfig({ ...validPrivateEnv, SUPPORT_EMAIL: value })).toEqual(
+			parseWithdrawalConfig(validPrivateEnv)
+		);
 	});
 });
 
@@ -170,38 +264,26 @@ describe('parsePublicConfig', () => {
 		}
 	);
 
-	it('rejects an invalid support email', () => {
-		expect(() =>
-			parsePublicConfig({ ...validPublicEnv, SUPPORT_EMAIL: 'not-an-email' })
-		).toThrowError('CONFIG_PUBLIC_INVALID');
+	it.each([undefined, '', 'not-an-email'])('ignores the legacy support email value %j', (value) => {
+		expect(parsePublicConfig({ ...validPublicEnv, SUPPORT_EMAIL: value })).toEqual(
+			parsePublicConfig(validPublicEnv)
+		);
 	});
 });
 
 describe('parsePrivateConfig', () => {
-	it.each([
-		'SELLER_LEGAL_NAME',
-		'SELLER_REGISTRATION_NUMBER',
-		'SELLER_VAT_NUMBER',
-		'SELLER_ADDRESS_LINE1',
-		'SELLER_POSTAL_CODE',
-		'SELLER_CITY',
-		'SELLER_COUNTRY',
-		'SELLER_EMAIL',
-		'DELIVERY_ESTIMATE_EU',
-		'DELIVERY_ESTIMATE_ASIA',
-		'POLICY_EFFECTIVE_DATE'
-	])('rejects checkout-enabled production without complete %s policy configuration', (name) => {
+	it('ignores legacy seller and policy environment values in checkout-enabled production', () => {
 		expect(() =>
 			parsePrivateConfig({
 				...validPrivateEnv,
+				...legacyPolicyEnv,
 				NODE_ENV: 'production',
-				CHECKOUT_ENABLED: 'true',
-				[name]: undefined
+				CHECKOUT_ENABLED: 'true'
 			})
-		).toThrowError('CONFIG_PRIVATE_INVALID');
+		).not.toThrow();
 	});
 
-	it('requires the reviewed support address before production checkout can start', () => {
+	it('ignores the legacy support address in production checkout', () => {
 		expect(() =>
 			parsePrivateConfig({
 				...validPrivateEnv,
@@ -209,10 +291,10 @@ describe('parsePrivateConfig', () => {
 				CHECKOUT_ENABLED: 'true',
 				SUPPORT_EMAIL: 'support@example.com'
 			})
-		).toThrowError('CONFIG_PRIVATE_INVALID');
+		).not.toThrow();
 	});
 
-	it('accepts complete reviewed seller and policy fields for production checkout', () => {
+	it('accepts production checkout without seller or policy environment fields', () => {
 		expect(() =>
 			parsePrivateConfig({
 				...validPrivateEnv,

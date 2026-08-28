@@ -144,7 +144,7 @@ describe('POST /checkout', () => {
 		expect(fixture.serviceFactories).toBe(0);
 	});
 
-	it.each(['PRODUCTION_ORIGIN', 'SUPPORT_EMAIL'])(
+	it.each(['PRODUCTION_ORIGIN'])(
 		'maps invalid public configuration %s to SERVICE_NOT_READY after a green probe',
 		async (name) => {
 			const readiness = vi.fn(async () => ({ ready: true }));
@@ -214,9 +214,10 @@ describe('POST /checkout', () => {
 			STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 			DATABASE_BOOTSTRAP: 'false',
 			DATABASE_PATH: databasePath,
-			PLUNK_SECRET_KEY: 'plunk-checkout',
-			PLUNK_FROM_NAME: 'Svelte Society Shop',
-			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+			WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 10).toString('base64'),
+			RESEND_API_KEY: 're_checkout',
+			EMAIL_FROM_NAME: 'Svelte Society Shop',
+			EMAIL_FROM_ADDRESS: 'merch@sveltesociety.dev',
 			ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
 			STYRIA_APP_ID: 'checkout-app',
 			STYRIA_SECRET_KEY: 'checkout-secret',

@@ -7,6 +7,7 @@ import type { Scheduler } from '$lib/server/jobs/scheduler.server';
 import { chmod, mkdtemp, open, readdir, rm, stat, statfs, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { inspectDeploymentReadiness } from '$lib/config/deployment.server';
 import { createReadinessChecker, type ReadinessDependencies } from './readiness.server';
 
 const migrationsDirectory = resolve('migrations');
@@ -33,7 +34,8 @@ beforeEach(async () => {
 		STYRIA_AUTO_SUBMIT_ENABLED: 'false',
 		DATABASE_BOOTSTRAP: 'false',
 		PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
-		SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+		RESEND_API_KEY: 're_readiness',
+		WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 4).toString('base64'),
 		STRIPE_WEBHOOK_SECRET: 'whsec_readiness',
 		DATABASE_PATH: databasePath
 	};
@@ -54,7 +56,13 @@ function checker(
 ) {
 	return createReadinessChecker(
 		{
-			getRuntime: () => ({ database, databasePath, environment, migrationsDirectory, scheduler }),
+			getRuntime: () => ({
+				database,
+				databasePath,
+				configuration: inspectDeploymentReadiness(environment),
+				migrationsDirectory,
+				scheduler
+			}),
 			...overrides
 		},
 		options
@@ -78,11 +86,6 @@ function enableFulfillment(options: { mcp?: boolean; scheduler?: boolean } = {})
 		MCP_BEARER_TOKEN: 'a'.repeat(64),
 		STYRIA_APP_ID: 'readiness-app',
 		STYRIA_SECRET_KEY: 'readiness-secret',
-		STYRIA_BRAND_NAME: 'Svelte Society',
-		PLUNK_SECRET_KEY: 'plunk-readiness',
-		PLUNK_FROM_NAME: 'Svelte Society Shop',
-		PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-		ADMIN_EMAIL: 'shop-ops@sveltesociety.dev',
 		...(options.scheduler
 			? {
 					S3_ENDPOINT: 'https://s3.readiness.test',
@@ -269,6 +272,31 @@ describe('local readiness', () => {
 		expect(serialized).not.toContain(databasePath);
 	});
 
+	it.each([
+		['RESEND_API_KEY', undefined],
+		['RESEND_API_KEY', ' padded-secret '],
+		['RESEND_BASE_URL', 'http://api.resend.test'],
+		['RESEND_BASE_URL', 'https://user:secret@api.resend.test']
+	] as const)('rejects invalid Resend configuration %s', async (name, value) => {
+		environment[name] = value;
+
+		const result = await checker()();
+
+		expect(result.checks.configuration).toBe('failed');
+		expect(JSON.stringify(result)).not.toContain('padded-secret');
+		expect(JSON.stringify(result)).not.toContain('user:secret');
+	});
+
+	it('rejects an invalid withdrawal encryption key without exposing it', async () => {
+		const invalidKey = Buffer.alloc(31, 7).toString('base64');
+		environment.WITHDRAWAL_DATA_KEY = invalidKey;
+
+		const result = await checker()();
+
+		expect(result.checks.configuration).toBe('failed');
+		expect(JSON.stringify(result)).not.toContain(invalidKey);
+	});
+
 	it('keeps bootstrap mode explicitly not ready until a false-mode restart', async () => {
 		environment.DATABASE_BOOTSTRAP = 'true';
 
@@ -286,18 +314,13 @@ describe('local readiness', () => {
 		expect(result).toEqual({ ready: false, checks: allOkay });
 	});
 
-	it('requires the scheduler and Styria brand when automatic submission is enabled', async () => {
+	it('requires the scheduler when automatic submission is enabled', async () => {
 		environment.STYRIA_AUTO_SUBMIT_ENABLED = 'true';
 		let result = await checker()();
 		expect(result.checks.configuration).toBe('failed');
 
 		enableFulfillment({ scheduler: true });
 		environment.STYRIA_AUTO_SUBMIT_ENABLED = 'true';
-		environment.STYRIA_BRAND_NAME = undefined;
-		result = await checker()();
-		expect(result.checks.configuration).toBe('failed');
-
-		environment.STYRIA_BRAND_NAME = 'Svelte Society';
 		scheduler = runningScheduler();
 		result = await checker()();
 		expect(result).toEqual({ ready: true, checks: allOkay });
@@ -345,10 +368,8 @@ describe('local readiness', () => {
 		['S3_ENDPOINT', undefined],
 		['S3_ENDPOINT', 'http://s3.readiness.test'],
 		['S3_BUCKET', undefined],
-		['S3_REGION', undefined],
 		['S3_ACCESS_KEY_ID', undefined],
 		['S3_SECRET_ACCESS_KEY', undefined],
-		['S3_PREFIX', undefined],
 		['S3_FORCE_PATH_STYLE', 'yes'],
 		['BACKUP_ENCRYPTION_KEY_BASE64', Buffer.alloc(31).toString('base64')]
 	] as const)('fails scheduler configuration readiness for invalid %s', async (name, value) => {
@@ -360,6 +381,16 @@ describe('local readiness', () => {
 
 		expect(result.checks.configuration).toBe('failed');
 		expect(JSON.stringify(result)).not.toContain('readiness-private');
+	});
+
+	it('uses source defaults for optional S3 region, prefix, and path style', async () => {
+		enableFulfillment({ scheduler: true });
+		scheduler = runningScheduler();
+		environment.S3_REGION = undefined;
+		environment.S3_PREFIX = undefined;
+		environment.S3_FORCE_PATH_STYLE = undefined;
+
+		await expect(checker()()).resolves.toEqual({ ready: true, checks: allOkay });
 	});
 
 	it('allows only the internal activation probe to ignore the scheduler-running latch', async () => {
@@ -384,15 +415,18 @@ describe('local readiness', () => {
 
 	it.each([
 		['SUPPORT_EMAIL', 'not-an-email'],
-		['PLUNK_FROM_EMAIL', 'sender-at-example.test'],
-		['ADMIN_EMAIL', 'ops-at-example.test']
-	])('rejects invalid bounded operational email %s', async (name, value) => {
+		['EMAIL_FROM_NAME', 'legacy sender'],
+		['EMAIL_FROM_ADDRESS', 'sender-at-example.test'],
+		['ADMIN_EMAIL', 'ops-at-example.test'],
+		['STYRIA_BRAND_NAME', 'legacy brand']
+	])('ignores legacy source-owned setting %s', async (name, value) => {
 		enableFulfillment({ scheduler: true });
+		scheduler = runningScheduler();
 		environment[name] = value;
 
 		const result = await checker()();
 
-		expect(result.checks.configuration).toBe('failed');
+		expect(result).toEqual({ ready: true, checks: allOkay });
 	});
 
 	it('reports low disk below the strict 256 MiB threshold', async () => {
@@ -452,7 +486,7 @@ describe('local readiness', () => {
 		expect(JSON.stringify(result)).not.toContain(directory);
 	});
 
-	it('does not call Stripe, Styria, or Plunk during transient provider outages', async () => {
+	it('does not call Stripe, Styria, or Resend during transient provider outages', async () => {
 		enableFulfillment({ mcp: true, scheduler: true });
 		scheduler = runningScheduler();
 		environment = {

@@ -1,6 +1,5 @@
 import { env } from '$env/dynamic/private';
 import { createPolicyDocuments, type PolicyDocuments } from '$lib/content/policies';
-import { parseSellerPolicyConfig } from '$lib/config/private.server';
 import { parsePublicConfig } from '$lib/config/public';
 import {
 	destinationOptions,
@@ -105,12 +104,7 @@ export function _createLayoutServerLoad(
 		});
 		depends('app:pricing-destination');
 		const requestedPolicy = policyRoute(route.id);
-		const policyDocument = requestedPolicy
-			? createPolicyDocuments({
-					...parseSellerPolicyConfig(runtimeEnv),
-					supportEmail: config.supportEmail
-				})[requestedPolicy]
-			: null;
+		const policyDocument = requestedPolicy ? createPolicyDocuments()[requestedPolicy] : null;
 
 		return {
 			storefrontEnabled: config.storefrontEnabled,

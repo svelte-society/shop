@@ -3,7 +3,7 @@ import { RepositoryError } from '$lib/domain/orders';
 import type { OutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
-import type { PlunkGateway, PlunkSendInput } from './gateway';
+import type { EmailGateway, EmailSendInput } from './gateway';
 
 export const SHIPPING_EMAIL_SUBJECT = 'Your Svelte Society order is on the way';
 
@@ -12,6 +12,7 @@ export type ShippingEmailInput = {
 	productSummary: string;
 	trackingNumber: string;
 	supportEmail: string;
+	idempotencyKey: string;
 };
 
 export interface ShippingEmailSender {
@@ -67,7 +68,8 @@ function validateMessageInput(input: ShippingEmailInput): void {
 		!exactString(input.recipientEmail) ||
 		!exactString(input.productSummary, 2_000) ||
 		!exactString(input.trackingNumber, 200) ||
-		!exactString(input.supportEmail)
+		!exactString(input.supportEmail) ||
+		!exactString(input.idempotencyKey, 2_000)
 	) {
 		fail('SHIPPING_EMAIL_INPUT_INVALID');
 	}
@@ -77,7 +79,7 @@ export function shippingEmailMessage(
 	input: ShippingEmailInput,
 	from: { name: string; email: string },
 	productionOrigin: string
-): PlunkSendInput {
+): EmailSendInput {
 	validateMessageInput(input);
 	if (!from || !exactString(from.name, 200) || !exactString(from.email)) {
 		fail('SHIPPING_EMAIL_CONFIG_INVALID');
@@ -103,6 +105,7 @@ export function shippingEmailMessage(
 		from,
 		replyTo: input.supportEmail,
 		subject: SHIPPING_EMAIL_SUBJECT,
+		idempotencyKey: input.idempotencyKey,
 		html:
 			'<p>Your Svelte Society merch has shipped.</p>' +
 			`<p>${productSummary}</p>` +
@@ -114,14 +117,14 @@ export function shippingEmailMessage(
 }
 
 export function createShippingEmailSender(
-	plunk: PlunkGateway,
+	email: EmailGateway,
 	from: { name: string; email: string },
 	productionOrigin = process.env.PRODUCTION_ORIGIN ?? ''
 ): ShippingEmailSender {
 	return {
 		send(input, signal) {
 			const message = shippingEmailMessage(input, from, productionOrigin);
-			return signal ? plunk.send(message, signal) : plunk.send(message);
+			return signal ? email.send(message, signal) : email.send(message);
 		}
 	};
 }
@@ -229,7 +232,8 @@ export class SqliteShippingEmailService {
 			recipientEmail: details.email,
 			productSummary: order.productSummary,
 			trackingNumber: order.trackingNumber,
-			supportEmail: this.dependencies.supportEmail
+			supportEmail: this.dependencies.supportEmail,
+			idempotencyKey
 		});
 		this.dependencies.outbox.completeEmailDelivery(
 			{

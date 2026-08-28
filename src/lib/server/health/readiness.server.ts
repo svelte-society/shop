@@ -1,11 +1,12 @@
 import { env } from '$env/dynamic/private';
-import { parsePublicConfig } from '$lib/config/public';
-import { backupEncryptionKeyIsValid } from '$lib/server/backups/format';
-import { s3BackupStoreOptionsAreValid } from '$lib/server/backups/s3.server';
+import {
+	inspectDeploymentReadiness,
+	type DeploymentReadinessConfig,
+	type RuntimeEnvironment
+} from '$lib/config/deployment.server';
 import { applicationLifecycle, type ApplicationRuntime } from '$lib/server/app.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import { enqueueAlert, type AlertService } from '$lib/server/monitoring/alerts.server';
-import * as v from 'valibot';
 import {
 	open as openFile,
 	readdir as readDirectory,
@@ -17,8 +18,6 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const MINIMUM_FREE_BYTES = 256n * 1024n * 1024n;
-const MCP_BEARER_PATTERN = /^[a-f0-9]{64}$/;
-const boundedEmailSchema = v.pipe(v.string(), v.maxLength(254), v.email());
 
 export type ReadinessResult = {
 	ready: boolean;
@@ -34,7 +33,9 @@ export type ReadinessResult = {
 type ReadinessContext = {
 	database: ShopDatabase | null;
 	databasePath: string;
-	environment: Record<string, string | undefined>;
+	configuration?: DeploymentReadinessConfig;
+	/** @deprecated Pass a redacted `configuration` snapshot for long-lived runtimes. */
+	environment?: RuntimeEnvironment;
 	migrationsDirectory: string;
 	scheduler: ApplicationRuntime['scheduler'];
 };
@@ -59,7 +60,7 @@ type ReadinessDirectoryEntry = {
 
 export type ReadinessDependencies = {
 	getRuntime: () => ReadinessContext | null;
-	validateConfiguration?: (environment: Record<string, string | undefined>) => boolean;
+	validateConfiguration?: (configuration: DeploymentReadinessConfig) => boolean;
 	quickCheck?: (database: ShopDatabase) => boolean;
 	writeProbe?: (database: ShopDatabase, id: string) => boolean;
 	openFile?: (path: string, flags: 'wx', mode: number) => Promise<ReadinessFileHandle>;
@@ -72,159 +73,12 @@ export type ReadinessDependencies = {
 	clock?: () => Date;
 };
 
-function exactValue(environment: Record<string, string | undefined>, name: string): boolean {
-	const value = environment[name];
-	return (
-		typeof value === 'string' && value.length > 0 && value === value.trim() && !/[\r\n]/.test(value)
-	);
+function productionConfigurationIsValid(configuration: DeploymentReadinessConfig): boolean {
+	return configuration.productionReady;
 }
 
-function exactBoolean(environment: Record<string, string | undefined>, name: string): boolean {
-	return environment[name] === 'true' || environment[name] === 'false';
-}
-
-function boundedExactValue(
-	environment: Record<string, string | undefined>,
-	name: string,
-	maximum: number
-): boolean {
-	return exactValue(environment, name) && (environment[name]?.length ?? maximum + 1) <= maximum;
-}
-
-function validEmailValue(environment: Record<string, string | undefined>, name: string): boolean {
-	const value = environment[name];
-	return exactValue(environment, name) && v.safeParse(boundedEmailSchema, value).success;
-}
-
-function optionalHttpsUrl(environment: Record<string, string | undefined>, name: string): boolean {
-	const value = environment[name];
-	if (value === undefined) return true;
-	try {
-		return exactValue(environment, name) && new URL(value).protocol === 'https:';
-	} catch {
-		return false;
-	}
-}
-
-function validStyriaTimeout(environment: Record<string, string | undefined>): boolean {
-	const value = environment.STYRIA_TIMEOUT_MS;
-	if (value === undefined) return true;
-	if (!/^[1-9]\d*$/.test(value)) return false;
-	const timeout = Number(value);
-	return Number.isSafeInteger(timeout) && timeout <= 10_000;
-}
-
-function backupConfigurationIsDisabled(environment: Record<string, string | undefined>): boolean {
-	const empty = (name: string): boolean => {
-		const value = environment[name];
-		return value === undefined || value === '';
-	};
-	return (
-		['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'].every(empty) &&
-		(empty('S3_REGION') || environment.S3_REGION === 'eu-north-1') &&
-		(empty('S3_PREFIX') || environment.S3_PREFIX === 'svelte-society-shop') &&
-		(empty('S3_FORCE_PATH_STYLE') || environment.S3_FORCE_PATH_STYLE === 'false')
-	);
-}
-
-function validBackupConfiguration(environment: Record<string, string | undefined>): boolean {
-	if (backupConfigurationIsDisabled(environment)) return true;
-	const forcePathStyle = environment.S3_FORCE_PATH_STYLE;
-	if (forcePathStyle !== 'true' && forcePathStyle !== 'false') return false;
-	const prefix = environment.S3_PREFIX;
-	if (
-		!exactValue(environment, 'S3_PREFIX') ||
-		prefix?.split('/').some((part) => part === '.' || part === '..')
-	) {
-		return false;
-	}
-	return (
-		backupEncryptionKeyIsValid(environment.BACKUP_ENCRYPTION_KEY_BASE64) &&
-		s3BackupStoreOptionsAreValid({
-			endpoint: environment.S3_ENDPOINT ?? '',
-			region: environment.S3_REGION ?? '',
-			bucket: environment.S3_BUCKET ?? '',
-			accessKeyId: environment.S3_ACCESS_KEY_ID ?? '',
-			secretAccessKey: environment.S3_SECRET_ACCESS_KEY ?? '',
-			forcePathStyle: forcePathStyle === 'true'
-		})
-	);
-}
-
-function productionConfigurationIsValid(environment: Record<string, string | undefined>): boolean {
-	try {
-		const publicConfig = parsePublicConfig(environment);
-		if (
-			!exactBoolean(environment, 'MCP_ENABLED') ||
-			!exactBoolean(environment, 'SCHEDULER_ENABLED') ||
-			!exactBoolean(environment, 'STYRIA_AUTO_SUBMIT_ENABLED') ||
-			environment.DATABASE_BOOTSTRAP !== 'false' ||
-			!exactValue(environment, 'DATABASE_PATH') ||
-			!isAbsolute(environment.DATABASE_PATH as string) ||
-			!exactValue(environment, 'STRIPE_WEBHOOK_SECRET') ||
-			!validEmailValue(environment, 'SUPPORT_EMAIL')
-		) {
-			return false;
-		}
-
-		const commerceEnabled = publicConfig.storefrontEnabled || publicConfig.checkoutEnabled;
-		if (
-			commerceEnabled &&
-			(!exactValue(environment, 'STRIPE_SECRET_KEY') ||
-				!exactValue(environment, 'STRIPE_PAID_SHIPPING_RATE_ID') ||
-				!exactValue(environment, 'STRIPE_FREE_SHIPPING_RATE_ID'))
-		) {
-			return false;
-		}
-		if (publicConfig.checkoutEnabled && !publicConfig.storefrontEnabled) return false;
-		if (
-			environment.STYRIA_AUTO_SUBMIT_ENABLED === 'true' &&
-			environment.SCHEDULER_ENABLED !== 'true'
-		) {
-			return false;
-		}
-
-		const fulfillmentEnabled =
-			environment.MCP_ENABLED === 'true' || environment.SCHEDULER_ENABLED === 'true';
-		if (
-			fulfillmentEnabled &&
-			(!exactValue(environment, 'STRIPE_SECRET_KEY') ||
-				!exactValue(environment, 'STYRIA_APP_ID') ||
-				!exactValue(environment, 'STYRIA_SECRET_KEY') ||
-				!exactValue(environment, 'PLUNK_SECRET_KEY') ||
-				!boundedExactValue(environment, 'PLUNK_FROM_NAME', 200) ||
-				!validEmailValue(environment, 'PLUNK_FROM_EMAIL') ||
-				!optionalHttpsUrl(environment, 'STYRIA_BASE_URL') ||
-				!optionalHttpsUrl(environment, 'PLUNK_BASE_URL') ||
-				!validStyriaTimeout(environment))
-		) {
-			return false;
-		}
-
-		if (
-			environment.MCP_ENABLED === 'true' &&
-			(!MCP_BEARER_PATTERN.test(environment.MCP_BEARER_TOKEN ?? '') ||
-				!exactValue(environment, 'STYRIA_BRAND_NAME'))
-		) {
-			return false;
-		}
-		if (
-			environment.STYRIA_AUTO_SUBMIT_ENABLED === 'true' &&
-			!exactValue(environment, 'STYRIA_BRAND_NAME')
-		) {
-			return false;
-		}
-		if (
-			environment.SCHEDULER_ENABLED === 'true' &&
-			(!validEmailValue(environment, 'ADMIN_EMAIL') || !validBackupConfiguration(environment))
-		) {
-			return false;
-		}
-
-		return true;
-	} catch {
-		return false;
-	}
+function readinessConfiguration(context: ReadinessContext): DeploymentReadinessConfig {
+	return context.configuration ?? inspectDeploymentReadiness(context.environment ?? {});
 }
 
 function defaultQuickCheck(database: ShopDatabase): boolean {
@@ -266,7 +120,7 @@ function defaultRuntime(): ReadinessContext {
 		return {
 			database: runtime.database,
 			databasePath: runtime.databasePath,
-			environment: runtime.environment,
+			configuration: runtime.configuration,
 			migrationsDirectory: runtime.migrationsDirectory,
 			scheduler: runtime.scheduler
 		};
@@ -274,7 +128,7 @@ function defaultRuntime(): ReadinessContext {
 	return {
 		database: null,
 		databasePath: env.DATABASE_PATH ?? '',
-		environment: env,
+		configuration: inspectDeploymentReadiness(env),
 		migrationsDirectory: resolve('migrations'),
 		scheduler: null
 	};
@@ -311,7 +165,7 @@ export function createReadinessChecker(
 		try {
 			alerts.enqueueAlert(code, subjectId, clock());
 		} catch {
-			// Readiness is local-only and must never depend on outbox or Plunk availability.
+			// Readiness is local-only and must never depend on outbox or Resend availability.
 		}
 	}
 
@@ -330,7 +184,8 @@ export function createReadinessChecker(
 			};
 		}
 
-		const configuration = validateConfiguration(context.environment) ? 'ok' : 'failed';
+		const deployment = readinessConfiguration(context);
+		const configuration = validateConfiguration(deployment) ? 'ok' : 'failed';
 		const directory = databaseDirectory(context.databasePath);
 
 		let databaseCheck: 'ok' | 'failed' = 'failed';
@@ -428,7 +283,7 @@ export function createReadinessChecker(
 			ready:
 				Object.values(checks).every((status) => status === 'ok') &&
 				(options.ignoreSchedulerLatch ||
-					context.environment.SCHEDULER_ENABLED !== 'true' ||
+					!deployment.features.schedulerEnabled ||
 					Boolean(context.scheduler)),
 			checks
 		};
@@ -446,7 +301,7 @@ export function checkRuntimeReadiness(
 			getRuntime: () => ({
 				database: runtime.database,
 				databasePath: runtime.databasePath,
-				environment: runtime.environment,
+				configuration: readinessConfiguration(runtime),
 				migrationsDirectory: runtime.migrationsDirectory,
 				scheduler: runtime.scheduler
 			})

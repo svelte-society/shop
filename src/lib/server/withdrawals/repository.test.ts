@@ -620,7 +620,7 @@ describe('SqliteWithdrawalRepository PII retention', () => {
 			new Date(now.getTime() + 300_000).toISOString(),
 			'claimed_delivery_must_clear',
 			null,
-			'PLUNK_UNAVAILABLE'
+			'EMAIL_UNAVAILABLE'
 		);
 		insert.run(
 			'ineligible_decision',
@@ -640,7 +640,7 @@ describe('SqliteWithdrawalRepository PII retention', () => {
 			now.toISOString(),
 			null,
 			null,
-			'PLUNK_UNAVAILABLE'
+			'EMAIL_UNAVAILABLE'
 		);
 		insert.run(
 			'resend',
@@ -803,7 +803,7 @@ describe('SqliteWithdrawalRepository message claims and settlement', () => {
 			last_error_code: null
 		});
 		expect(() =>
-			repository.rescheduleMessage(1, 1, new Date('2026-07-17T08:40:00Z'), 'PLUNK_UNAVAILABLE')
+			repository.rescheduleMessage(1, 1, new Date('2026-07-17T08:40:00Z'), 'EMAIL_UNAVAILABLE')
 		).toThrowError('WITHDRAWAL_MESSAGE_SETTLEMENT_CONFLICT');
 	});
 
@@ -814,14 +814,14 @@ describe('SqliteWithdrawalRepository message claims and settlement', () => {
 			1,
 			transient!.attemptCount,
 			new Date('2026-07-17T08:45:00Z'),
-			'PLUNK_UNAVAILABLE'
+			'EMAIL_UNAVAILABLE'
 		);
 		expect(repository.claimDueMessages(new Date('2026-07-17T08:44:59Z'), 1)).toEqual([]);
 		const retry = repository.claimMessage(1, new Date('2026-07-17T08:45:00Z'));
 		repository.failMessagePermanently(
 			1,
 			retry!.attemptCount,
-			'PLUNK_RECIPIENT_REJECTED',
+			'EMAIL_RECIPIENT_REJECTED',
 			new Date('2026-07-17T08:46:00Z')
 		);
 
@@ -837,7 +837,7 @@ describe('SqliteWithdrawalRepository message claims and settlement', () => {
 			next_attempt_at: '2026-07-17T08:50:00.000Z',
 			provider_delivery_id: null,
 			completed_at: '2026-07-17T08:46:00.000Z',
-			last_error_code: 'PLUNK_RECIPIENT_REJECTED'
+			last_error_code: 'EMAIL_RECIPIENT_REJECTED'
 		});
 		expect(repository.claimDueMessages(new Date('2026-07-18T08:00:00Z'), 10)).toEqual([]);
 	});

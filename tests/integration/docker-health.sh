@@ -120,10 +120,10 @@ start_container() {
 		--env STYRIA_SECRET_KEY=docker-health
 		--env STYRIA_BASE_URL=https://styriashirts.eu
 		--env STYRIA_BRAND_NAME='Svelte Society'
-		--env PLUNK_SECRET_KEY=docker-health
-		--env PLUNK_BASE_URL=https://127.0.0.1:1
-		--env 'PLUNK_FROM_NAME=Svelte Society Shop'
-		--env PLUNK_FROM_EMAIL=merch@sveltesociety.dev
+		--env RESEND_API_KEY=re_docker_health
+		--env RESEND_BASE_URL=https://127.0.0.1:1
+		--env 'EMAIL_FROM_NAME=Svelte Society Shop'
+		--env EMAIL_FROM_ADDRESS=merch@sveltesociety.dev
 		--env 'SELLER_LEGAL_NAME=Svelte School AB'
 		--env SELLER_REGISTRATION_NUMBER=docker-health-registration
 		--env SELLER_VAT_NUMBER=docker-health-vat

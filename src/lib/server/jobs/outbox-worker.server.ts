@@ -8,9 +8,9 @@ import {
 	loadOperationalAlert,
 	type AlertService
 } from '$lib/server/monitoring/alerts.server';
-import type { PlunkGateway } from '$lib/server/plunk/gateway';
-import { PlunkError } from '$lib/server/plunk/gateway';
-import { loadShippingOrder, type ShippingEmailSender } from '$lib/server/plunk/shipping-email';
+import type { EmailGateway } from '$lib/server/email/gateway';
+import { EmailGatewayError } from '$lib/server/email/gateway';
+import { loadShippingOrder, type ShippingEmailSender } from '$lib/server/email/shipping-email';
 import { StripeFulfillmentError } from '$lib/server/stripe/client.server';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { nextOutboxAttempt } from './backoff';
@@ -36,7 +36,7 @@ export type PaidOrderAlertEmailConfig = {
 export type PaidOrderAlertOutboxWorkerDependencies = {
 	database: ShopDatabase;
 	outbox: OutboxRepository;
-	plunk: PlunkGateway;
+	email: EmailGateway;
 	alertEmail: PaidOrderAlertEmailConfig;
 	automaticStyriaSubmission?: boolean;
 	shipping?: {
@@ -114,7 +114,7 @@ function loadPaidOrderAlert(database: ShopDatabase, job: OutboxJob): PaidOrderAl
 
 function stableErrorCode(error: unknown, job: OutboxJob): string {
 	if (
-		error instanceof PlunkError ||
+		error instanceof EmailGatewayError ||
 		error instanceof RepositoryError ||
 		error instanceof StripeFulfillmentError
 	)
@@ -231,10 +231,11 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 			subject: automaticStyriaSubmission
 				? AUTOMATIC_STYRIA_ALERT_SUBJECT
 				: PAID_ORDER_ALERT_SUBJECT,
-			html: paidOrderAlertHtml(order, automaticStyriaSubmission)
+			html: paidOrderAlertHtml(order, automaticStyriaSubmission),
+			idempotencyKey: job.idempotencyKey
 		};
-		if (signal) await this.dependencies.plunk.send(message, signal);
-		else await this.dependencies.plunk.send(message);
+		if (signal) await this.dependencies.email.send(message, signal);
+		else await this.dependencies.email.send(message);
 		throwIfAborted(signal);
 		this.dependencies.outbox.complete(job.id, now);
 	}
@@ -250,10 +251,11 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 			from: this.dependencies.alertEmail.from,
 			replyTo: this.dependencies.alertEmail.replyTo,
 			subject: content.subject,
-			html: content.html
+			html: content.html,
+			idempotencyKey: job.idempotencyKey
 		};
-		if (signal) await this.dependencies.plunk.send(message, signal);
-		else await this.dependencies.plunk.send(message);
+		if (signal) await this.dependencies.email.send(message, signal);
+		else await this.dependencies.email.send(message);
 		throwIfAborted(signal);
 		this.dependencies.outbox.complete(job.id, now);
 	}
@@ -278,7 +280,8 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 			recipientEmail: details.email,
 			productSummary: order.productSummary,
 			trackingNumber: order.trackingNumber,
-			supportEmail: shipping.supportEmail
+			supportEmail: shipping.supportEmail,
+			idempotencyKey: job.idempotencyKey
 		};
 		const delivery = signal
 			? await shipping.sender.send(message, signal)

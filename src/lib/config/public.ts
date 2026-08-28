@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { SHOP_CONFIG } from './shop';
 
 export type PublicConfig = {
 	storefrontEnabled: boolean;
@@ -22,8 +23,7 @@ const httpsUrlSchema = v.pipe(
 const publicEnvSchema = v.object({
 	STOREFRONT_ENABLED: booleanSchema,
 	CHECKOUT_ENABLED: booleanSchema,
-	PRODUCTION_ORIGIN: httpsUrlSchema,
-	SUPPORT_EMAIL: v.pipe(v.string(), v.email())
+	PRODUCTION_ORIGIN: httpsUrlSchema
 });
 
 export function parsePublicConfig(env: Record<string, string | undefined>): PublicConfig {
@@ -37,6 +37,6 @@ export function parsePublicConfig(env: Record<string, string | undefined>): Publ
 		storefrontEnabled: result.output.STOREFRONT_ENABLED,
 		checkoutEnabled: result.output.CHECKOUT_ENABLED,
 		productionOrigin: result.output.PRODUCTION_ORIGIN,
-		supportEmail: result.output.SUPPORT_EMAIL
+		supportEmail: SHOP_CONFIG.contact.supportEmail
 	};
 }

@@ -55,7 +55,7 @@ class PersistingDispatcher implements WithdrawalReceiptDispatcher {
 				}
 			).count
 		});
-		if (this.mode === 'throw') throw new Error('PLUNK_UNAVAILABLE');
+		if (this.mode === 'throw') throw new Error('EMAIL_UNAVAILABLE');
 		if (this.mode === 'queued') return 'queued';
 		const claimed = this.repository.claimMessage(messageId, attemptedAt);
 		if (!claimed) throw new Error('TEST_MESSAGE_NOT_CLAIMED');
@@ -66,7 +66,7 @@ class PersistingDispatcher implements WithdrawalReceiptDispatcher {
 		this.repository.failMessagePermanently(
 			messageId,
 			claimed.attemptCount,
-			'PLUNK_RECIPIENT_REJECTED',
+			'EMAIL_RECIPIENT_REJECTED',
 			attemptedAt
 		);
 		return 'failed';
@@ -158,7 +158,7 @@ describe('WithdrawalSubmissionService', () => {
 				expect(message).toMatchObject({
 					providerDeliveryId: null,
 					completedAt: now,
-					lastErrorCode: 'PLUNK_RECIPIENT_REJECTED'
+					lastErrorCode: 'EMAIL_RECIPIENT_REJECTED'
 				});
 			} else {
 				expect(message).toMatchObject({ completedAt: null, providerDeliveryId: null });

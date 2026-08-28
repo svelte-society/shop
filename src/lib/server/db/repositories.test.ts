@@ -840,7 +840,7 @@ describe('SqliteOutboxRepository', () => {
 		outbox.enqueue(input);
 		outbox.enqueue(input);
 		const [claimed] = outbox.claimDue(now, 1);
-		outbox.reschedule(claimed.id, 1, new Date('2026-07-16T08:35:00.000Z'), 'PLUNK_UNAVAILABLE');
+		outbox.reschedule(claimed.id, 1, new Date('2026-07-16T08:35:00.000Z'), 'EMAIL_UNAVAILABLE');
 		outbox.enqueue(input);
 		expect(database.prepare('SELECT count(*) AS count FROM outbox_jobs').get()).toEqual({
 			count: 1
@@ -967,8 +967,8 @@ describe('SqliteOutboxRepository', () => {
 		outbox.enqueue(outboxInput());
 		const [job] = outbox.claimDue(now, 1);
 		const retryAt = new Date('2026-07-16T08:35:00.000Z');
-		outbox.reschedule(job.id, 1, retryAt, 'PLUNK_UNAVAILABLE');
-		expect(() => outbox.reschedule(job.id, 1, retryAt, 'PLUNK_UNAVAILABLE')).toThrowError(
+		outbox.reschedule(job.id, 1, retryAt, 'EMAIL_UNAVAILABLE');
+		expect(() => outbox.reschedule(job.id, 1, retryAt, 'EMAIL_UNAVAILABLE')).toThrowError(
 			'OUTBOX_ATTEMPT_REGRESSION'
 		);
 		outbox.complete(job.id, new Date('2026-07-16T08:36:00.000Z'));

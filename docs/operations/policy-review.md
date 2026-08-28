@@ -84,21 +84,18 @@ inferred from a successful withdrawal case closure.
 
 ## Required production values
 
-Before review and launch, replace every placeholder with the real reviewed value and verify that
-production checkout refuses to start when any value is missing:
+Before review and launch, verify the reviewed source-controlled values in
+`src/lib/config/shop.ts` against the approval record:
 
-- `SELLER_LEGAL_NAME`
-- `SELLER_REGISTRATION_NUMBER`
-- `SELLER_VAT_NUMBER`
-- `SELLER_ADDRESS_LINE1`
-- `SELLER_POSTAL_CODE`
-- `SELLER_CITY`
-- `SELLER_COUNTRY`
-- `SELLER_EMAIL`
-- `SUPPORT_EMAIL=merch@sveltesociety.dev`
-- `DELIVERY_ESTIMATE_EU`
-- `DELIVERY_ESTIMATE_ASIA`
-- `POLICY_EFFECTIVE_DATE`
+- seller legal identity, registration number, and VAT number;
+- seller postal address and country;
+- seller and support contact addresses;
+- EU and supported-Asia delivery estimates; and
+- policy effective date.
+
+These values are deployment-independent policy, not runtime environment variables. Any change
+requires legal or accounting review as applicable, a code change, and a deployment of the approved
+commit.
 
 ## Official sources consulted for the draft
 

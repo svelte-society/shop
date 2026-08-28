@@ -6,8 +6,8 @@ import { SqliteFulfillmentRepository } from '../../src/lib/server/fulfillment/re
 import { PaidOrderAlertOutboxWorker } from '../../src/lib/server/jobs/outbox-worker.server';
 import { SqliteStyriaSyncJob } from '../../src/lib/server/jobs/styria-sync.server';
 import { createRuntimeMcpServices } from '../../src/lib/server/mcp/runtime.server';
-import { createShippingEmailSender } from '../../src/lib/server/plunk/shipping-email';
-import type { PlunkSendInput } from '../../src/lib/server/plunk/gateway';
+import { createShippingEmailSender } from '../../src/lib/server/email/shipping-email';
+import type { EmailSendInput } from '../../src/lib/server/email/gateway';
 import type { StyriaGateway } from '../../src/lib/server/styria/gateway';
 import type { StyriaOrder, StyriaOrderPayload } from '../../src/lib/server/styria/types';
 import {
@@ -27,9 +27,9 @@ const runtimeEnvironment = {
 	STYRIA_SECRET_KEY: 'secret-lifecycle',
 	STYRIA_BASE_URL: 'https://styria.example.test',
 	STYRIA_BRAND_NAME: 'Svelte Society',
-	PLUNK_SECRET_KEY: 'plunk-test-lifecycle',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'shop@example.test',
+	RESEND_API_KEY: 're_test_lifecycle',
+	EMAIL_FROM_NAME: 'Svelte Society Shop',
+	EMAIL_FROM_ADDRESS: 'shop@example.test',
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
 	PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 	WITHDRAWAL_DATA_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
@@ -66,18 +66,18 @@ describe('Codex MCP fulfillment lifecycle', () => {
 		const stripe = {
 			retrieveFulfillmentDetails: vi.fn(async () => structuredClone(fulfillmentDetails))
 		};
-		const plunkMessages: PlunkSendInput[] = [];
-		const plunk = {
-			send: vi.fn(async (input: PlunkSendInput) => {
-				plunkMessages.push(input);
-				return { deliveryId: `plunk-${plunkMessages.length}` };
+		const emailMessages: EmailSendInput[] = [];
+		const email = {
+			send: vi.fn(async (input: EmailSendInput) => {
+				emailMessages.push(input);
+				return { deliveryId: `email-${emailMessages.length}` };
 			})
 		};
 		const createServices = vi.fn(() =>
 			createRuntimeMcpServices(database, runtimeEnvironment, {
 				createStripeGateway: () => stripe,
 				createStyriaGateway: () => styria,
-				createPlunkGateway: () => plunk
+				createEmailGateway: () => email
 			})
 		);
 		const client = createLocalMcpClient(createServices);
@@ -165,7 +165,7 @@ describe('Codex MCP fulfillment lifecycle', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk,
+			email,
 			alertEmail: {
 				to: 'orders@example.test',
 				from: { name: 'Svelte Society Shop', email: 'shop@example.test' },
@@ -174,7 +174,7 @@ describe('Codex MCP fulfillment lifecycle', () => {
 			shipping: {
 				stripe,
 				sender: createShippingEmailSender(
-					plunk,
+					email,
 					{
 						name: 'Svelte Society Shop',
 						email: 'shop@example.test'
@@ -219,12 +219,13 @@ describe('Codex MCP fulfillment lifecycle', () => {
 		});
 
 		expect(stripe.retrieveFulfillmentDetails).toHaveBeenCalledTimes(3);
-		expect(plunkMessages.at(-1)).toMatchObject({
+		expect(emailMessages.at(-1)).toMatchObject({
 			to: fulfillmentDetails.email,
 			replyTo: 'merch@sveltesociety.dev',
-			subject: 'Your Svelte Society order is on the way'
+			subject: 'Your Svelte Society order is on the way',
+			idempotencyKey: `shipping:${paidOrder.id}:TRACK-SOCIETY-2042`
 		});
-		expect(plunkMessages.at(-1)?.html).toContain('Tracking: TRACK-SOCIETY-2042');
+		expect(emailMessages.at(-1)?.html).toContain('Tracking: TRACK-SOCIETY-2042');
 		expect(
 			database
 				.prepare(
@@ -235,7 +236,7 @@ describe('Codex MCP fulfillment lifecycle', () => {
 			expect.objectContaining({
 				kind: 'shipping',
 				tracking_reference: 'TRACK-SOCIETY-2042',
-				provider_delivery_id: 'plunk-2',
+				provider_delivery_id: 'email-2',
 				completed_at: expect.any(String)
 			})
 		]);

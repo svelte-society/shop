@@ -4,6 +4,33 @@ import { describe, expect, it } from 'vitest';
 
 const root = resolve(import.meta.dirname, '../..');
 
+const productionInputs = [
+	'STOREFRONT_ENABLED',
+	'CHECKOUT_ENABLED',
+	'MCP_ENABLED',
+	'SCHEDULER_ENABLED',
+	'STYRIA_AUTO_SUBMIT_ENABLED',
+	'PRODUCTION_ORIGIN',
+	'STRIPE_SECRET_KEY',
+	'STRIPE_WEBHOOK_SECRET',
+	'STRIPE_PAID_SHIPPING_RATE_ID',
+	'STRIPE_FREE_SHIPPING_RATE_ID',
+	'DATABASE_BOOTSTRAP',
+	'WITHDRAWAL_DATA_KEY',
+	'MCP_BEARER_TOKEN',
+	'STYRIA_APP_ID',
+	'STYRIA_SECRET_KEY',
+	'RESEND_API_KEY',
+	'S3_ENDPOINT',
+	'S3_BUCKET',
+	'S3_ACCESS_KEY_ID',
+	'S3_SECRET_ACCESS_KEY',
+	'BACKUP_ENCRYPTION_KEY_BASE64',
+	'UMAMI_SCRIPT_URL',
+	'UMAMI_CONNECT_ORIGIN',
+	'UMAMI_WEBSITE_ID'
+] as const;
+
 async function text(path: string): Promise<string> {
 	return readFile(resolve(root, path), 'utf8');
 }
@@ -132,6 +159,7 @@ describe('Coolify production package', () => {
 
 	it('publishes the shop only on host loopback for Cloudflare Tunnel', async () => {
 		const compose = await text('docker-compose.coolify.yml');
+		const envExample = await text('.env.example');
 		const plan = await text('docs/superpowers/plans/2026-07-19-coolify-loopback-deployment.md');
 
 		expect(compose).toContain('dockerfile: Dockerfile');
@@ -141,12 +169,67 @@ describe('Coolify production package', () => {
 		expect(compose).toContain('stop_grace_period: 45s');
 		expect(compose).toContain('HOST: 0.0.0.0');
 		expect(compose).toContain('PORT: 3000');
+		expect(compose).toContain('ORIGIN: ${PRODUCTION_ORIGIN}');
+		expect(compose).toContain('PRODUCTION_ORIGIN: ${PRODUCTION_ORIGIN}');
+		expect(compose).toContain('ADDRESS_HEADER: X-Forwarded-For');
+		expect(compose).toContain('XFF_DEPTH: 1');
+		expect(compose).toContain('BODY_SIZE_LIMIT: 1M');
+		expect(compose).toContain('SHUTDOWN_TIMEOUT: 30');
 		expect(compose).toContain('DATABASE_PATH: /data/shop.sqlite');
+		expect(compose).toContain('TMPDIR: /data/tmp');
 		expect(compose).toContain('STOREFRONT_ENABLED: ${STOREFRONT_ENABLED:-false}');
 		expect(compose).toContain('CHECKOUT_ENABLED: ${CHECKOUT_ENABLED:-false}');
 		expect(compose).toContain('MCP_ENABLED: ${MCP_ENABLED:-false}');
 		expect(compose).toContain('SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}');
 		expect(compose).toContain('STYRIA_AUTO_SUBMIT_ENABLED: ${STYRIA_AUTO_SUBMIT_ENABLED:-false}');
+		expect(compose).toContain('RESEND_API_KEY: ${RESEND_API_KEY}');
+		expect(compose).toContain('S3_REGION: eu-north-1');
+		expect(compose).toContain('S3_PREFIX: svelte-society-shop');
+		expect(compose).toContain('S3_FORCE_PATH_STYLE: false');
+
+		const declaredInputs = [...envExample.matchAll(/^([A-Z][A-Z0-9_]*)=/gmu)].map(
+			([, name]) => name
+		);
+		const interpolatedInputs = [
+			...new Set(
+				[...compose.matchAll(/\$\{([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}/gu)].map(([, name]) => name)
+			)
+		];
+		expect(declaredInputs).toEqual(productionInputs);
+		expect(interpolatedInputs.sort()).toEqual([...productionInputs].sort());
+
+		for (const removedInput of [
+			'TEST_CATALOG_FIXTURE',
+			'HOST_ALLOWLIST',
+			'SUPPORT_EMAIL',
+			'ADMIN_EMAIL',
+			'STYRIA_BASE_URL',
+			'STYRIA_TIMEOUT_MS',
+			'STYRIA_BRAND_NAME',
+			'RESEND_BASE_URL',
+			'EMAIL_FROM_NAME',
+			'EMAIL_FROM_ADDRESS',
+			'CATALOG_IMAGE_ORIGINS',
+			'SOCIETY_ASSET_ORIGINS',
+			'S3_REGION',
+			'S3_PREFIX',
+			'S3_FORCE_PATH_STYLE',
+			'SELLER_LEGAL_NAME',
+			'SELLER_REGISTRATION_NUMBER',
+			'SELLER_VAT_NUMBER',
+			'SELLER_ADDRESS_LINE1',
+			'SELLER_POSTAL_CODE',
+			'SELLER_CITY',
+			'SELLER_COUNTRY',
+			'SELLER_EMAIL',
+			'DELIVERY_ESTIMATE_EU',
+			'DELIVERY_ESTIMATE_ASIA',
+			'POLICY_EFFECTIVE_DATE'
+		]) {
+			expect(envExample).not.toMatch(new RegExp(`^${removedInput}=`, 'mu'));
+			expect(compose).not.toContain(`\${${removedInput}`);
+		}
+		expect(compose).not.toContain('PLUNK_');
 		expect(compose).not.toMatch(/^\s*networks:/mu);
 		expect(plan).toContain(
 			'rtk docker compose --env-file .env.example -f docker-compose.coolify.yml config --quiet'
@@ -164,9 +247,8 @@ describe('Coolify production package', () => {
 
 		for (const token of [
 			'shop.sveltesociety.dev',
-			'ORIGIN=https://shop.sveltesociety.dev',
-			'ADDRESS_HEADER=X-Forwarded-For',
-			'XFF_DEPTH',
+			'Compose derives `ORIGIN` from `PRODUCTION_ORIGIN`',
+			'`X-Forwarded-For`, one trusted proxy hop',
 			'DATABASE_BOOTSTRAP=true',
 			'DATABASE_BOOTSTRAP=false',
 			'/data',
@@ -216,7 +298,7 @@ describe('Coolify production package', () => {
 			'STRIPE_WEBHOOK_SECRET',
 			'STYRIA_APP_ID',
 			'STYRIA_SECRET_KEY',
-			'PLUNK_SECRET_KEY',
+			'RESEND_API_KEY',
 			'MCP_BEARER_TOKEN',
 			'S3_ACCESS_KEY_ID',
 			'S3_SECRET_ACCESS_KEY',
@@ -224,6 +306,8 @@ describe('Coolify production package', () => {
 		]) {
 			expect(runbook).toMatch(new RegExp(`\\| ${name} \\| Secret \\| OFF \\| ON \\|`));
 		}
+		expect(runbook).not.toContain('PLUNK_');
+		expect(runbook).not.toContain('Plunk');
 		for (const token of [
 			'Build Secrets',
 			'BuildKit',

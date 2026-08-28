@@ -135,16 +135,14 @@ const SECURITY_ENV = {
 	MCP_ENABLED: 'true',
 	MCP_BEARER_TOKEN: 'test-mcp-token',
 	UMAMI_SCRIPT_URL: 'https://analytics.sveltesociety.dev/script.js',
-	UMAMI_CONNECT_ORIGIN: 'https://analytics-api.sveltesociety.dev',
-	CATALOG_IMAGE_ORIGINS:
-		'https://images.stripe.com,https://cdn.sveltesociety.dev,http://unsafe.example,https://*.wild.example,not-a-url'
+	UMAMI_CONNECT_ORIGIN: 'https://analytics-api.sveltesociety.dev'
 };
 
 const WITHDRAWAL_RUNTIME_ENV = {
 	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
-	PLUNK_SECRET_KEY: 'sk_test_hooks',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+	RESEND_API_KEY: 're_test_hooks',
+	EMAIL_FROM_NAME: 'Svelte Society Shop',
+	EMAIL_FROM_ADDRESS: 'merch@sveltesociety.dev',
 	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 13).toString('base64'),
 	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
 	SELLER_REGISTRATION_NUMBER: '559999-0000',
@@ -597,10 +595,8 @@ describe('HTTP security hook', () => {
 				"'self'",
 				'https://analytics-api.sveltesociety.dev'
 			]);
-			expect(csp).toContain('https://images.stripe.com');
-			expect(csp).toContain('https://cdn.sveltesociety.dev');
-			expect(csp).not.toContain('http://unsafe.example');
-			expect(csp).not.toContain('wild.example');
+			expect(csp).toContain('https://raw.githubusercontent.com');
+			expect(csp).toContain('https://wsrv.nl');
 			expect(csp).not.toContain('checkout.stripe.com');
 			expect(csp).not.toContain('unsafe-inline');
 			expect(csp).toContain("frame-ancestors 'none'");
@@ -628,8 +624,7 @@ describe('HTTP security hook', () => {
 
 		expect(csp).not.toContain('analytics.example');
 		expect(csp).not.toContain('*');
-		expect(csp).not.toContain('user');
-		expect(csp).not.toContain('password');
+		expect(csp).not.toContain('user:password');
 	});
 
 	it('keeps only SvelteKit nonces from an existing CSP and replaces unsafe route directives', () => {

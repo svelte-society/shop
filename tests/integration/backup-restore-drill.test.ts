@@ -676,6 +676,10 @@ describe('production-shaped backup and restore drill', () => {
 				DATABASE_BOOTSTRAP: 'false',
 				PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 				SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+				WITHDRAWAL_DATA_KEY: withdrawalDataKey.toString('base64'),
+				RESEND_API_KEY: 're_restore_drill',
+				EMAIL_FROM_NAME: 'Svelte Society Shop',
+				EMAIL_FROM_ADDRESS: 'merch@sveltesociety.dev',
 				STRIPE_WEBHOOK_SECRET: 'whsec_restore_drill',
 				DATABASE_PATH: databasePath
 			}

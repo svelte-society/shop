@@ -1,21 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createPolicyDocuments, type PolicyDocument } from './policies';
 
-const config = {
-	sellerLegalName: 'Svelte School AB',
-	sellerRegistrationNumber: 'reviewed-registration',
-	sellerVatNumber: 'reviewed-vat-number',
-	sellerAddressLine1: 'Reviewed street 1',
-	sellerPostalCode: '123 45',
-	sellerCity: 'Reviewed city',
-	sellerCountry: 'Sweden',
-	sellerEmail: 'merchant@example.com',
-	supportEmail: 'merch@sveltesociety.dev',
-	deliveryEstimateEu: 'Reviewed EU estimate',
-	deliveryEstimateAsia: 'Reviewed Asia estimate',
-	policyEffectiveDate: '2026-07-17'
-};
-
 function text(document: PolicyDocument): string {
 	return [
 		document.title,
@@ -29,14 +14,14 @@ function text(document: PolicyDocument): string {
 	].join('\n');
 }
 
-describe('configured policy documents', () => {
+describe('source-controlled policy documents', () => {
 	it('uses plain text and explicit links rather than HTML strings', () => {
-		const documents = createPolicyDocuments(config);
+		const documents = createPolicyDocuments();
 
 		for (const [key, document] of Object.entries(documents)) {
 			expect(document.summary).toEqual(expect.any(String));
 			expect(document.summary.length).toBeGreaterThan(20);
-			expect(document.effectiveDate).toBe(key === 'about' ? undefined : '2026-07-17');
+			expect(document.effectiveDate).toBe(key === 'about' ? undefined : '2026-07-19');
 			expect(document.sections.length).toBeGreaterThan(0);
 			for (const section of document.sections) {
 				expect(section.heading).not.toMatch(/[<>]/u);
@@ -51,7 +36,7 @@ describe('configured policy documents', () => {
 	});
 
 	it('publishes provider-owned shipping rules without a fixed public price promise', () => {
-		const shipping = text(createPolicyDocuments(config).shipping);
+		const shipping = text(createPolicyDocuments().shipping);
 
 		expect(shipping).toContain('Where we deliver, what shipping costs');
 		expect(shipping).toContain('EUR');
@@ -63,9 +48,12 @@ describe('configured policy documents', () => {
 		expect(shipping).toContain('Shipping for one item is shown in your cart');
 		expect(shipping).not.toMatch(/EUR\s+\d/u);
 		expect(shipping).toContain('two or more items');
-		expect(shipping).toContain('Reviewed EU estimate');
+		expect(shipping).toContain('Estimated delivery: usually 5–7 business days');
 		expect(shipping).toContain('Great Britain: 4–6 working days.');
-		expect(shipping).toContain('Reviewed Asia estimate');
+		expect(shipping).toContain(
+			'Supported Asian destinations: Production normally takes 1–5 business days'
+		);
+		expect(shipping).toContain('followed by roughly 6–10 business days in transit');
 		expect(shipping).toContain('final amount is confirmed at checkout');
 		expect(shipping).toContain('customs duties, brokerage fees, or carrier charges');
 		expect(shipping).toContain('estimates, not guarantees');
@@ -73,7 +61,7 @@ describe('configured policy documents', () => {
 	});
 
 	it('keeps the terms aligned with provider-owned shipping and destination pricing', () => {
-		const terms = text(createPolicyDocuments(config).terms);
+		const terms = text(createPolicyDocuments().terms);
 
 		expect(terms).toContain('selected delivery country');
 		expect(terms).toContain('Shipping for one item is shown in your cart');
@@ -83,7 +71,7 @@ describe('configured policy documents', () => {
 	});
 
 	it('publishes approval-first returns instructions without inventing a merchandise exclusion', () => {
-		const returns = text(createPolicyDocuments(config).returns);
+		const returns = text(createPolicyDocuments().returns);
 
 		expect(returns).toContain('How to request a return, who pays postage');
 		expect(returns).toContain('Before sending anything back');
@@ -91,7 +79,7 @@ describe('configured policy documents', () => {
 		expect(returns).toContain('14 days');
 		expect(returns).toContain('Model withdrawal notice');
 		expect(
-			createPolicyDocuments(config).returns.sections.flatMap((section) => section.links ?? [])
+			createPolicyDocuments().returns.sections.flatMap((section) => section.links ?? [])
 		).toContainEqual({ label: 'Use the withdrawal form', href: '/withdraw' });
 		expect(returns).toContain('Ordered on');
 		expect(returns).toContain('Received on');
@@ -108,12 +96,12 @@ describe('configured policy documents', () => {
 	});
 
 	it('describes the actual privacy services, local minimization, retention, bases, transfers, and rights', () => {
-		const privacy = text(createPolicyDocuments(config).privacy);
+		const privacy = text(createPolicyDocuments().privacy);
 
 		for (const expected of [
 			'Stripe',
 			'production partner',
-			'Plunk',
+			'Resend',
 			'delivery carriers',
 			'self-hosted analytics',
 			'technical logs',
@@ -132,6 +120,7 @@ describe('configured policy documents', () => {
 		]) {
 			expect(privacy).toContain(expected);
 		}
+		expect(privacy).not.toMatch(/Plunk/iu);
 		expect(privacy).not.toMatch(/Styria/iu);
 		expect(privacy).not.toMatch(/Umami/iu);
 		expect(privacy).toContain(
@@ -143,35 +132,35 @@ describe('configured policy documents', () => {
 		expect(privacy).not.toMatch(
 			/SQLite|S3-compatible|route templates|stable error codes|local operational state|allowlisted/iu
 		);
-		const services = createPolicyDocuments(config).privacy.sections.find(
+		const services = createPolicyDocuments().privacy.sections.find(
 			(section) => section.heading === 'Who receives your data'
 		);
 		expect(new Set(services?.paragraphs).size).toBe(services?.paragraphs.length);
 	});
 
-	it('renders configured delivery estimates with a single sentence-ending period', () => {
-		const shipping = text(
-			createPolicyDocuments({
-				...config,
-				deliveryEstimateEu: 'Usually 5–7 business days total.',
-				deliveryEstimateAsia: 'Usually 7–15 business days total.'
-			}).shipping
-		);
+	it('renders the reviewed source-owned delivery estimates with clean sentence endings', () => {
+		const shipping = text(createPolicyDocuments().shipping);
 
+		expect(shipping).toContain(
+			'European Union: Estimated delivery: usually 5–7 business days. Delivery times are estimates and aren’t guaranteed.'
+		);
+		expect(shipping).toContain(
+			'Supported Asian destinations: Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit.'
+		);
 		expect(shipping).not.toContain('..');
 	});
 
 	it('identifies the configured seller and states the scoped commercial terms', () => {
-		const termsDocument = createPolicyDocuments(config).terms;
+		const termsDocument = createPolicyDocuments().terms;
 		const terms = text(termsDocument);
 
 		for (const expected of [
-			'Svelte School AB',
-			'reviewed-registration',
-			'reviewed-vat-number',
-			'Reviewed street 1',
-			'123 45 Reviewed city',
-			'merchant@example.com',
+			'Svelte Summit AB',
+			'559490-8336',
+			'SE559490833601',
+			'Hummelhaga 13',
+			'153 95 Järna',
+			'merch@sveltesociety.dev',
 			'apparel and accessories',
 			'EUR',
 			'VAT',
@@ -199,7 +188,7 @@ describe('configured policy documents', () => {
 	});
 
 	it('keeps About short and makes no funding claim', () => {
-		const about = createPolicyDocuments(config).about;
+		const about = createPolicyDocuments().about;
 		const aboutText = text(about);
 
 		expect(aboutText).toContain('Official Svelte Society merchandise, made for the community');

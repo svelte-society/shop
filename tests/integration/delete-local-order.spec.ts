@@ -239,10 +239,10 @@ function seedRelatedRows(): void {
 		.run(
 			targetOrderId,
 			'private-email-target',
-			'plunk_private_target',
+			'email_private_target',
 			otherOrderId,
 			'private-email-other',
-			'plunk_private_other'
+			'email_private_other'
 		);
 	database
 		.prepare(
@@ -535,7 +535,7 @@ describe('reviewed local-order deletion', () => {
 			'cs_private_target',
 			'pi_private_target',
 			'cus_private_target',
-			'plunk_private_target',
+			'email_private_target',
 			'customer name and address'
 		]) {
 			expect(serialized).not.toContain(privateValue);

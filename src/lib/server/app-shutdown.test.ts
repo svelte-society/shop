@@ -8,22 +8,8 @@ import {
 
 const withdrawalEnvironment = {
 	PRODUCTION_ORIGIN: 'https://merch.sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
-	PLUNK_SECRET_KEY: 'sk_test_shutdown',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 11).toString('base64'),
-	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
-	SELLER_REGISTRATION_NUMBER: '559999-0000',
-	SELLER_VAT_NUMBER: 'SE559999000001',
-	SELLER_ADDRESS_LINE1: 'Registered Street 1',
-	SELLER_POSTAL_CODE: '111 11',
-	SELLER_CITY: 'Stockholm',
-	SELLER_COUNTRY: 'Sweden',
-	SELLER_EMAIL: 'merch@sveltesociety.dev',
-	DELIVERY_ESTIMATE_EU: '3–7 business days',
-	DELIVERY_ESTIMATE_ASIA: '7–15 business days',
-	POLICY_EFFECTIVE_DATE: '2026-07-17'
+	RESEND_API_KEY: 're_test_shutdown',
+	WITHDRAWAL_DATA_KEY: Buffer.alloc(32, 11).toString('base64')
 };
 
 function lifecycle(stop: () => Promise<void>): ApplicationLifecycle {

@@ -4,9 +4,9 @@ import { closeDatabase, openDatabase } from '$lib/server/db/connection.server';
 import { migrate } from '$lib/server/db/migrate.server';
 import { SqliteOutboxRepository, type OutboxRepository } from '$lib/server/db/outbox.server';
 import type { ShopDatabase } from '$lib/server/db/types';
-import { createPlunkClient } from '$lib/server/plunk/client.server';
-import { PlunkError } from '$lib/server/plunk/gateway';
-import type { ShippingEmailSender } from '$lib/server/plunk/shipping-email';
+import { createResendEmailGateway } from '$lib/server/email/resend.server';
+import { EmailGatewayError } from '$lib/server/email/gateway';
+import type { ShippingEmailSender } from '$lib/server/email/shipping-email';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { PaidOrderAlertOutboxWorker } from './outbox-worker.server';
@@ -22,18 +22,7 @@ const alertEmail = {
 type CapturedRequest = { input: RequestInfo | URL; init?: RequestInit };
 
 function successfulResponse(deliveryId: string): Response {
-	return Response.json({
-		success: true,
-		data: {
-			emails: [
-				{
-					contact: { id: 'cnt_ops', email: alertEmail.to },
-					email: deliveryId
-				}
-			],
-			timestamp: now.toISOString()
-		}
-	});
+	return Response.json({ id: deliveryId });
 }
 
 function insertOrder(
@@ -219,7 +208,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_test_secret', fetch }),
 			alertEmail
 		});
 
@@ -228,16 +217,19 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			rescheduled: 0
 		});
 		expect(JSON.parse(String(requests[0].init?.body))).toEqual({
-			to: alertEmail.to,
-			from: alertEmail.from,
-			reply: alertEmail.replyTo,
+			to: [alertEmail.to],
+			from: '"Svelte Society Shop" <merch@sveltesociety.dev>',
+			reply_to: alertEmail.replyTo,
 			subject: '[BACKUP_FAILED] Shop operational alert',
-			body:
+			html:
 				'<p>Code: BACKUP_FAILED</p>' +
 				'<p>Subject: daily-backup</p>' +
 				'<p>Observed UTC: 2026-07-16T08:31:00.000Z</p>' +
 				'<p>Next action: Inspect the backup job run and storage configuration before the next cadence.</p>'
 		});
+		expect(new Headers(requests[0].init?.headers).get('idempotency-key')).toMatch(
+			/^sha256:[a-f0-9]{64}$/u
+		);
 	});
 
 	it('sends the approved PII-free paid-order alert and completes it exactly once', async () => {
@@ -248,23 +240,26 @@ describe('PaidOrderAlertOutboxWorker', () => {
 			requests.push({ input, init });
 			return successfulResponse('delivery_paid_alert_123');
 		};
-		const plunk = createPlunkClient({ secretKey: 'sk_test_secret', fetch });
-		const worker = new PaidOrderAlertOutboxWorker({ database, outbox, plunk, alertEmail });
+		const email = createResendEmailGateway({ apiKey: 're_test_secret', fetch });
+		const worker = new PaidOrderAlertOutboxWorker({ database, outbox, email, alertEmail });
 
 		await expect(worker.drain(now)).resolves.toEqual({ completed: 1, rescheduled: 0 });
 		expect(requests).toHaveLength(1);
 		expect(JSON.parse(String(requests[0].init?.body))).toEqual({
-			to: alertEmail.to,
-			from: alertEmail.from,
-			reply: alertEmail.replyTo,
+			to: [alertEmail.to],
+			from: '"Svelte Society Shop" <merch@sveltesociety.dev>',
+			reply_to: alertEmail.replyTo,
 			subject: 'Svelte Society Shop: paid order awaiting review',
-			body:
+			html:
 				'<p>Internal order ID: order_internal_123</p>' +
 				'<p>Unit count: 3</p>' +
 				'<p>Total: EUR 75.00</p>' +
 				'<p>Destination country: SE</p>' +
 				'<p>Open Codex and use list_pending_orders.</p>'
 		});
+		expect(new Headers(requests[0].init?.headers).get('idempotency-key')).toMatch(
+			/^sha256:[a-f0-9]{64}$/u
+		);
 		expect(
 			database
 				.prepare(
@@ -295,7 +290,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_test_secret', fetch }),
 			alertEmail,
 			automaticStyriaSubmission: true
 		});
@@ -304,14 +299,14 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		expect(JSON.parse(String(requests[0].init?.body))).toEqual(
 			expect.objectContaining({
 				subject: 'Svelte Society Shop: paid order queued for Styria',
-				body: expect.stringContaining(
+				html: expect.stringContaining(
 					'Queued for automatic preparation in Styria. Wait for the payment-required alert.'
 				)
 			})
 		);
 	});
 
-	it('reschedules a transient Plunk failure without blocking the rest of the claimed batch', async () => {
+	it('reschedules a transient email failure without blocking the rest of the claimed batch', async () => {
 		insertOrder(database, { id: 'order_first_fails' });
 		insertOrder(database, { id: 'order_second_succeeds', quantities: [2] });
 		enqueueAlert(outbox, 'order_first_fails');
@@ -319,12 +314,12 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const requestedOrders: string[] = [];
 		let firstOrderMaySucceed = false;
 		const fetch: typeof globalThis.fetch = async (_input, init) => {
-			const body = JSON.parse(String(init?.body)) as { body: string };
-			if (body.body.includes('order_first_fails')) {
+			const body = JSON.parse(String(init?.body)) as { html: string };
+			if (body.html.includes('order_first_fails')) {
 				requestedOrders.push('order_first_fails');
 				if (!firstOrderMaySucceed) {
 					return new Response(
-						'{"error":"customer@example.test and sk_live_sensitive must never persist"}',
+						'{"error":"customer@example.test and re_live_sensitive must never persist"}',
 						{ status: 503 }
 					);
 				}
@@ -336,7 +331,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_live_sensitive', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_live_sensitive', fetch }),
 			alertEmail
 		});
 
@@ -355,7 +350,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 				attempt_count: 1,
 				next_attempt_at: '2026-07-16T08:32:00.000Z',
 				completed_at: null,
-				last_error_code: 'PLUNK_UNAVAILABLE'
+				last_error_code: 'EMAIL_UNAVAILABLE'
 			},
 			{
 				order_id: 'order_second_succeeds',
@@ -367,7 +362,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		]);
 		const persistedJobs = JSON.stringify(database.prepare('SELECT * FROM outbox_jobs').all());
 		expect(persistedJobs).not.toContain('customer@example.test');
-		expect(persistedJobs).not.toContain('sk_live_sensitive');
+		expect(persistedJobs).not.toContain('re_live_sensitive');
 
 		await expect(worker.drain(new Date('2026-07-16T08:31:59.999Z'))).resolves.toEqual({
 			completed: 0,
@@ -396,7 +391,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_test_secret', fetch }),
 			alertEmail
 		});
 		let attemptAt = new Date(now);
@@ -417,7 +412,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 				attempt_count: expectedAttempt,
 				next_attempt_at: expectedNextAttempt.toISOString(),
 				completed_at: null,
-				last_error_code: 'PLUNK_RATE_LIMITED'
+				last_error_code: 'EMAIL_RATE_LIMITED'
 			});
 			attemptAt = expectedNextAttempt;
 		}
@@ -442,7 +437,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_test_secret', fetch }),
 			alertEmail
 		});
 
@@ -476,7 +471,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_test_secret', fetch }),
 			alertEmail
 		});
 
@@ -511,7 +506,7 @@ describe('PaidOrderAlertOutboxWorker', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'sk_test_secret', fetch }),
+			email: createResendEmailGateway({ apiKey: 're_test_secret', fetch }),
 			alertEmail
 		});
 
@@ -554,7 +549,7 @@ describe('shipping email outbox', () => {
 		const sender =
 			input.sender ??
 			({
-				send: vi.fn(async () => ({ deliveryId: 'plunk_shipping_2042' }))
+				send: vi.fn(async () => ({ deliveryId: 'resend_shipping_2042' }))
 			} satisfies ShippingEmailSender);
 		return { stripe, sender, supportEmail: 'merch@sveltesociety.dev' };
 	}
@@ -596,26 +591,27 @@ describe('shipping email outbox', () => {
 		});
 		const sender: ShippingEmailSender = {
 			send: vi.fn(async (input) => {
-				sequence.push('plunk-send');
+				sequence.push('email-send');
 				expect(input).toEqual({
 					recipientEmail: 'current@example.test',
 					productSummary: '2 × Private product fixture 0 (Private variant fixture 0)',
 					trackingNumber: 'TRACK-2042',
-					supportEmail: 'merch@sveltesociety.dev'
+					supportEmail: 'merch@sveltesociety.dev',
+					idempotencyKey: 'shipping:order_shipping:TRACK-2042'
 				});
-				return { deliveryId: 'plunk_shipping_2042' };
+				return { deliveryId: 'resend_shipping_2042' };
 			})
 		};
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
 			alertEmail,
 			shipping: shippingDependencies({ stripe, sender })
 		});
 
 		await expect(worker.drain(now)).resolves.toEqual({ completed: 1, rescheduled: 0 });
-		expect(sequence).toEqual(['stripe-current-email', 'plunk-send']);
+		expect(sequence).toEqual(['stripe-current-email', 'email-send']);
 		expect(stripe.retrieveFulfillmentDetails).toHaveBeenCalledWith('cs_order_shipping');
 		expect(database.prepare('SELECT * FROM email_deliveries').all()).toEqual([
 			expect.objectContaining({
@@ -623,7 +619,7 @@ describe('shipping email outbox', () => {
 				kind: 'shipping',
 				tracking_reference: 'TRACK-2042',
 				idempotency_key: 'shipping:order_shipping:TRACK-2042',
-				provider_delivery_id: 'plunk_shipping_2042',
+				provider_delivery_id: 'resend_shipping_2042',
 				attempt_count: 1,
 				completed_at: now.toISOString()
 			})
@@ -668,13 +664,13 @@ describe('shipping email outbox', () => {
 				if (input.trackingNumber === 'TRACK-concurrent_fail') {
 					throw new Error('unexpected private shipping failure');
 				}
-				return { deliveryId: `plunk_${input.trackingNumber}` };
+				return { deliveryId: `resend_${input.trackingNumber}` };
 			})
 		};
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
 			alertEmail,
 			shipping: shippingDependencies({ sender })
 		});
@@ -727,10 +723,10 @@ describe('shipping email outbox', () => {
 		const sender: ShippingEmailSender = {
 			send: vi.fn(async (input) => {
 				if (input.trackingNumber === 'TRACK-settlement_fail') {
-					throw new PlunkError('PLUNK_UNAVAILABLE');
+					throw new EmailGatewayError('EMAIL_UNAVAILABLE');
 				}
 				await barrier;
-				return { deliveryId: `plunk_${input.trackingNumber}` };
+				return { deliveryId: `resend_${input.trackingNumber}` };
 			})
 		};
 		const recoveryFailureOutbox: OutboxRepository = {
@@ -748,7 +744,7 @@ describe('shipping email outbox', () => {
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox: recoveryFailureOutbox,
-			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
 			alertEmail,
 			shipping: shippingDependencies({ sender })
 		});
@@ -780,19 +776,19 @@ describe('shipping email outbox', () => {
 		).toEqual([
 			{
 				order_id: 'settlement_a',
-				provider_delivery_id: 'plunk_TRACK-settlement_a',
+				provider_delivery_id: 'resend_TRACK-settlement_a',
 				completed_at: now.toISOString()
 			},
 			{
 				order_id: 'settlement_c',
-				provider_delivery_id: 'plunk_TRACK-settlement_c',
+				provider_delivery_id: 'resend_TRACK-settlement_c',
 				completed_at: now.toISOString()
 			},
 			{ order_id: 'settlement_fail', provider_delivery_id: null, completed_at: null }
 		]);
 	});
 
-	it('does not mark success before Plunk accepts and retries an interrupted local completion', async () => {
+	it('does not mark success before the email provider accepts and retries an interrupted local completion', async () => {
 		insertOrder(database, {
 			id: 'order_at_least_once',
 			quantities: [1],
@@ -815,13 +811,12 @@ describe('shipping email outbox', () => {
 		const sender: ShippingEmailSender = {
 			send: vi
 				.fn<ShippingEmailSender['send']>()
-				.mockResolvedValueOnce({ deliveryId: 'plunk_first_accept' })
-				.mockResolvedValueOnce({ deliveryId: 'plunk_retry_accept' })
+				.mockResolvedValue({ deliveryId: 'resend_deduplicated_accept' })
 		};
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
 			alertEmail,
 			shipping: shippingDependencies({ sender })
 		});
@@ -838,39 +833,43 @@ describe('shipping email outbox', () => {
 
 		await expect(worker.drain(retryAt)).resolves.toEqual({ completed: 1, rescheduled: 0 });
 		expect(sender.send).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(sender.send).mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+			'shipping:order_at_least_once:TRACK-RETRY',
+			'shipping:order_at_least_once:TRACK-RETRY'
+		]);
 		expect(
 			database
 				.prepare('SELECT provider_delivery_id, attempt_count, completed_at FROM email_deliveries')
 				.get()
 		).toEqual({
-			provider_delivery_id: 'plunk_retry_accept',
+			provider_delivery_id: 'resend_deduplicated_accept',
 			attempt_count: 2,
 			completed_at: retryAt.toISOString()
 		});
 	});
 
-	it('keeps both delivery and outbox incomplete when Plunk rejects the message', async () => {
+	it('keeps both delivery and outbox incomplete when the email provider rejects the message', async () => {
 		insertOrder(database, {
-			id: 'order_plunk_rejects',
+			id: 'order_resend_rejects',
 			quantities: [1],
 			fulfillmentStatus: 'shipped',
-			trackingNumber: 'TRACK-PLUNK-REJECTS'
+			trackingNumber: 'TRACK-RESEND-REJECTS'
 		});
 		outbox.enqueue({
 			kind: 'shipping-email',
-			idempotencyKey: 'shipping:order_plunk_rejects:TRACK-PLUNK-REJECTS',
-			orderId: 'order_plunk_rejects',
+			idempotencyKey: 'shipping:order_resend_rejects:TRACK-RESEND-REJECTS',
+			orderId: 'order_resend_rejects',
 			nextAttemptAt: now
 		});
 		const sender: ShippingEmailSender = {
 			send: vi.fn(async () => {
-				throw new PlunkError('PLUNK_UNAVAILABLE');
+				throw new EmailGatewayError('EMAIL_UNAVAILABLE');
 			})
 		};
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
 			alertEmail,
 			shipping: shippingDependencies({ sender })
 		});
@@ -885,7 +884,7 @@ describe('shipping email outbox', () => {
 		]);
 		expect(
 			database.prepare('SELECT attempt_count, completed_at, last_error_code FROM outbox_jobs').get()
-		).toEqual({ attempt_count: 1, completed_at: null, last_error_code: 'PLUNK_UNAVAILABLE' });
+		).toEqual({ attempt_count: 1, completed_at: null, last_error_code: 'EMAIL_UNAVAILABLE' });
 	});
 
 	it('enqueues a privacy-safe operator alert on the sixth failed shipping attempt', async () => {
@@ -906,13 +905,13 @@ describe('shipping email outbox', () => {
 			.run('shipping-email');
 		const sender: ShippingEmailSender = {
 			send: vi.fn(async () => {
-				throw new PlunkError('PLUNK_UNAVAILABLE');
+				throw new EmailGatewayError('EMAIL_UNAVAILABLE');
 			})
 		};
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk: createPlunkClient({ secretKey: 'unused', fetch: vi.fn() }),
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
 			alertEmail,
 			shipping: shippingDependencies({ sender }),
 			alerts: new SqliteAlertService(outbox)

@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Buffer } from 'node:buffer';
-import { parseWithdrawalConfig, type WithdrawalSellerIdentity } from '$lib/config/private.server';
+import type { WithdrawalSellerIdentity } from '$lib/config/private.server';
+import {
+	parseApplicationDeploymentConfig,
+	requireSchedulerDeploymentConfig,
+	type ApplicationDeploymentConfig,
+	type DeploymentReadinessConfig,
+	type RuntimeEnvironment
+} from '$lib/config/deployment.server';
 import { SqliteBackupService } from '$lib/server/backups/service.server';
 import {
 	createS3BackupStore,
@@ -27,9 +33,9 @@ import { SqliteOperationalChecksJob } from '$lib/server/jobs/stale-orders.server
 import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
 import { log } from '$lib/server/logging/logger.server';
 import { configureAlertService, SqliteAlertService } from '$lib/server/monitoring/alerts.server';
-import { createPlunkClient, PLUNK_DEFAULT_TIMEOUT_MS } from '$lib/server/plunk/client.server';
-import type { PlunkGateway } from '$lib/server/plunk/gateway';
-import { createShippingEmailSender } from '$lib/server/plunk/shipping-email';
+import type { EmailGateway } from '$lib/server/email/gateway';
+import { createResendEmailGateway } from '$lib/server/email/resend.server';
+import { createShippingEmailSender } from '$lib/server/email/shipping-email';
 import {
 	createStripeClient,
 	createStripeFulfillmentGateway
@@ -38,8 +44,6 @@ import { createStyriaClient } from '$lib/server/styria/client.server';
 import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
 import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import { WithdrawalSubmissionService } from '$lib/server/withdrawals/submission.server';
-
-type RuntimeEnvironment = Record<string, string | undefined>;
 
 export type ApplicationStartOptions = {
 	environment: RuntimeEnvironment;
@@ -53,7 +57,7 @@ export type ApplicationRuntime = {
 	withdrawal: WithdrawalRuntime;
 	databasePath: string;
 	migrationsDirectory: string;
-	environment: RuntimeEnvironment;
+	configuration: DeploymentReadinessConfig;
 };
 
 export type WithdrawalRuntime = {
@@ -73,7 +77,7 @@ export type ApplicationRuntimeDependencies = {
 	migrate?: typeof migrate;
 	createScheduler?: (
 		database: ShopDatabase,
-		environment: RuntimeEnvironment,
+		configuration: ApplicationDeploymentConfig,
 		withdrawal: WithdrawalRuntime
 	) => Scheduler;
 	createBackupStore?: (options: S3BackupStoreOptions) => BackupStore;
@@ -133,35 +137,6 @@ export function registerApplicationShutdown(
 	}
 }
 
-function requiredEnvironmentValue(environment: RuntimeEnvironment, name: string): string {
-	const value = environment[name];
-	if (typeof value !== 'string' || value.trim().length === 0) {
-		throw new Error('APPLICATION_CONFIG_INVALID');
-	}
-	return value;
-}
-
-function schedulerEnabled(environment: RuntimeEnvironment): boolean {
-	const value = environment.SCHEDULER_ENABLED;
-	if (value === undefined || value === 'false') return false;
-	if (value === 'true') return true;
-	throw new Error('APPLICATION_CONFIG_INVALID');
-}
-
-function automaticStyriaSubmissionEnabled(environment: RuntimeEnvironment): boolean {
-	const value = environment.STYRIA_AUTO_SUBMIT_ENABLED;
-	if (value === undefined || value === 'false') return false;
-	if (value === 'true') return true;
-	throw new Error('APPLICATION_CONFIG_INVALID');
-}
-
-function databaseBootstrapEnabled(environment: RuntimeEnvironment): boolean {
-	const value = environment.DATABASE_BOOTSTRAP;
-	if (value === undefined || value === 'false') return false;
-	if (value === 'true') return true;
-	throw new Error('APPLICATION_CONFIG_INVALID');
-}
-
 async function checkRuntimeReadiness(runtime: ApplicationRuntime): Promise<{ ready: boolean }> {
 	const readiness = await import('$lib/server/health/readiness.server');
 	return readiness.checkRuntimeReadiness(runtime, { ignoreSchedulerLatch: true });
@@ -175,81 +150,41 @@ function cancelScheduled(handle: ApplicationTimerHandle): void {
 	clearTimeout(handle as ReturnType<typeof setTimeout>);
 }
 
-function optionalPositiveInteger(
-	environment: RuntimeEnvironment,
-	name: string,
-	maximum: number
-): number | undefined {
-	const value = environment[name];
-	if (value === undefined) return undefined;
-	if (!/^[1-9]\d*$/.test(value)) throw new Error('APPLICATION_CONFIG_INVALID');
-	const parsed = Number(value);
-	if (!Number.isSafeInteger(parsed) || parsed > maximum) {
-		throw new Error('APPLICATION_CONFIG_INVALID');
-	}
-	return parsed;
-}
-
-function requiredBoolean(environment: RuntimeEnvironment, name: string): boolean {
-	const value = environment[name];
-	if (value === 'true') return true;
-	if (value === 'false') return false;
-	throw new Error('APPLICATION_CONFIG_INVALID');
-}
-
-function backupConfigurationIsDisabled(environment: RuntimeEnvironment): boolean {
-	const empty = (name: string): boolean => {
-		const value = environment[name];
-		return value === undefined || value === '';
-	};
-	return (
-		['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'].every(empty) &&
-		(empty('S3_REGION') || environment.S3_REGION === 'eu-north-1') &&
-		(empty('S3_PREFIX') || environment.S3_PREFIX === 'svelte-society-shop') &&
-		(empty('S3_FORCE_PATH_STYLE') || environment.S3_FORCE_PATH_STYLE === 'false')
-	);
-}
-
 function createRuntimeScheduler(
 	database: ShopDatabase,
-	environment: RuntimeEnvironment,
+	configuration: ApplicationDeploymentConfig,
 	createBackupStore: (options: S3BackupStoreOptions) => BackupStore,
 	migrationsDirectory: string,
-	plunk: PlunkGateway,
+	email: EmailGateway,
 	alerts: SqliteAlertService,
 	withdrawal: WithdrawalRuntime
 ): Scheduler {
-	const automaticStyriaSubmission = automaticStyriaSubmissionEnabled(environment);
-	const backupsEnabled = !backupConfigurationIsDisabled(environment);
+	const schedulerConfiguration = requireSchedulerDeploymentConfig(configuration);
+	const automaticStyriaSubmission = configuration.features.automaticStyriaSubmissionEnabled;
+	const backupsEnabled = schedulerConfiguration.backup.status === 'configured';
 	const outbox = new SqliteOutboxRepository(database);
 	const stripe = createStripeFulfillmentGateway(
-		createStripeClient(requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY'))
+		createStripeClient(schedulerConfiguration.stripeSecretKey)
 	);
 	const styria = createStyriaClient({
-		appId: requiredEnvironmentValue(environment, 'STYRIA_APP_ID'),
-		secretKey: requiredEnvironmentValue(environment, 'STYRIA_SECRET_KEY'),
-		baseUrl: environment.STYRIA_BASE_URL,
-		timeoutMs: optionalPositiveInteger(environment, 'STYRIA_TIMEOUT_MS', 10_000)
+		appId: schedulerConfiguration.styria.appId,
+		secretKey: schedulerConfiguration.styria.secretKey,
+		baseUrl: schedulerConfiguration.styria.baseUrl,
+		timeoutMs: schedulerConfiguration.styria.timeoutMs
 	});
-	const supportEmail = requiredEnvironmentValue(environment, 'SUPPORT_EMAIL');
+	const supportEmail = configuration.withdrawal.supportEmail;
 	const sender = createShippingEmailSender(
-		plunk,
-		{
-			name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
-			email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
-		},
-		requiredEnvironmentValue(environment, 'PRODUCTION_ORIGIN')
+		email,
+		configuration.email.from,
+		configuration.withdrawal.productionOrigin.origin
 	);
 	const worker = new PaidOrderAlertOutboxWorker({
 		database,
 		outbox,
-		plunk,
+		email,
 		alertEmail: {
-			to: requiredEnvironmentValue(environment, 'ADMIN_EMAIL'),
-			from: {
-				name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
-				email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
-			},
+			to: configuration.email.adminEmail,
+			from: configuration.email.from,
 			replyTo: supportEmail
 		},
 		shipping: { stripe, sender, supportEmail },
@@ -263,7 +198,7 @@ function createRuntimeScheduler(
 				const automaticShared = {
 					fulfillment: automaticFulfillment,
 					stripe,
-					brandName: requiredEnvironmentValue(environment, 'STYRIA_BRAND_NAME'),
+					brandName: schedulerConfiguration.styria.brandName,
 					comment: 'Automatically prepared after confirmed Stripe payment'
 				};
 				return new DurableStyriaSubmissionWorker({
@@ -283,22 +218,17 @@ function createRuntimeScheduler(
 			})()
 		: undefined;
 	const styriaSync = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
-	const backup = backupsEnabled
-		? new SqliteBackupService({
-				database,
-				store: createBackupStore({
-					endpoint: requiredEnvironmentValue(environment, 'S3_ENDPOINT'),
-					region: requiredEnvironmentValue(environment, 'S3_REGION'),
-					bucket: requiredEnvironmentValue(environment, 'S3_BUCKET'),
-					accessKeyId: requiredEnvironmentValue(environment, 'S3_ACCESS_KEY_ID'),
-					secretAccessKey: requiredEnvironmentValue(environment, 'S3_SECRET_ACCESS_KEY'),
-					forcePathStyle: requiredBoolean(environment, 'S3_FORCE_PATH_STYLE')
-				}),
-				encryptionKeyBase64: requiredEnvironmentValue(environment, 'BACKUP_ENCRYPTION_KEY_BASE64'),
-				prefix: requiredEnvironmentValue(environment, 'S3_PREFIX'),
-				temporaryDirectory: environment.TMPDIR ?? tmpdir()
-			})
-		: undefined;
+	const backupConfiguration = schedulerConfiguration.backup;
+	const backup =
+		backupConfiguration.status === 'configured'
+			? new SqliteBackupService({
+					database,
+					store: createBackupStore(backupConfiguration.store),
+					encryptionKeyBase64: backupConfiguration.encryptionKeyBase64,
+					prefix: backupConfiguration.prefix,
+					temporaryDirectory: backupConfiguration.temporaryDirectory
+				})
+			: undefined;
 	const operationalChecks = new SqliteOperationalChecksJob({
 		database,
 		alerts,
@@ -309,9 +239,9 @@ function createRuntimeScheduler(
 				{
 					database,
 					scheduler: null,
-					databasePath: requiredEnvironmentValue(environment, 'DATABASE_PATH'),
+					databasePath: configuration.database.path,
 					migrationsDirectory,
-					environment
+					configuration: configuration.readiness
 				},
 				{ ignoreSchedulerLatch: true }
 			);
@@ -354,7 +284,7 @@ export function createApplicationLifecycle(
 	let activationTimer: ApplicationTimerHandle | undefined;
 	let acceptingActivation = false;
 	let clearAlertService: (() => void) | null = null;
-	let runtimePlunk: PlunkGateway | null = null;
+	let runtimeEmail: EmailGateway | null = null;
 	let runtimeAlerts: SqliteAlertService | null = null;
 
 	const cancelActivationTimer = (): void => {
@@ -365,7 +295,7 @@ export function createApplicationLifecycle(
 
 	const scheduleActivationRetry = (
 		current: ApplicationRuntime,
-		environment: RuntimeEnvironment
+		configuration: ApplicationDeploymentConfig
 	): void => {
 		if (
 			!acceptingActivation ||
@@ -379,7 +309,7 @@ export function createApplicationLifecycle(
 		const handle = scheduleActivation(() => {
 			if (activationTimer !== handle) return;
 			activationTimer = undefined;
-			void activateScheduler(current, environment);
+			void activateScheduler(current, configuration);
 		}, activationRetryMs);
 		activationTimer = handle;
 		handle.unref?.();
@@ -387,7 +317,7 @@ export function createApplicationLifecycle(
 
 	const activateScheduler = (
 		current: ApplicationRuntime,
-		environment: RuntimeEnvironment
+		configuration: ApplicationDeploymentConfig
 	): Promise<void> => {
 		if (!acceptingActivation || runtime !== current || current.scheduler) {
 			return Promise.resolve();
@@ -410,13 +340,13 @@ export function createApplicationLifecycle(
 			let candidate: Scheduler | undefined;
 			try {
 				candidate = dependencies.createScheduler
-					? dependencies.createScheduler(current.database, environment, current.withdrawal)
+					? dependencies.createScheduler(current.database, configuration, current.withdrawal)
 					: createRuntimeScheduler(
 							current.database,
-							environment,
+							configuration,
 							createBackupStore,
 							migrationsDirectory,
-							runtimePlunk!,
+							runtimeEmail!,
 							runtimeAlerts!,
 							current.withdrawal
 						);
@@ -439,7 +369,7 @@ export function createApplicationLifecycle(
 		})();
 		const tracked = operation.finally(() => {
 			if (activation === tracked) activation = null;
-			if (retry) scheduleActivationRetry(current, environment);
+			if (retry) scheduleActivationRetry(current, configuration);
 		});
 		activation = tracked;
 		return tracked;
@@ -448,22 +378,14 @@ export function createApplicationLifecycle(
 	const initialize = async (
 		options: ApplicationStartOptions
 	): Promise<ApplicationRuntime | null> => {
-		const databasePath = requiredEnvironmentValue(options.environment, 'DATABASE_PATH');
-		const bootstrap = databaseBootstrapEnabled(options.environment);
-		const enableScheduler = schedulerEnabled(options.environment);
-		const enableAutomaticStyriaSubmission = automaticStyriaSubmissionEnabled(options.environment);
-		if (enableAutomaticStyriaSubmission && !enableScheduler) {
-			throw new Error('APPLICATION_CONFIG_INVALID');
-		}
+		const configuration = parseApplicationDeploymentConfig(options.environment);
+		const databasePath = configuration.database.path;
+		const bootstrap = configuration.database.bootstrap;
 		const database = open(databasePath, { fileMustExist: !bootstrap });
 		try {
 			applyMigrations(database, migrationsDirectory);
-			const withdrawalConfig = parseWithdrawalConfig(options.environment);
-			const plunk = createPlunkClient({
-				secretKey: requiredEnvironmentValue(options.environment, 'PLUNK_SECRET_KEY'),
-				baseUrl: options.environment.PLUNK_BASE_URL,
-				timeoutMs: PLUNK_DEFAULT_TIMEOUT_MS
-			});
+			const withdrawalConfig = configuration.withdrawal;
+			const email = createResendEmailGateway(configuration.email.provider);
 			const outbox = new SqliteOutboxRepository(database);
 			const alerts = new SqliteAlertService(outbox);
 			const repository = new SqliteWithdrawalRepository(database);
@@ -475,12 +397,9 @@ export function createApplicationLifecycle(
 			const worker = new WithdrawalMessageWorker({
 				repository,
 				reader,
-				plunk,
+				email,
 				alerts,
-				from: {
-					name: requiredEnvironmentValue(options.environment, 'PLUNK_FROM_NAME'),
-					email: requiredEnvironmentValue(options.environment, 'PLUNK_FROM_EMAIL')
-				},
+				from: configuration.email.from,
 				supportEmail: withdrawalConfig.supportEmail,
 				productionOrigin: withdrawalConfig.productionOrigin,
 				seller: withdrawalConfig.seller
@@ -498,7 +417,7 @@ export function createApplicationLifecycle(
 				dataKey: withdrawalConfig.dataKey,
 				seller: withdrawalConfig.seller
 			};
-			runtimePlunk = plunk;
+			runtimeEmail = email;
 			runtimeAlerts = alerts;
 			clearAlertService?.();
 			clearAlertService = configureAlertService(alerts);
@@ -508,10 +427,10 @@ export function createApplicationLifecycle(
 				withdrawal,
 				databasePath,
 				migrationsDirectory,
-				environment: { ...options.environment }
+				configuration: configuration.readiness
 			};
-			acceptingActivation = enableScheduler && !bootstrap;
-			if (acceptingActivation) await activateScheduler(runtime, options.environment);
+			acceptingActivation = configuration.features.schedulerEnabled && !bootstrap;
+			if (acceptingActivation) await activateScheduler(runtime, configuration);
 			return runtime;
 		} catch (error) {
 			acceptingActivation = false;
@@ -519,7 +438,7 @@ export function createApplicationLifecycle(
 			runtime = null;
 			clearAlertService?.();
 			clearAlertService = null;
-			runtimePlunk = null;
+			runtimeEmail = null;
 			runtimeAlerts = null;
 			close();
 			throw error;
@@ -571,7 +490,7 @@ export function createApplicationLifecycle(
 				runtime = null;
 				clearAlertService?.();
 				clearAlertService = null;
-				runtimePlunk = null;
+				runtimeEmail = null;
 				runtimeAlerts = null;
 				try {
 					reportShutdown('database_closed', { schedulerActive });

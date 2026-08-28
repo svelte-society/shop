@@ -1,6 +1,13 @@
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { checkRuntimeReadiness } from '$lib/server/health/readiness.server';
+import { SHOP_CONFIG } from '$lib/config/shop';
+import {
+	parseApplicationDeploymentConfig,
+	requireSchedulerDeploymentConfig
+} from '$lib/config/deployment.server';
+import { RESEND_DEFAULT_BASE_URL, RESEND_DEFAULT_TIMEOUT_MS } from './email/resend.server';
+import { STYRIA_DEFAULT_BASE_URL, STYRIA_DEFAULT_TIMEOUT_MS } from './styria/client.server';
 import { createApplicationLifecycle, type WithdrawalRuntime } from './app.server';
 
 const migrationsDirectory = resolve('migrations');
@@ -14,25 +21,46 @@ const withdrawalEnvironment = {
 	CHECKOUT_ENABLED: 'false',
 	MCP_ENABLED: 'false',
 	PRODUCTION_ORIGIN: 'https://merch.sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
-	PLUNK_SECRET_KEY: 'sk_test_withdrawal_runtime',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	WITHDRAWAL_DATA_KEY: dataKey,
-	SELLER_LEGAL_NAME: 'Svelte Society Merch AB',
-	SELLER_REGISTRATION_NUMBER: '559999-0000',
-	SELLER_VAT_NUMBER: 'SE559999000001',
-	SELLER_ADDRESS_LINE1: 'Registered Street 1',
-	SELLER_POSTAL_CODE: '111 11',
-	SELLER_CITY: 'Stockholm',
-	SELLER_COUNTRY: 'Sweden',
-	SELLER_EMAIL: 'merch@sveltesociety.dev',
-	DELIVERY_ESTIMATE_EU: '3–7 business days',
-	DELIVERY_ESTIMATE_ASIA: '7–15 business days',
-	POLICY_EFFECTIVE_DATE: '2026-07-17'
+	RESEND_API_KEY: 're_test_withdrawal_runtime',
+	WITHDRAWAL_DATA_KEY: dataKey
 };
 
 describe('application withdrawal runtime', () => {
+	it('uses source-owned shop identity and provider defaults', () => {
+		const configuration = parseApplicationDeploymentConfig({
+			...withdrawalEnvironment,
+			DATABASE_PATH: ':memory:',
+			SCHEDULER_ENABLED: 'true',
+			STRIPE_SECRET_KEY: 'sk_test_defaults',
+			STYRIA_APP_ID: 'default-app',
+			STYRIA_SECRET_KEY: 'default-secret',
+			SUPPORT_EMAIL: 'legacy-support@example.test',
+			ADMIN_EMAIL: 'legacy-admin@example.test',
+			EMAIL_FROM_NAME: 'Legacy sender',
+			EMAIL_FROM_ADDRESS: 'legacy-sender@example.test',
+			STYRIA_BRAND_NAME: 'Legacy brand'
+		});
+		const scheduler = requireSchedulerDeploymentConfig(configuration);
+
+		expect(configuration.email).toMatchObject({
+			provider: {
+				baseUrl: RESEND_DEFAULT_BASE_URL,
+				timeoutMs: RESEND_DEFAULT_TIMEOUT_MS
+			},
+			from: {
+				name: SHOP_CONFIG.email.fromName,
+				email: SHOP_CONFIG.email.fromAddress
+			},
+			adminEmail: SHOP_CONFIG.contact.adminEmail
+		});
+		expect(configuration.withdrawal.supportEmail).toBe(SHOP_CONFIG.contact.supportEmail);
+		expect(scheduler.styria).toMatchObject({
+			baseUrl: STYRIA_DEFAULT_BASE_URL,
+			timeoutMs: STYRIA_DEFAULT_TIMEOUT_MS,
+			brandName: SHOP_CONFIG.styria.brandName
+		});
+	});
+
 	it('rejects automatic Styria submission when the scheduler is disabled', async () => {
 		const application = createApplicationLifecycle({ migrationsDirectory });
 
@@ -70,21 +98,31 @@ describe('application withdrawal runtime', () => {
 		expect(runtime?.withdrawal.reader).toBeDefined();
 		expect(runtime?.withdrawal.retention).toBeDefined();
 		expect(runtime?.withdrawal.seller).toEqual({
-			legalName: 'Svelte Society Merch AB',
-			registrationNumber: '559999-0000',
-			addressLine1: 'Registered Street 1',
-			postalCode: '111 11',
-			city: 'Stockholm',
-			country: 'Sweden',
-			email: 'merch@sveltesociety.dev'
+			legalName: SHOP_CONFIG.sellerPolicy.legalName,
+			registrationNumber: SHOP_CONFIG.sellerPolicy.registrationNumber,
+			addressLine1: SHOP_CONFIG.sellerPolicy.addressLine1,
+			postalCode: SHOP_CONFIG.sellerPolicy.postalCode,
+			city: SHOP_CONFIG.sellerPolicy.city,
+			country: SHOP_CONFIG.sellerPolicy.country,
+			email: SHOP_CONFIG.contact.sellerEmail
 		});
 		expect(runtime?.withdrawal.dataKey.equals(Buffer.from(dataKey, 'base64'))).toBe(true);
-		expect(runtime?.environment.STRIPE_SECRET_KEY).toBeUndefined();
-		expect(runtime?.environment.STYRIA_SECRET_KEY).toBeUndefined();
+		expect(runtime?.configuration).toEqual({
+			features: {
+				storefrontEnabled: false,
+				checkoutEnabled: false,
+				mcpEnabled: false,
+				schedulerEnabled: false,
+				automaticStyriaSubmissionEnabled: false
+			},
+			databaseBootstrap: false,
+			productionReady: false
+		});
+		expect(JSON.stringify(runtime?.configuration)).not.toContain(dataKey);
 
 		const readiness = await checkRuntimeReadiness(runtime!, { ignoreSchedulerLatch: true });
 		expect(JSON.stringify(readiness)).not.toContain(dataKey);
-		expect(JSON.stringify(readiness)).not.toContain('Registered Street 1');
+		expect(JSON.stringify(readiness)).not.toContain(SHOP_CONFIG.sellerPolicy.addressLine1);
 		await application.stop();
 		expect(runtime?.database.open).toBe(false);
 	});

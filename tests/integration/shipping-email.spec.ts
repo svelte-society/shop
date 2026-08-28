@@ -3,8 +3,8 @@ import { SqliteOutboxRepository } from '../../src/lib/server/db/outbox.server';
 import { SqliteFulfillmentRepository } from '../../src/lib/server/fulfillment/repository.server';
 import { PaidOrderAlertOutboxWorker } from '../../src/lib/server/jobs/outbox-worker.server';
 import { SqliteStyriaSyncJob } from '../../src/lib/server/jobs/styria-sync.server';
-import { createShippingEmailSender } from '../../src/lib/server/plunk/shipping-email';
-import type { PlunkSendInput } from '../../src/lib/server/plunk/gateway';
+import { createShippingEmailSender } from '../../src/lib/server/email/shipping-email';
+import type { EmailSendInput } from '../../src/lib/server/email/gateway';
 import type { StyriaGateway } from '../../src/lib/server/styria/gateway';
 import {
 	createLifecycleDatabase,
@@ -66,17 +66,17 @@ describe('shipping email integration', () => {
 		const stripe = {
 			retrieveFulfillmentDetails: vi.fn(async () => structuredClone(fulfillmentDetails))
 		};
-		const messages: PlunkSendInput[] = [];
-		const plunk = {
-			send: vi.fn(async (input: PlunkSendInput) => {
+		const messages: EmailSendInput[] = [];
+		const email = {
+			send: vi.fn(async (input: EmailSendInput) => {
 				messages.push(input);
-				return { deliveryId: 'plunk-shipping-jit' };
+				return { deliveryId: 'email-shipping-jit' };
 			})
 		};
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox,
-			plunk,
+			email,
 			alertEmail: {
 				to: 'orders@example.test',
 				from: { name: 'Svelte Society Shop', email: 'shop@example.test' },
@@ -85,7 +85,7 @@ describe('shipping email integration', () => {
 			shipping: {
 				stripe,
 				sender: createShippingEmailSender(
-					plunk,
+					email,
 					{
 						name: 'Svelte Society Shop',
 						email: 'shop@example.test'
@@ -120,7 +120,8 @@ describe('shipping email integration', () => {
 		expect(messages.at(-1)).toMatchObject({
 			to: fulfillmentDetails.email,
 			subject: 'Your Svelte Society order is on the way',
-			replyTo: 'merch@sveltesociety.dev'
+			replyTo: 'merch@sveltesociety.dev',
+			idempotencyKey: `shipping:${paidOrder.id}:TRACK-JIT-2042`
 		});
 		expect(messages.at(-1)?.html).toContain('1 × Community Tee (M)');
 		expect(messages.at(-1)?.html).toContain('Tracking: TRACK-JIT-2042');
@@ -129,7 +130,7 @@ describe('shipping email integration', () => {
 			expect.objectContaining({
 				kind: 'shipping',
 				tracking_reference: 'TRACK-JIT-2042',
-				provider_delivery_id: 'plunk-shipping-jit',
+				provider_delivery_id: 'email-shipping-jit',
 				attempt_count: 1,
 				completed_at: expect.any(String)
 			})

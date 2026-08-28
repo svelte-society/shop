@@ -1,4 +1,15 @@
 import type { ShopDatabase } from '$lib/server/db/types';
+import {
+	parseMcpDeploymentConfig,
+	parseResendDeploymentConfig,
+	type RuntimeEnvironment
+} from '$lib/config/deployment.server';
+import type { EmailGateway } from '$lib/server/email/gateway';
+import { createResendEmailGateway } from '$lib/server/email/resend.server';
+import {
+	createShippingEmailSender,
+	SqliteShippingEmailService
+} from '$lib/server/email/shipping-email';
 import { SqliteOutboxRepository } from '$lib/server/db/outbox.server';
 import { SqliteApprovalRepository } from '$lib/server/fulfillment/approvals.server';
 import { FulfillmentPreparationService } from '$lib/server/fulfillment/prepare.server';
@@ -6,12 +17,6 @@ import { StyriaReconciliationService } from '$lib/server/fulfillment/reconcile.s
 import { SqliteFulfillmentRepository } from '$lib/server/fulfillment/repository.server';
 import { FulfillmentSubmissionService } from '$lib/server/fulfillment/submit.server';
 import { SqliteStyriaSyncJob } from '$lib/server/jobs/styria-sync.server';
-import { createPlunkClient } from '$lib/server/plunk/client.server';
-import type { PlunkGateway } from '$lib/server/plunk/gateway';
-import {
-	createShippingEmailSender,
-	SqliteShippingEmailService
-} from '$lib/server/plunk/shipping-email';
 import {
 	createStripeClient,
 	createStripeFulfillmentGateway
@@ -20,44 +25,16 @@ import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { createStyriaClient, type StyriaClientOptions } from '$lib/server/styria/client.server';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
-import { parseWithdrawalDataKey } from '$lib/server/withdrawals/crypto.server';
 import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.server';
 import { WithdrawalWorkflowService } from '$lib/server/withdrawals/workflow.server';
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
-import { parseWithdrawalConfig } from '$lib/config/private.server';
-
-type RuntimeEnvironment = Record<string, string | undefined>;
 
 type RuntimeMcpDependencies = {
 	createStripeGateway?: (secretKey: string) => StripeFulfillmentGateway;
 	createStyriaGateway?: (options: StyriaClientOptions) => StyriaGateway;
-	createPlunkGateway?: (secretKey: string) => PlunkGateway;
+	createEmailGateway?: () => EmailGateway;
 };
-
-function requiredEnvironmentValue(environment: RuntimeEnvironment, name: string): string {
-	const value = environment[name];
-	if (
-		typeof value !== 'string' ||
-		value.length === 0 ||
-		value !== value.trim() ||
-		/[\r\n]/.test(value)
-	) {
-		throw new Error('MCP_CONFIG_INVALID');
-	}
-	return value;
-}
-
-function timeoutValue(environment: RuntimeEnvironment): number | undefined {
-	const value = environment.STYRIA_TIMEOUT_MS;
-	if (value === undefined) return undefined;
-	if (!/^[1-9]\d*$/.test(value)) throw new Error('MCP_CONFIG_INVALID');
-	const timeoutMs = Number(value);
-	if (!Number.isSafeInteger(timeoutMs) || timeoutMs > 10_000) {
-		throw new Error('MCP_CONFIG_INVALID');
-	}
-	return timeoutMs;
-}
 
 function defaultStripeGateway(secretKey: string): StripeFulfillmentGateway {
 	return createStripeFulfillmentGateway(createStripeClient(secretKey));
@@ -93,21 +70,22 @@ export function createRuntimeMcpServices(
 	environment: RuntimeEnvironment,
 	dependencies: RuntimeMcpDependencies = {}
 ): McpServices {
+	const configuration = parseMcpDeploymentConfig(environment);
 	const fulfillment = new SqliteFulfillmentRepository(database);
 	const stripe = (dependencies.createStripeGateway ?? defaultStripeGateway)(
-		requiredEnvironmentValue(environment, 'STRIPE_SECRET_KEY')
+		configuration.stripeSecretKey
 	);
 	const styria = (dependencies.createStyriaGateway ?? createStyriaClient)({
-		appId: requiredEnvironmentValue(environment, 'STYRIA_APP_ID'),
-		secretKey: requiredEnvironmentValue(environment, 'STYRIA_SECRET_KEY'),
-		baseUrl: environment.STYRIA_BASE_URL,
-		timeoutMs: timeoutValue(environment)
+		appId: configuration.styria.appId,
+		secretKey: configuration.styria.secretKey,
+		baseUrl: configuration.styria.baseUrl,
+		timeoutMs: configuration.styria.timeoutMs
 	});
 	const approvals = new SqliteApprovalRepository(database);
 	const outbox = new SqliteOutboxRepository(database);
 	const alerts = new SqliteAlertService(outbox);
 	const withdrawalRepository = new SqliteWithdrawalRepository(database);
-	const withdrawalDataKey = parseWithdrawalDataKey(environment.WITHDRAWAL_DATA_KEY);
+	const withdrawalDataKey = configuration.withdrawal.dataKey;
 	const withdrawalReader = new WithdrawalCaseReader({
 		repository: withdrawalRepository,
 		dataKey: withdrawalDataKey,
@@ -121,12 +99,11 @@ export function createRuntimeMcpServices(
 	};
 	const withdrawalWorkflow = new WithdrawalWorkflowService(workflowDependencies);
 	const messageWorkflow = () => {
-		const configuration = parseWithdrawalConfig(environment);
 		return new WithdrawalWorkflowService({
 			...workflowDependencies,
-			productionOrigin: configuration.productionOrigin,
-			supportEmail: configuration.supportEmail,
-			seller: configuration.seller
+			productionOrigin: configuration.withdrawal.productionOrigin,
+			supportEmail: configuration.withdrawal.supportEmail,
+			seller: configuration.withdrawal.seller
 		});
 	};
 	const withdrawals: NonNullable<McpServices['withdrawals']> = {
@@ -189,19 +166,15 @@ export function createRuntimeMcpServices(
 			return { mode: 'confirm', ...confirmation };
 		}
 	};
-	const brandName = requiredEnvironmentValue(environment, 'STYRIA_BRAND_NAME');
-	const plunkSecretKey = requiredEnvironmentValue(environment, 'PLUNK_SECRET_KEY');
-	const plunk = dependencies.createPlunkGateway
-		? dependencies.createPlunkGateway(plunkSecretKey)
-		: createPlunkClient({ secretKey: plunkSecretKey, baseUrl: environment.PLUNK_BASE_URL });
-	const supportEmail = requiredEnvironmentValue(environment, 'SUPPORT_EMAIL');
+	const brandName = configuration.styria.brandName;
+	const email = dependencies.createEmailGateway
+		? dependencies.createEmailGateway()
+		: createResendEmailGateway(parseResendDeploymentConfig(environment, 'MCP_CONFIG_INVALID'));
+	const supportEmail = configuration.withdrawal.supportEmail;
 	const sender = createShippingEmailSender(
-		plunk,
-		{
-			name: requiredEnvironmentValue(environment, 'PLUNK_FROM_NAME'),
-			email: requiredEnvironmentValue(environment, 'PLUNK_FROM_EMAIL')
-		},
-		requiredEnvironmentValue(environment, 'PRODUCTION_ORIGIN')
+		email,
+		configuration.email.from,
+		configuration.withdrawal.productionOrigin.origin
 	);
 	const status = new SqliteStyriaSyncJob({ database, styria, fulfillment, outbox, alerts });
 	const shipping = new SqliteShippingEmailService({

@@ -16,7 +16,7 @@ import { SqliteStripeEventRepository } from '../../src/lib/server/db/stripe-even
 import type { ShopDatabase } from '../../src/lib/server/db/types';
 import { PaidOrderAlertOutboxWorker } from '../../src/lib/server/jobs/outbox-worker.server';
 import { SqliteRefundOrderUnitOfWork } from '../../src/lib/server/orders/intake.server';
-import type { PlunkSendInput } from '../../src/lib/server/plunk/gateway';
+import type { EmailSendInput } from '../../src/lib/server/email/gateway';
 import { createStripeOrderGateway } from '../../src/lib/server/stripe/paid-checkout';
 import { createStripeWebhookService } from '../../src/lib/server/stripe/webhook.server';
 import { createStripeFixtureClient } from '../fixtures/catalog-server';
@@ -394,11 +394,11 @@ describe('checkout to Stripe webhook intake', () => {
 			count: 1
 		});
 
-		const deliveries: PlunkSendInput[] = [];
+		const deliveries: EmailSendInput[] = [];
 		const worker = new PaidOrderAlertOutboxWorker({
 			database,
 			outbox: new SqliteOutboxRepository(database),
-			plunk: {
+			email: {
 				async send(input) {
 					deliveries.push(input);
 					return { deliveryId: 'delivery_test_paid_alert' };
@@ -414,10 +414,16 @@ describe('checkout to Stripe webhook intake', () => {
 		await expect(worker.drain(NOW)).resolves.toEqual({ completed: 1, rescheduled: 0 });
 		await expect(worker.drain(NOW)).resolves.toEqual({ completed: 0, rescheduled: 0 });
 		expect(deliveries).toHaveLength(1);
+		const paidAlertKey = (
+			database
+				.prepare("SELECT idempotency_key FROM outbox_jobs WHERE kind = 'paid-order-alert'")
+				.get() as { idempotency_key: string }
+		).idempotency_key;
 		expect(deliveries[0]).toMatchObject({
 			to: 'orders@example.test',
 			replyTo: 'merch@sveltesociety.dev',
-			subject: 'Svelte Society Shop: paid order awaiting review'
+			subject: 'Svelte Society Shop: paid order awaiting review',
+			idempotencyKey: paidAlertKey
 		});
 		expect(deliveries[0].subject).not.toMatch(/receipt|invoice|order confirmation/i);
 	});

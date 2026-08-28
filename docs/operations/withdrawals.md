@@ -12,10 +12,10 @@ to remain reachable with `STOREFRONT_ENABLED=false` and `CHECKOUT_ENABLED=false`
 ## What the system guarantees
 
 - A valid confirmation atomically commits one encrypted case, one receipt message, one PII-free
-  `WITHDRAWAL_NOTICE_RECEIVED` alert, and one audit event before attempting Plunk delivery.
+  `WITHDRAWAL_NOTICE_RECEIVED` alert, and one audit event before attempting email-provider delivery.
 - The submitting browser receives a 15-minute, reference-bound receipt cookie. Its UTF-8 receipt is
   available only with that cookie; a public `WDR-…` reference alone is insufficient.
-- A retryable Plunk failure leaves the message queued and the accepted case/receipt intact.
+- A retryable email-provider failure leaves the message queued and the accepted case/receipt intact.
 - PII and reconciliation fields exist only in the version-1 encrypted payload. Lists, events,
   alerts, and structured logs contain the public reference and operational metadata only.
 - Closing a case schedules encrypted-payload and deduplication-data purge exactly 90 days later.
@@ -23,13 +23,13 @@ to remain reachable with `STOREFRONT_ENABLED=false` and `CHECKOUT_ENABLED=false`
 
 ## Monitoring and first response
 
-Monitor readiness, scheduler health, Plunk delivery health, encrypted backup completion, and these
+Monitor readiness, scheduler health, Resend delivery health, encrypted backup completion, and these
 stable alerts:
 
 | Alert | Meaning | Operator response |
 | --- | --- | --- |
 | `WITHDRAWAL_NOTICE_RECEIVED` | A notice was durably accepted | Open Codex, list and inspect the case, then reconcile it |
-| `WITHDRAWAL_MESSAGE_UNSENT` | A message permanently failed, or exhausted five transient attempts | Inspect message history, resolve Plunk/configuration, then use preview/confirm resend |
+| `WITHDRAWAL_MESSAGE_UNSENT` | A message permanently failed, or exhausted five transient attempts | Inspect message history, resolve Resend/configuration, then use preview/confirm resend |
 | `WITHDRAWAL_DATA_UNREADABLE` | An active payload failed authenticated decryption | Stop case mutation, preserve files, verify the exact key, and follow the decrypt incident procedure |
 | `SCHEDULER_FAILED` with subject `withdrawal-retention` | A purge batch failed | Keep scheduler state observable, investigate SQLite/guard failure, and rerun only after correction |
 
@@ -73,7 +73,7 @@ is not automatically a return address. Do not copy internal notes, credentials, 
 unreviewed Styria instructions, or another customer's address. This field is emailed and retained
 inside the encrypted payload until purge.
 
-## Queued receipt or Plunk outage
+## Queued receipt or email-provider outage
 
 An on-screen/browser receipt marked queued still proves the notice was accepted. Do not ask the
 customer to resubmit: the 24-hour encrypted deduplication guard returns the original case and avoids
@@ -82,7 +82,7 @@ duplicate receipt/alert/event rows.
 1. Confirm `/health/ready` and SQLite remain healthy; do not delete or recreate the case.
 2. Inspect its message attempt count, next attempt time, completion, provider delivery ID, and
    stable error code. Do not query or log a provider request body.
-3. Validate the runtime Plunk endpoint, sender identity, secret availability, network, and provider
+3. Validate the runtime Resend endpoint, sender identity, API-key availability, network, and provider
    status outside application logs. Retryable failures are scheduled at bounded backoff intervals.
 4. A provider rejection is terminal; transient failures raise `WITHDRAWAL_MESSAGE_UNSENT` on the
    fifth failed attempt. After correcting the cause, use the resend procedure below.

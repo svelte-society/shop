@@ -1,3 +1,5 @@
+import { SHOP_CONFIG } from '$lib/config/shop';
+
 export type PolicySection = {
 	heading: string;
 	paragraphs: string[];
@@ -11,21 +13,6 @@ export type PolicyDocument = {
 	sections: PolicySection[];
 };
 
-export type PolicyContentConfig = {
-	sellerLegalName: string;
-	sellerRegistrationNumber: string;
-	sellerVatNumber: string;
-	sellerAddressLine1: string;
-	sellerPostalCode: string;
-	sellerCity: string;
-	sellerCountry: string;
-	sellerEmail: string;
-	supportEmail: string;
-	deliveryEstimateEu: string;
-	deliveryEstimateAsia: string;
-	policyEffectiveDate: string;
-};
-
 export type PolicyDocuments = {
 	shipping: PolicyDocument;
 	returns: PolicyDocument;
@@ -33,6 +20,25 @@ export type PolicyDocuments = {
 	terms: PolicyDocument;
 	about: PolicyDocument;
 };
+
+function sourcePolicyContentConfig() {
+	return {
+		sellerLegalName: SHOP_CONFIG.sellerPolicy.legalName,
+		sellerRegistrationNumber: SHOP_CONFIG.sellerPolicy.registrationNumber,
+		sellerVatNumber: SHOP_CONFIG.sellerPolicy.vatNumber,
+		sellerAddressLine1: SHOP_CONFIG.sellerPolicy.addressLine1,
+		sellerPostalCode: SHOP_CONFIG.sellerPolicy.postalCode,
+		sellerCity: SHOP_CONFIG.sellerPolicy.city,
+		sellerCountry: SHOP_CONFIG.sellerPolicy.country,
+		sellerEmail: SHOP_CONFIG.contact.sellerEmail,
+		supportEmail: SHOP_CONFIG.contact.supportEmail,
+		deliveryEstimateEu: SHOP_CONFIG.sellerPolicy.deliveryEstimateEu,
+		deliveryEstimateAsia: SHOP_CONFIG.sellerPolicy.deliveryEstimateAsia,
+		policyEffectiveDate: SHOP_CONFIG.sellerPolicy.effectiveDate
+	};
+}
+
+type PolicyContent = ReturnType<typeof sourcePolicyContentConfig>;
 
 const distanceContractsAct =
 	'https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/lag-200559-om-distansavtal-och-avtal-utanfor_sfs-2005-59/';
@@ -47,7 +53,7 @@ function sentence(value: string): string {
 	return `${value.trim().replace(/[.!?]+$/u, '')}.`;
 }
 
-function shippingDocument(config: PolicyContentConfig): PolicyDocument {
+function shippingDocument(config: PolicyContent): PolicyDocument {
 	return {
 		title: 'Shipping',
 		summary: 'Where we deliver, what shipping costs, and when to expect your order.',
@@ -92,7 +98,7 @@ function shippingDocument(config: PolicyContentConfig): PolicyDocument {
 	};
 }
 
-function returnsDocument(config: PolicyContentConfig): PolicyDocument {
+function returnsDocument(config: PolicyContent): PolicyDocument {
 	const sellerAddress = `${config.sellerAddressLine1}, ${config.sellerPostalCode} ${config.sellerCity}, ${config.sellerCountry}`;
 	return {
 		title: 'Returns and withdrawal',
@@ -156,7 +162,7 @@ function returnsDocument(config: PolicyContentConfig): PolicyDocument {
 	};
 }
 
-function privacyDocument(config: PolicyContentConfig): PolicyDocument {
+function privacyDocument(config: PolicyContent): PolicyDocument {
 	return {
 		title: 'Privacy',
 		summary: 'What we collect, why we use it, and how to exercise your data rights.',
@@ -181,7 +187,7 @@ function privacyDocument(config: PolicyContentConfig): PolicyDocument {
 				heading: 'Who receives your data',
 				paragraphs: [
 					'Stripe handles checkout, payment, tax, receipts, and invoices. Our production partner and delivery carriers receive the contact, address, and order details needed to make and deliver your order.',
-					'Plunk sends order and shipping emails. We use self-hosted analytics to understand how the shop is used. These analytics do not include order or payment details.',
+					'Resend sends order, shipping, and withdrawal emails. We use self-hosted analytics to understand how the shop is used. These analytics do not include order or payment details.',
 					'We keep encrypted backups so the shop can recover from data loss. Each provider also handles data under its own terms and legal duties.'
 				]
 			},
@@ -220,7 +226,7 @@ function privacyDocument(config: PolicyContentConfig): PolicyDocument {
 	};
 }
 
-function termsDocument(config: PolicyContentConfig): PolicyDocument {
+function termsDocument(config: PolicyContent): PolicyDocument {
 	return {
 		title: 'Terms of sale',
 		summary: 'The main terms that apply when you buy from the Society Shop.',
@@ -298,7 +304,8 @@ function aboutDocument(): PolicyDocument {
 	};
 }
 
-export function createPolicyDocuments(config: PolicyContentConfig): PolicyDocuments {
+export function createPolicyDocuments(): PolicyDocuments {
+	const config = sourcePolicyContentConfig();
 	return {
 		shipping: shippingDocument(config),
 		returns: returnsDocument(config),

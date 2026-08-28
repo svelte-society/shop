@@ -198,7 +198,7 @@ function assertDatabaseSettlement(databasePath) {
 				completed_at: job?.completed_at,
 				last_error_code: job?.last_error_code
 			},
-			{ attempt_count: 1, completed_at: null, last_error_code: 'PLUNK_UNAVAILABLE' }
+			{ attempt_count: 1, completed_at: null, last_error_code: 'EMAIL_UNAVAILABLE' }
 		);
 		assert.equal(typeof job.next_attempt_at, 'string');
 		assert(Date.parse(job.next_attempt_at) > Date.parse('2026-07-17T00:00:00.000Z'));
@@ -290,10 +290,10 @@ try {
 			STYRIA_APP_ID: 'process-shutdown',
 			STYRIA_SECRET_KEY: 'process-shutdown',
 			STYRIA_BASE_URL: `https://127.0.0.1:${providerAddress.port}`,
-			PLUNK_SECRET_KEY: 'process-shutdown',
-			PLUNK_BASE_URL: `https://127.0.0.1:${providerAddress.port}`,
-			PLUNK_FROM_NAME: 'Svelte Society Shop',
-			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
+			RESEND_API_KEY: 'process-shutdown',
+			RESEND_BASE_URL: `https://127.0.0.1:${providerAddress.port}`,
+			EMAIL_FROM_NAME: 'Svelte Society Shop',
+			EMAIL_FROM_ADDRESS: 'merch@sveltesociety.dev',
 			ADMIN_EMAIL: 'merch@sveltesociety.dev',
 			S3_ENDPOINT: 'https://s3.process-shutdown.test',
 			S3_BUCKET: 'process-shutdown-backups',
@@ -321,7 +321,7 @@ try {
 
 	await waitForReady(applicationPort, childExit);
 	await withTimeout(accepted.promise, startupDeadlineMs, 'PROVIDER_REQUEST_NOT_ACCEPTED');
-	assert.deepEqual(acceptedRequest, { method: 'POST', url: '/v1/send' });
+	assert.deepEqual(acceptedRequest, { method: 'POST', url: '/emails' });
 	const shutdownStarted = performance.now();
 	assert.equal(child.kill('SIGTERM'), true);
 	const [exit, providerClosedAt] = await withTimeout(

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '$lib/server/db/migrate.server';
 import type { ShopDatabase } from '$lib/server/db/types';
 import { createLogger } from '$lib/server/logging/logger.server';
-import type { PlunkGateway } from '$lib/server/plunk/gateway';
+import type { EmailGateway } from '$lib/server/email/gateway';
 import type { FulfillmentDetails, StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import type { StyriaOrder } from '$lib/server/styria/types';
@@ -24,11 +24,7 @@ const environment = {
 	STYRIA_SECRET_KEY: 'runtime-secret',
 	STYRIA_BASE_URL: 'https://styria.runtime.test',
 	STYRIA_TIMEOUT_MS: '4321',
-	STYRIA_BRAND_NAME: 'Svelte Society',
-	PLUNK_SECRET_KEY: 'plunk-runtime-secret',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-	SUPPORT_EMAIL: 'merch@sveltesociety.dev',
+	RESEND_API_KEY: 'resend-runtime-secret',
 	WITHDRAWAL_DATA_KEY: withdrawalDataKey.toString('base64')
 };
 
@@ -125,8 +121,8 @@ function styriaGateway(): StyriaGateway {
 	};
 }
 
-function plunkGateway(): PlunkGateway {
-	return { send: vi.fn(async () => ({ deliveryId: 'plunk-runtime-delivery' })) };
+function emailGateway(): EmailGateway {
+	return { send: vi.fn(async () => ({ deliveryId: 'email-runtime-delivery' })) };
 }
 
 function rpcRequest(
@@ -173,7 +169,7 @@ function createComposedRuntimeHandler(database: ShopDatabase) {
 		createRuntimeMcpServices(database, environment, {
 			createStripeGateway: () => stripeGateway(),
 			createStyriaGateway: () => styriaGateway(),
-			createPlunkGateway: () => plunkGateway()
+			createEmailGateway: () => emailGateway()
 		})
 	);
 	return _createMcpRequestHandler({ MCP_ENABLED: 'true', MCP_BEARER_TOKEN: TOKEN }, respond);
@@ -223,17 +219,17 @@ describe('runtime MCP composition', () => {
 		seedWithdrawal(database);
 		const stripe = stripeGateway();
 		const styria = styriaGateway();
-		const plunk = plunkGateway();
-		const plunkSend = vi.mocked(plunk.send);
+		const email = emailGateway();
+		const emailSend = vi.mocked(email.send);
 		const createStripeGateway = vi.fn(() => stripe);
 		const createStyriaGateway = vi.fn(() => styria);
-		const createPlunkGateway = vi.fn(() => plunk);
+		const createEmailGateway = vi.fn(() => email);
 		let composed: ReturnType<typeof createRuntimeMcpServices> | undefined;
 		const compose = vi.fn(() => {
 			composed = createRuntimeMcpServices(database, environment, {
 				createStripeGateway,
 				createStyriaGateway,
-				createPlunkGateway
+				createEmailGateway
 			});
 			return composed;
 		});
@@ -270,7 +266,7 @@ describe('runtime MCP composition', () => {
 			baseUrl: 'https://styria.runtime.test',
 			timeoutMs: 4321
 		});
-		expect(createPlunkGateway).toHaveBeenCalledWith('plunk-runtime-secret');
+		expect(createEmailGateway).toHaveBeenCalledWith();
 
 		const called = await handler({
 			request: rpcRequest(
@@ -378,26 +374,34 @@ describe('runtime MCP composition', () => {
 		expect(sentMessage.result).toMatchObject({
 			structuredContent: { order_id: 'order_runtime', mode: 'send', sent: true }
 		});
-		expect(plunk.send).toHaveBeenCalledWith(
+		const sentIdempotencyKey = emailSend.mock.calls[0]?.[0].idempotencyKey;
+		expect(sentIdempotencyKey).toMatch(
+			/^shipping-support:order_runtime:tracking-secret-runtime:[0-9a-f-]{36}$/u
+		);
+		expect(email.send).toHaveBeenCalledWith(
 			expect.objectContaining({
 				to: 'ada@example.test',
 				replyTo: 'merch@sveltesociety.dev',
 				subject: 'Your Svelte Society order is on the way',
+				idempotencyKey: sentIdempotencyKey,
 				html: expect.stringContaining(
 					'<a href="https://shop.runtime.test/withdraw">Withdraw from this purchase</a>'
 				)
 			})
 		);
-		expect(JSON.stringify(plunkSend.mock.calls)).not.toContain('order_runtime?');
+		expect(JSON.stringify(emailSend.mock.calls)).not.toContain('order_runtime?');
 		expect(
 			database
-				.prepare('SELECT kind, tracking_reference, provider_delivery_id FROM email_deliveries')
+				.prepare(
+					'SELECT kind, tracking_reference, idempotency_key, provider_delivery_id FROM email_deliveries'
+				)
 				.all()
 		).toEqual([
 			{
 				kind: 'shipping-support',
 				tracking_reference: 'tracking-secret-runtime',
-				provider_delivery_id: 'plunk-runtime-delivery'
+				idempotency_key: sentIdempotencyKey,
+				provider_delivery_id: 'email-runtime-delivery'
 			}
 		]);
 		const persisted = JSON.stringify(database.prepare('SELECT * FROM email_deliveries').all());

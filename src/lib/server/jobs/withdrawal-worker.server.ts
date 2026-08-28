@@ -1,7 +1,7 @@
 import type { WithdrawalSellerIdentity } from '$lib/config/private.server';
+import type { EmailGateway } from '$lib/server/email/gateway';
+import { EmailGatewayError } from '$lib/server/email/gateway';
 import type { AlertService } from '$lib/server/monitoring/alerts.server';
-import type { PlunkGateway } from '$lib/server/plunk/gateway';
-import { PlunkError } from '$lib/server/plunk/gateway';
 import type { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
 import { resolveOriginalWithdrawalMessageKind } from '$lib/server/withdrawals/message-kind.server';
 import { withdrawalMessage } from '$lib/server/withdrawals/messages.server';
@@ -26,7 +26,7 @@ export type WithdrawalMessageWorkerDependencies = {
 		| 'failMessagePermanently'
 	>;
 	reader: Pick<WithdrawalCaseReader, 'inspectActiveById'>;
-	plunk: PlunkGateway;
+	email: EmailGateway;
 	alerts: AlertService;
 	from: { name: string; email: string };
 	supportEmail: string;
@@ -34,11 +34,12 @@ export type WithdrawalMessageWorkerDependencies = {
 	seller: WithdrawalSellerIdentity;
 };
 
-const transientPlunkCodes = new Set([
-	'PLUNK_TIMEOUT',
-	'PLUNK_RATE_LIMITED',
-	'PLUNK_UNAVAILABLE',
-	'PLUNK_RESPONSE_INVALID'
+const transientEmailCodes = new Set([
+	'EMAIL_TIMEOUT',
+	'EMAIL_RATE_LIMITED',
+	'EMAIL_UNAVAILABLE',
+	'EMAIL_CONFIGURATION_INVALID',
+	'EMAIL_RESPONSE_INVALID'
 ]);
 const backoffMinutes = [1, 5, 15, 60] as const;
 
@@ -48,7 +49,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function stableFailure(error: unknown): string {
-	return error instanceof PlunkError ? error.code : 'WITHDRAWAL_MESSAGE_FAILED';
+	return error instanceof EmailGatewayError ? error.code : 'WITHDRAWAL_MESSAGE_FAILED';
 }
 
 function nextAttempt(now: Date, attemptCount: number): Date {
@@ -100,18 +101,19 @@ export class WithdrawalMessageWorker implements WithdrawalReceiptDispatcher {
 				from: this.dependencies.from,
 				replyTo: this.dependencies.supportEmail,
 				subject: content.subject,
-				html: content.html
+				html: content.html,
+				idempotencyKey: message.idempotencyKey
 			};
 			delivery = signal
-				? await this.dependencies.plunk.send(providerMessage, signal)
-				: await this.dependencies.plunk.send(providerMessage);
+				? await this.dependencies.email.send(providerMessage, signal)
+				: await this.dependencies.email.send(providerMessage);
 			if (!isWithdrawalProviderDeliveryId(delivery.deliveryId)) {
-				throw new PlunkError('PLUNK_RESPONSE_INVALID');
+				throw new EmailGatewayError('EMAIL_RESPONSE_INVALID');
 			}
 		} catch (error) {
 			throwIfAborted(signal);
 			const code = stableFailure(error);
-			if (error instanceof PlunkError && error.code === 'PLUNK_REQUEST_REJECTED') {
+			if (error instanceof EmailGatewayError && error.code === 'EMAIL_REQUEST_REJECTED') {
 				this.dependencies.repository.failMessagePermanently(
 					message.id,
 					message.attemptCount,
@@ -121,7 +123,7 @@ export class WithdrawalMessageWorker implements WithdrawalReceiptDispatcher {
 				this.alertUnsent(inspection.reference, now);
 				return 'failed';
 			}
-			if (!(error instanceof PlunkError) || transientPlunkCodes.has(error.code)) {
+			if (!(error instanceof EmailGatewayError) || transientEmailCodes.has(error.code)) {
 				this.dependencies.repository.rescheduleMessage(
 					message.id,
 					message.attemptCount,

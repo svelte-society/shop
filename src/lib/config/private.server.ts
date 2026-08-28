@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { Buffer } from 'node:buffer';
 import { parseWithdrawalDataKey } from '$lib/server/withdrawals/crypto.server';
 import { parsePublicConfig, type PublicConfig } from './public';
+import { SHOP_CONFIG } from './shop';
 
 export type PrivateConfig = PublicConfig & {
 	stripeSecretKey: string;
@@ -47,29 +48,6 @@ const requiredValueSchema = v.pipe(
 	v.check((value) => value.trim().length > 0 && value === value.trim() && !/[\r\n]/u.test(value))
 );
 
-const policyDateSchema = v.pipe(
-	requiredValueSchema,
-	v.regex(/^\d{4}-\d{2}-\d{2}$/u),
-	v.check((value) => {
-		const parsed = new Date(`${value}T00:00:00.000Z`);
-		return Number.isFinite(parsed.getTime()) && parsed.toISOString().startsWith(value);
-	})
-);
-
-const sellerPolicyEnvSchema = v.object({
-	SELLER_LEGAL_NAME: requiredValueSchema,
-	SELLER_REGISTRATION_NUMBER: requiredValueSchema,
-	SELLER_VAT_NUMBER: requiredValueSchema,
-	SELLER_ADDRESS_LINE1: requiredValueSchema,
-	SELLER_POSTAL_CODE: requiredValueSchema,
-	SELLER_CITY: requiredValueSchema,
-	SELLER_COUNTRY: requiredValueSchema,
-	SELLER_EMAIL: v.pipe(requiredValueSchema, v.email()),
-	DELIVERY_ESTIMATE_EU: requiredValueSchema,
-	DELIVERY_ESTIMATE_ASIA: requiredValueSchema,
-	POLICY_EFFECTIVE_DATE: policyDateSchema
-});
-
 const stripeEnvSchema = v.object({
 	STRIPE_SECRET_KEY: requiredValueSchema,
 	STRIPE_WEBHOOK_SECRET: requiredValueSchema,
@@ -83,28 +61,22 @@ const withdrawalPublicEnvSchema = v.object({
 		v.url(),
 		v.transform((value) => new URL(value)),
 		v.check((value) => value.protocol === 'https:')
-	),
-	SUPPORT_EMAIL: v.pipe(v.string(), v.email())
+	)
 });
 
-export function parseSellerPolicyConfig(
-	env: Record<string, string | undefined>
-): SellerPolicyConfig {
-	const result = v.safeParse(sellerPolicyEnvSchema, env);
-	if (!result.success) throw new Error('CONFIG_POLICY_INVALID');
-
+export function parseSellerPolicyConfig(): SellerPolicyConfig {
 	return {
-		sellerLegalName: result.output.SELLER_LEGAL_NAME,
-		sellerRegistrationNumber: result.output.SELLER_REGISTRATION_NUMBER,
-		sellerVatNumber: result.output.SELLER_VAT_NUMBER,
-		sellerAddressLine1: result.output.SELLER_ADDRESS_LINE1,
-		sellerPostalCode: result.output.SELLER_POSTAL_CODE,
-		sellerCity: result.output.SELLER_CITY,
-		sellerCountry: result.output.SELLER_COUNTRY,
-		sellerEmail: result.output.SELLER_EMAIL,
-		deliveryEstimateEu: result.output.DELIVERY_ESTIMATE_EU,
-		deliveryEstimateAsia: result.output.DELIVERY_ESTIMATE_ASIA,
-		policyEffectiveDate: result.output.POLICY_EFFECTIVE_DATE
+		sellerLegalName: SHOP_CONFIG.sellerPolicy.legalName,
+		sellerRegistrationNumber: SHOP_CONFIG.sellerPolicy.registrationNumber,
+		sellerVatNumber: SHOP_CONFIG.sellerPolicy.vatNumber,
+		sellerAddressLine1: SHOP_CONFIG.sellerPolicy.addressLine1,
+		sellerPostalCode: SHOP_CONFIG.sellerPolicy.postalCode,
+		sellerCity: SHOP_CONFIG.sellerPolicy.city,
+		sellerCountry: SHOP_CONFIG.sellerPolicy.country,
+		sellerEmail: SHOP_CONFIG.contact.sellerEmail,
+		deliveryEstimateEu: SHOP_CONFIG.sellerPolicy.deliveryEstimateEu,
+		deliveryEstimateAsia: SHOP_CONFIG.sellerPolicy.deliveryEstimateAsia,
+		policyEffectiveDate: SHOP_CONFIG.sellerPolicy.effectiveDate
 	};
 }
 
@@ -112,12 +84,12 @@ export function parseWithdrawalConfig(env: Record<string, string | undefined>): 
 	try {
 		const publicResult = v.safeParse(withdrawalPublicEnvSchema, env);
 		if (!publicResult.success) throw new Error('CONFIG_WITHDRAWAL_INVALID');
-		const policyConfig = parseSellerPolicyConfig(env);
+		const policyConfig = parseSellerPolicyConfig();
 		return {
 			dataKey: parseWithdrawalDataKey(env.WITHDRAWAL_DATA_KEY),
 			keyVersion: 1,
 			productionOrigin: publicResult.output.PRODUCTION_ORIGIN,
-			supportEmail: publicResult.output.SUPPORT_EMAIL,
+			supportEmail: SHOP_CONFIG.contact.supportEmail,
 			seller: {
 				legalName: policyConfig.sellerLegalName,
 				registrationNumber: policyConfig.sellerRegistrationNumber,
@@ -148,9 +120,6 @@ export function parsePrivateConfig(env: Record<string, string | undefined>): Pri
 		throw new Error('CONFIG_PRIVATE_INVALID');
 	}
 	if (env.NODE_ENV === 'production' && publicConfig.checkoutEnabled) {
-		if (publicConfig.supportEmail !== 'merch@sveltesociety.dev') {
-			throw new Error('CONFIG_PRIVATE_INVALID');
-		}
 		try {
 			parseWithdrawalConfig(env);
 		} catch {

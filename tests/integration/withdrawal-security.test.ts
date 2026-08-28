@@ -37,7 +37,7 @@ const canaries = {
 	item: 'Artifact Canary Hoodie ZQX-731',
 	internalOrderReference: 'INTERNAL-RECON-CANARY-ZQX-731',
 	receiptBody: 'Receipt Body Canary ZQX-731',
-	plunkBody: 'PLUNK-BODY-CANARY-ZQX-731',
+	emailBody: 'EMAIL-BODY-CANARY-ZQX-731',
 	authorization: 'Bearer authorization-canary-zqx-731',
 	cookie: 'withdrawal_cookie=COOKIE-CANARY-ZQX-731',
 	token: 'TOKEN-CANARY-ZQX-731',
@@ -134,7 +134,7 @@ describe('withdrawal artifact and response security', () => {
 			decision: 'eligible_eu',
 			internalOrderReference: canaries.internalOrderReference,
 			countryCode: 'SE',
-			customerInstructions: canaries.plunkBody,
+			customerInstructions: canaries.emailBody,
 			now
 		});
 
@@ -154,10 +154,10 @@ describe('withdrawal artifact and response security', () => {
 		const worker = new WithdrawalMessageWorker({
 			repository,
 			reader,
-			plunk: {
+			email: {
 				async send(providerMessage) {
 					attemptedProviderBody = providerMessage.html;
-					throw new Error(`provider failure ${canaries.plunkBody}`);
+					throw new Error(`provider failure ${canaries.emailBody}`);
 				}
 			},
 			alerts,
@@ -167,7 +167,7 @@ describe('withdrawal artifact and response security', () => {
 			seller
 		});
 		expect(await worker.attemptReceipt(eligibleMessage.id, now)).toBe('queued');
-		expect(attemptedProviderBody).toContain(canaries.plunkBody);
+		expect(attemptedProviderBody).toContain(canaries.emailBody);
 		expect(repository.getMessage(eligibleMessage.id)?.lastErrorCode).toBe(
 			'WITHDRAWAL_MESSAGE_FAILED'
 		);
@@ -183,8 +183,8 @@ describe('withdrawal artifact and response security', () => {
 				entered_order_reference: canaries.enteredOrderReference,
 				items: canaries.item,
 				internal_order_reference: canaries.internalOrderReference,
-				body: `${canaries.receiptBody} ${canaries.plunkBody}`,
-				provider_response: canaries.plunkBody,
+				body: `${canaries.receiptBody} ${canaries.emailBody}`,
+				provider_response: canaries.emailBody,
 				authorization: canaries.authorization,
 				cookie: canaries.cookie,
 				preview_token: canaries.token,
@@ -219,7 +219,7 @@ describe('withdrawal artifact and response security', () => {
 			reconciliation: {
 				internalOrderReference: canaries.internalOrderReference,
 				countryCode: 'SE',
-				customerInstructions: canaries.plunkBody,
+				customerInstructions: canaries.emailBody,
 				returnOutcome: null,
 				parcelReference: null
 			}

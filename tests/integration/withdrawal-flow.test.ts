@@ -14,7 +14,7 @@ import { OutboxScheduler } from '$lib/server/jobs/scheduler.server';
 import { SqliteWithdrawalRetentionJob } from '$lib/server/jobs/withdrawal-retention.server';
 import { createMcpServer, type McpServices } from '$lib/server/mcp/server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
-import { PlunkError, type PlunkSendInput } from '$lib/server/plunk/gateway';
+import { EmailGatewayError, type EmailSendInput } from '$lib/server/email/gateway';
 import { WithdrawalCaseReader } from '$lib/server/withdrawals/case-reader.server';
 import { decryptWithdrawalPayload } from '$lib/server/withdrawals/crypto.server';
 import {
@@ -113,13 +113,13 @@ function insertPendingMessage(caseId: string, kind: WithdrawalMessageKind, suffi
 	return Number(inserted.lastInsertRowid);
 }
 
-function withdrawalWorker(send: (input: PlunkSendInput) => Promise<{ deliveryId: string }>) {
+function withdrawalWorker(send: (input: EmailSendInput) => Promise<{ deliveryId: string }>) {
 	const alerts = new SqliteAlertService(new SqliteOutboxRepository(database));
 	const reader = new WithdrawalCaseReader({ repository, dataKey, alerts });
 	return new WithdrawalMessageWorker({
 		repository,
 		reader,
-		plunk: { send },
+		email: { send },
 		alerts,
 		from: { name: 'Svelte Society Shop', email: 'merch@sveltesociety.dev' },
 		supportEmail: 'merch@sveltesociety.dev',
@@ -348,10 +348,10 @@ afterEach(async () => {
 });
 
 describe('withdrawal production-shaped flow', () => {
-	it('atomically commits one durable whole-order case, receipt, alert, and event before Plunk failure', async () => {
+	it('atomically commits one durable whole-order case, receipt, alert, and event before email-provider failure', async () => {
 		const dispatcher = {
 			attemptReceipt: vi.fn(async () => {
-				throw new Error('PLUNK_UNAVAILABLE');
+				throw new Error('EMAIL_UNAVAILABLE');
 			})
 		};
 		const submission = new WithdrawalSubmissionService({ repository, dispatcher, dataKey });
@@ -516,9 +516,10 @@ describe('withdrawal production-shaped flow', () => {
 		'resend'
 	] as const)('retries, completes, and permanently alerts the %s message kind', async (kind) => {
 		const { record, messageId: retryMessageId } = await preparePendingMessage(kind);
+		const retryIdempotencyKey = repository.getMessage(retryMessageId)?.idempotencyKey;
 		const sendRetry = vi
-			.fn<(input: PlunkSendInput) => Promise<{ deliveryId: string }>>()
-			.mockRejectedValueOnce(new PlunkError('PLUNK_TIMEOUT'))
+			.fn<(input: EmailSendInput) => Promise<{ deliveryId: string }>>()
+			.mockRejectedValueOnce(new EmailGatewayError('EMAIL_TIMEOUT'))
 			.mockResolvedValueOnce({ deliveryId: `delivery_${kind}_completed` });
 		const retryWorker = withdrawalWorker(sendRetry);
 
@@ -527,11 +528,15 @@ describe('withdrawal production-shaped flow', () => {
 			attemptCount: 1,
 			nextAttemptAt: new Date(submittedAt.getTime() + 60_000),
 			completedAt: null,
-			lastErrorCode: 'PLUNK_TIMEOUT'
+			lastErrorCode: 'EMAIL_TIMEOUT'
 		});
 		await expect(
 			retryWorker.attemptReceipt(retryMessageId, new Date(submittedAt.getTime() + 60_000))
 		).resolves.toBe('delivered');
+		expect(sendRetry.mock.calls.map(([message]) => message.idempotencyKey)).toEqual([
+			retryIdempotencyKey,
+			retryIdempotencyKey
+		]);
 		expect(repository.getMessage(retryMessageId)).toMatchObject({
 			attemptCount: 2,
 			providerDeliveryId: `delivery_${kind}_completed`,
@@ -542,7 +547,7 @@ describe('withdrawal production-shaped flow', () => {
 		const failedMessageId = insertPendingMessage(record.id, kind, 'permanent');
 		const failedWorker = withdrawalWorker(
 			vi.fn(async () => {
-				throw new PlunkError('PLUNK_REQUEST_REJECTED');
+				throw new EmailGatewayError('EMAIL_REQUEST_REJECTED');
 			})
 		);
 		await expect(
@@ -551,7 +556,7 @@ describe('withdrawal production-shaped flow', () => {
 		expect(repository.getMessage(failedMessageId)).toMatchObject({
 			attemptCount: 1,
 			completedAt: new Date(submittedAt.getTime() + 120_000),
-			lastErrorCode: 'PLUNK_REQUEST_REJECTED'
+			lastErrorCode: 'EMAIL_REQUEST_REJECTED'
 		});
 		expect(
 			database

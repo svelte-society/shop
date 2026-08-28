@@ -17,9 +17,9 @@ const SHARED_FIXTURE_ENV = {
 const APPLICATION_FIXTURE_ENV = {
 	SCHEDULER_ENABLED: 'false',
 	DATABASE_BOOTSTRAP: 'true',
-	PLUNK_SECRET_KEY: 'plunk-test-fixture',
-	PLUNK_FROM_NAME: 'Svelte Society Shop',
-	PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev'
+	RESEND_API_KEY: 're_test_fixture',
+	EMAIL_FROM_NAME: 'Svelte Society Shop',
+	EMAIL_FROM_ADDRESS: 'merch@sveltesociety.dev'
 } as const;
 const POLICY_FIXTURE_ENV = {
 	SELLER_LEGAL_NAME: 'Svelte School AB',
@@ -121,10 +121,10 @@ describe('test catalog command portability', () => {
 			DATABASE_PATH: expect.stringMatching(/svelte-society-withdrawal-e2e-\d+\.sqlite$/u),
 			PRODUCTION_ORIGIN: 'https://shop.sveltesociety.dev',
 			SUPPORT_EMAIL: 'merch@sveltesociety.dev',
-			PLUNK_SECRET_KEY: 'sk_test_withdrawal_e2e',
-			PLUNK_FROM_NAME: 'Svelte Society Shop',
-			PLUNK_FROM_EMAIL: 'merch@sveltesociety.dev',
-			PLUNK_BASE_URL: 'https://127.0.0.1:1',
+			RESEND_API_KEY: 're_test_withdrawal_e2e',
+			EMAIL_FROM_NAME: 'Svelte Society Shop',
+			EMAIL_FROM_ADDRESS: 'merch@sveltesociety.dev',
+			RESEND_BASE_URL: 'https://127.0.0.1:1',
 			WITHDRAWAL_DATA_KEY: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/u),
 			...POLICY_FIXTURE_ENV
 		});

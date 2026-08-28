@@ -118,7 +118,7 @@ function completedDelivery(database: ShopDatabase, orderId: string, trackingNumb
 			`INSERT INTO email_deliveries (
 				order_id, kind, tracking_reference, idempotency_key,
 				provider_delivery_id, attempt_count, completed_at
-			) VALUES (?, 'shipping', ?, ?, 'plunk_completed', 1, ?)`
+			) VALUES (?, 'shipping', ?, ?, 'email_completed', 1, ?)`
 		)
 		.run(orderId, trackingNumber, `shipping:${orderId}:${trackingNumber}`, now.toISOString());
 }

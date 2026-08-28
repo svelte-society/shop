@@ -65,7 +65,8 @@ const nextActions: Record<AlertCode, string> = {
 	STYRIA_UNEXPECTED_AUTO_PAID:
 		'Check the Styria credit balance: the integrated order entered production without manual payment.',
 	SCHEDULER_FAILED: 'Inspect the named job run and correct its stable failure code.',
-	SHIPPING_EMAIL_UNSENT: 'Inspect the shipping email outbox job and Plunk delivery status.',
+	SHIPPING_EMAIL_UNSENT:
+		'Inspect the shipping email outbox job and email-provider delivery status.',
 	BACKUP_FAILED: 'Inspect the backup job run and storage configuration before the next cadence.',
 	BACKUP_MISSED: 'Verify the backup schedule and run the documented backup check.',
 	CATALOG_UNAVAILABLE: 'Verify Stripe catalog availability and the last validated cache state.',

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PlunkGateway, PlunkSendInput } from './gateway';
+import type { EmailGateway, EmailSendInput } from './gateway';
 import {
 	createShippingEmailSender,
 	shippingEmailMessage,
@@ -10,7 +10,8 @@ const input: ShippingEmailInput = {
 	recipientEmail: 'ada@example.test',
 	productSummary: '2 × Community Tee (M)',
 	trackingNumber: 'TRACK-2042',
-	supportEmail: 'merch@sveltesociety.dev'
+	supportEmail: 'merch@sveltesociety.dev',
+	idempotencyKey: 'shipping:order_2042:TRACK-2042'
 };
 const from = { name: 'Svelte Society Shop', email: 'merch@sveltesociety.dev' };
 
@@ -21,6 +22,7 @@ describe('shipping email', () => {
 			from,
 			replyTo: 'merch@sveltesociety.dev',
 			subject: 'Your Svelte Society order is on the way',
+			idempotencyKey: 'shipping:order_2042:TRACK-2042',
 			html:
 				'<p>Your Svelte Society merch has shipped.</p>' +
 				'<p>2 × Community Tee (M)</p>' +
@@ -51,18 +53,18 @@ describe('shipping email', () => {
 		expect(message.html).not.toContain('ORDER-2042');
 	});
 
-	it('returns the Plunk provider delivery ID only after the provider accepts the message', async () => {
-		const send = vi.fn(async (message: PlunkSendInput) => {
+	it('returns the provider delivery ID only after the gateway accepts the message', async () => {
+		const send = vi.fn(async (message: EmailSendInput) => {
 			expect(message.subject).toBe('Your Svelte Society order is on the way');
-			return { deliveryId: 'plunk_delivery_2042' };
+			return { deliveryId: 'resend_delivery_2042' };
 		});
 		const sender = createShippingEmailSender(
-			{ send } satisfies PlunkGateway,
+			{ send } satisfies EmailGateway,
 			from,
 			'https://shop.sveltesociety.dev'
 		);
 
-		await expect(sender.send(input)).resolves.toEqual({ deliveryId: 'plunk_delivery_2042' });
+		await expect(sender.send(input)).resolves.toEqual({ deliveryId: 'resend_delivery_2042' });
 		expect(send).toHaveBeenCalledWith(
 			shippingEmailMessage(input, from, 'https://shop.sveltesociety.dev')
 		);
