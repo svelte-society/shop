@@ -201,8 +201,9 @@ export type PaidCheckoutFixtureOptions = {
 	shippingRateId?: string;
 	shippingTaxAmount?: number;
 	lines?: PaidCheckoutFixtureLine[];
-	taxExempt?: 'none' | 'exempt' | 'reverse';
+	taxExempt?: 'none' | 'exempt' | 'reverse' | null;
 	taxIds?: StripeFixtureTaxId[];
+	automaticTaxEnabled?: boolean;
 };
 
 const defaultAddress = (country: string): StripeFixtureAddress => ({
@@ -304,7 +305,9 @@ export function paidCheckoutProviderFixture(
 			taxAmount: Math.round((2_000 * taxBasisPoints) / 10_000)
 		}
 	];
-	const taxExempt = options.taxExempt ?? 'none';
+	const automaticTaxEnabled = options.automaticTaxEnabled ?? true;
+	const taxExempt =
+		options.taxExempt !== undefined ? options.taxExempt : automaticTaxEnabled ? 'none' : null;
 	const taxIds = options.taxIds ?? [];
 	const address = defaultAddress(country);
 	const providerLines = lines.map((line) => stripeLineItem(line));
@@ -374,7 +377,10 @@ export function paidCheckoutProviderFixture(
 			object: 'checkout.session',
 			amount_subtotal: amountSubtotal,
 			amount_total: amountTotal,
-			automatic_tax: { enabled: true, status: 'complete' },
+			automatic_tax: {
+				enabled: automaticTaxEnabled,
+				status: automaticTaxEnabled ? 'complete' : null
+			},
 			client_reference_id: draftId,
 			collected_information: {
 				business_name: null,

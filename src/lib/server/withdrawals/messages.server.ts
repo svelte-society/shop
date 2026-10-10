@@ -22,7 +22,7 @@ export type WithdrawalMessagePreview = {
 
 export const WITHDRAWAL_LEGAL_STATUS_COPY = {
 	eligible_instructions:
-		"Your withdrawal is eligible for the EU change-of-mind process. Follow the return instructions below. Do not send the parcel to the seller's registered address unless the instructions say so.",
+		"Your withdrawal is eligible for the change-of-mind process that applies in the EU and Norway. Follow the return instructions below. Do not send the parcel to the seller's registered address unless the instructions say so.",
 	ineligible_decision:
 		'This order is not eligible for a change-of-mind return. Damaged or incorrect-item support remains available at merch@sveltesociety.dev.',
 	support_handoff:

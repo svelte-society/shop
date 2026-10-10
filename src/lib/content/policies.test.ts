@@ -21,7 +21,7 @@ describe('source-controlled policy documents', () => {
 		for (const [key, document] of Object.entries(documents)) {
 			expect(document.summary).toEqual(expect.any(String));
 			expect(document.summary.length).toBeGreaterThan(20);
-			expect(document.effectiveDate).toBe(key === 'about' ? undefined : '2026-07-19');
+			expect(document.effectiveDate).toBe(key === 'about' ? undefined : '2026-10-10');
 			expect(document.sections.length).toBeGreaterThan(0);
 			for (const section of document.sections) {
 				expect(section.heading).not.toMatch(/[<>]/u);
@@ -40,6 +40,7 @@ describe('source-controlled policy documents', () => {
 
 		expect(shipping).toContain('Where we deliver, what shipping costs');
 		expect(shipping).toContain('EUR');
+		expect(shipping).toContain('Norway');
 		expect(shipping).toContain('European Union except Slovenia');
 		expect(shipping).toContain('Great Britain');
 		expect(shipping).toContain('Asian countries available in the delivery-country picker');
@@ -49,12 +50,13 @@ describe('source-controlled policy documents', () => {
 		expect(shipping).not.toMatch(/EUR\s+\d/u);
 		expect(shipping).toContain('two or more items');
 		expect(shipping).toContain('Estimated delivery: usually 5–7 business days');
-		expect(shipping).toContain('Great Britain: 4–6 working days.');
 		expect(shipping).toContain(
-			'Supported Asian destinations: Production normally takes 1–5 business days'
+			'Norway and supported Asian destinations: Production normally takes 1–5 business days'
 		);
+		expect(shipping).toContain('Great Britain: 4–6 working days.');
 		expect(shipping).toContain('followed by roughly 6–10 business days in transit');
 		expect(shipping).toContain('final amount is confirmed at checkout');
+		expect(shipping).toContain('We do not collect Norwegian VAT on orders to Norway');
 		expect(shipping).toContain('customs duties, brokerage fees, or carrier charges');
 		expect(shipping).toContain('estimates, not guarantees');
 		expect(shipping).not.toMatch(/tax projection|total units|fulfillment partner/iu);
@@ -64,6 +66,7 @@ describe('source-controlled policy documents', () => {
 		const terms = text(createPolicyDocuments().terms);
 
 		expect(terms).toContain('selected delivery country');
+		expect(terms).toContain('For Norway, we also collect no Norwegian VAT at checkout');
 		expect(terms).toContain('Shipping for one item is shown in your cart');
 		expect(terms).toContain('free when you order two or more items');
 		expect(terms).not.toMatch(/Shipping (?:costs|is) EUR\s+\d/u);
@@ -90,7 +93,9 @@ describe('source-controlled policy documents', () => {
 		expect(returns).toContain('You pay the direct return postage');
 		expect(returns).not.toContain('merchandise-specific exclusion');
 		expect(returns).not.toContain('processed manually');
-		expect(returns).toContain('outside the EU');
+		expect(returns).toContain('EU and Norway change-of-mind returns');
+		expect(returns).toContain('eligible consumer in the EU or Norway');
+		expect(returns).toContain('outside the EU and Norway');
 		expect(returns).toContain('do not offer returns or exchanges for change of mind');
 		expect(returns).toContain('faulty, damaged, incorrect, or misdescribed goods');
 	});
@@ -145,7 +150,7 @@ describe('source-controlled policy documents', () => {
 			'European Union: Estimated delivery: usually 5–7 business days. Delivery times are estimates and aren’t guaranteed.'
 		);
 		expect(shipping).toContain(
-			'Supported Asian destinations: Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit.'
+			'Norway and supported Asian destinations: Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit.'
 		);
 		expect(shipping).not.toContain('..');
 	});
@@ -167,6 +172,7 @@ describe('source-controlled policy documents', () => {
 			'Stripe',
 			'receipt',
 			'invoice',
+			'Norway',
 			'European Union except Slovenia',
 			'Great Britain',
 			'selected destinations across Asia',
@@ -182,7 +188,7 @@ describe('source-controlled policy documents', () => {
 			termsDocument.sections.find((section) => section.heading === 'Returns and order problems')
 				?.paragraphs
 		).toContain(
-			'Eligible EU consumers can notify us of withdrawal within the legal deadline. After notifying us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping. Contact us first for the complete return instructions. You may still notify us by any other clear statement.'
+			'Eligible consumers in the EU or Norway can notify us of withdrawal within the legal deadline. After notifying us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping. Contact us first for the complete return instructions. You may still notify us by any other clear statement.'
 		);
 		expect(terms).not.toContain('24-hour');
 	});

@@ -414,7 +414,8 @@ Use a controlled checkout maintenance window:
 - SSR uses the cookie without a Swedish-price hydration flash.
 - Checkout draft freezes the selected destination.
 - Checkout Session allows exactly the selected country.
-- Checkout Session enables Automatic Tax and exclusive shipping.
+- Checkout Session enables Automatic Tax and exclusive shipping, except for Norway's later
+  import-at-delivery exception below.
 - Paid normalization for Sweden 25%, Germany 19%, Finland 25.5%, Hungary 27%, and Asia 0%.
 - Paid and free shipping tax reconciliation.
 - Destination mismatch between draft and Stripe is rejected.
@@ -455,7 +456,8 @@ Also confirm that a two-tee order has free shipping, that Stripe's receipt shows
 - All product and cart prices update coherently from that selection.
 - EU display prices use current standard destination VAT; Asia prices exclude EU VAT and show the import-charge warning.
 - Stripe owns each variant's positive EUR exclusive Price and the paid Shipping Rate amount.
-- Checkout accepts exactly the selected country and uses Automatic Tax.
+- Checkout accepts exactly the selected country and uses Automatic Tax, except for Norway's later
+  import-at-delivery exception below.
 - Checkout's paid totals reconcile as net merchandise plus net shipping plus tax.
 - New orders persist a separate customer-facing retail unit amount.
 - Styria receives that retail unit amount on the parcel invoice payload.
@@ -477,6 +479,16 @@ Specifically superseded:
 - Mixed exclusive-merchandise/inclusive-shipping order invariants.
 
 The destination scope, Styria workflow, Stripe Automatic Tax, OSS operation, free-shipping threshold, policy obligations, admin/MCP model, and all other non-conflicting decisions remain in force.
+
+## 2026-08-20 Norway tax exception
+
+Norway (`NO`) is a non-EU EEA destination with a zero-VAT storefront projection and
+import-at-delivery handling. Its Checkout Session disables both Automatic Tax and tax-ID
+collection. Paid normalization requires `automatic_tax.enabled = false`, a null automatic-tax
+status, and zero merchandise and shipping tax. Customers may instead be assessed import VAT,
+customs duty, brokerage, or carrier fees after checkout. This exception supersedes this document's
+earlier universal Automatic Tax and tax-ID statements for Norway only; all other destination tax
+behavior remains unchanged.
 
 ## References
 

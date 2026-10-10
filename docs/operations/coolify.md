@@ -170,7 +170,13 @@ The Styria endpoint, request timeout, and order brand are reviewed source consta
 requires code review and a deployment; they are not Coolify inputs.
 
 The reviewed destination policy is source controlled in `SUPPORTED_DESTINATIONS`. It includes the
-EU except Slovenia, Great Britain, and the supported Asian destinations; the United States is not selectable.
+EU except Slovenia, plus Norway, Great Britain, and the supported Asian destinations; the United
+States is not selectable.
+
+Norway uses import-at-delivery tax handling. Its Stripe Checkout Session must have automatic tax
+and tax-ID collection disabled, and the completed Session must record zero tax. Do not configure a
+Norway Stripe Tax registration for this implementation; follow the separate approval and VOEC
+handoff gate in `docs/operations/policy-review.md` before changing that model.
 
 Keep `STYRIA_AUTO_SUBMIT_ENABLED=false` during deployment and migration. When enabled, each confirmed
 paid merch order is prepared and created in Styria by the scheduler; production payment remains a manual

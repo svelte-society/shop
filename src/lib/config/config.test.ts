@@ -53,7 +53,7 @@ const sourceSellerPolicyConfig = {
 		'Estimated delivery: usually 5–7 business days. Delivery times are estimates and aren’t guaranteed.',
 	deliveryEstimateAsia:
 		'Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit',
-	policyEffectiveDate: '2026-07-19'
+	policyEffectiveDate: '2026-10-10'
 };
 
 describe('SHOP_CONFIG', () => {
@@ -81,7 +81,7 @@ describe('SHOP_CONFIG', () => {
 					'Estimated delivery: usually 5–7 business days. Delivery times are estimates and aren’t guaranteed.',
 				deliveryEstimateAsia:
 					'Production normally takes 1–5 business days, followed by roughly 6–10 business days in transit',
-				effectiveDate: '2026-07-19'
+				effectiveDate: '2026-10-10'
 			},
 			browser: {
 				catalogImageOrigins: ['https://raw.githubusercontent.com', 'https://wsrv.nl'],

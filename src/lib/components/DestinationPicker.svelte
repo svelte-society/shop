@@ -23,9 +23,15 @@
 		)
 	);
 	let euDestinations = $derived(destinations.filter((option) => option.region === 'eu'));
+	let nonEuEeaDestinations = $derived(
+		destinations.filter((option) => option.region === 'non_eu_eea')
+	);
 	let ukDestinations = $derived(destinations.filter((option) => option.region === 'uk'));
 	let asianDestinations = $derived(destinations.filter((option) => option.region === 'asia'));
 	let filteredEuDestinations = $derived(filtered.filter((option) => option.region === 'eu'));
+	let filteredNonEuEeaDestinations = $derived(
+		filtered.filter((option) => option.region === 'non_eu_eea')
+	);
 	let filteredUkDestinations = $derived(filtered.filter((option) => option.region === 'uk'));
 	let filteredAsianDestinations = $derived(filtered.filter((option) => option.region === 'asia'));
 	let destinationFlag = $derived(countryFlag(destination.countryCode));
@@ -155,6 +161,25 @@
 						{/each}
 						{#if !filteredEuDestinations.length}
 							<p class="empty-result">No EU countries match your search.</p>
+						{/if}
+					</fieldset>
+
+					<fieldset>
+						<legend>EEA outside the EU</legend>
+						{#each nonEuEeaDestinations as option (option.countryCode)}
+							<label class:filtered-out={!matchesQuery(option)} class="destination-option">
+								<input
+									type="radio"
+									name="country"
+									value={option.countryCode}
+									checked={option.countryCode === destination.countryCode}
+									required
+								/>
+								<span>{option.displayName}</span>
+							</label>
+						{/each}
+						{#if !filteredNonEuEeaDestinations.length}
+							<p class="empty-result">No non-EU EEA countries match your search.</p>
 						{/if}
 					</fieldset>
 

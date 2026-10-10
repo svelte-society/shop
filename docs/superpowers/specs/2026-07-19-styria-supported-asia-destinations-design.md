@@ -102,11 +102,13 @@ This avoids taking payment under an old destination policy. A paid order that be
 
 ## Tax and Customs
 
-Stripe automatic tax remains enabled for every Checkout Session.
+Stripe automatic tax remains enabled for every Checkout Session except Norway. Norway explicitly
+disables automatic tax and tax-ID collection so that the shop collects zero Norwegian VAT and the
+recipient handles charges assessed at import.
 
 For EU destinations, the existing Swedish Union OSS configuration calculates destination-country VAT. Slovenia remains excluded.
 
-For destinations outside the EU, Stripe applies the tax treatment supported by the shop's registrations and transaction evidence. The shop does not promise that checkout includes import VAT, customs duty, brokerage, carrier fees, or other border charges. The recipient is responsible for charges assessed after checkout and should check local import rules before ordering.
+For destinations outside the EU other than Norway, Stripe applies the tax treatment supported by the shop's registrations and transaction evidence. The shop does not promise that checkout includes import VAT, customs duty, brokerage, carrier fees, or other border charges. The recipient is responsible for charges assessed after checkout and should check local import rules before ordering.
 
 The shop must not claim that every non-EU order is tax-free. Stripe Tax reporting and registration-threshold monitoring remain operational responsibilities.
 
@@ -122,11 +124,11 @@ The existing EUR 10 single-unit and free two-or-more-unit shipping offer applies
 
 ## Returns, Complaints, and Mandatory Rights
 
-The shop offers no voluntary change-of-mind returns or exchanges outside the EU.
+The shop offers no voluntary change-of-mind returns or exchanges outside the EU or Norway.
 
 The policy must not say “no returns” without qualification. It must preserve mandatory rights that apply to faulty, damaged, incorrect, or misdescribed goods, and any non-waivable consumer rights in the customer's jurisdiction. These cases continue through support and manual review; the shop does not automatically refund Stripe or cancel Styria work.
 
-The existing withdrawal workflow already classifies a valid non-EU country as ineligible for the EU withdrawal process. Asian destinations reuse that behavior and direct the customer to support where mandatory complaint rights may apply.
+The existing withdrawal workflow classifies a valid country outside the supported EU-and-Norway eligibility set as ineligible for the withdrawal process. Asian destinations reuse that behavior and direct the customer to support where mandatory complaint rights may apply.
 
 ## Customer-Facing Copy
 
@@ -150,7 +152,7 @@ Avoid listing “worldwide shipping.” Availability is intentionally narrower a
 
 ### Returns policy: non-EU orders
 
-> We do not offer voluntary returns or exchanges for change of mind outside the EU. This does not limit mandatory rights that may apply to faulty, damaged, incorrect, or misdescribed goods. Contact support before sending anything back.
+> We do not offer voluntary returns or exchanges for change of mind outside the EU or Norway. This does not limit mandatory rights that may apply to faulty, damaged, incorrect, or misdescribed goods. Contact support before sending anything back.
 
 ### Terms
 
@@ -185,7 +187,8 @@ Deployment verification must create a new sandbox Checkout Session and confirm:
 
 - an enabled Asian destination appears in Stripe Checkout;
 - Slovenia and the United States do not appear;
-- Stripe automatic tax completes without an application error;
+- Stripe automatic tax completes without an application error for an enabled Asian destination;
+- Norway has automatic tax and tax-ID collection disabled and completes with zero checkout tax;
 - the success page resolves after sandbox payment; and
 - the paid order remains available for administrator fulfillment review.
 
@@ -201,6 +204,10 @@ Deployment verification must create a new sandbox Checkout Session and confirm:
 ### 2026-08-10 United Kingdom addendum
 
 The original United Kingdom exclusion above applied while the only available evidence was Styria's broad worldwide-service claim. Styria's reviewed [Delivery](https://styriashirts.eu/delivery) page, updated 15 July 2026, now lists Great Britain explicitly in both its rate table and its 4–6-working-day delivery estimate. That country-specific evidence supersedes the original exclusion for ISO country code `GB`. The shop therefore supports `GB` as a separate non-EU region with import-charge disclosures; it does not infer support for any other previously excluded country.
+
+### 2026-08-20 Norway addendum
+
+Norway is added as ISO country code `NO` in a distinct non-EU EEA region, subject to explicit Styria route confirmation in the launch gate below. It uses the reviewed rest-of-world delivery estimate rather than the EU estimate, collects no Norwegian VAT or tax ID at checkout, presents potential import charges, and preserves the change-of-mind rights implemented for the EU and Norway. Styria's broad worldwide-service statement is not treated as country-specific confirmation, and no other destination is inferred from this addition.
 
 ## Launch Gate
 

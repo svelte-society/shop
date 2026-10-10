@@ -27,6 +27,8 @@ export const EU_DESTINATIONS = Object.freeze([
 	'SE'
 ] as const);
 
+export const NON_EU_EEA_DESTINATIONS = Object.freeze(['NO'] as const);
+
 export const UK_DESTINATIONS = Object.freeze(['GB'] as const);
 
 export const ASIA_DESTINATIONS = Object.freeze([
@@ -81,11 +83,13 @@ export const ASIA_DESTINATIONS = Object.freeze([
 
 export type MarketDestination =
 	| (typeof EU_DESTINATIONS)[number]
+	| (typeof NON_EU_EEA_DESTINATIONS)[number]
 	| (typeof UK_DESTINATIONS)[number]
 	| (typeof ASIA_DESTINATIONS)[number];
 
 export const SUPPORTED_DESTINATIONS: readonly MarketDestination[] = Object.freeze([
 	...EU_DESTINATIONS,
+	...NON_EU_EEA_DESTINATIONS,
 	...UK_DESTINATIONS,
 	...ASIA_DESTINATIONS
 ]);

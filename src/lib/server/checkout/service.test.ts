@@ -200,9 +200,9 @@ describe('createCheckoutService', () => {
 	it('freezes the request-resolved destination in the draft and Stripe request', async () => {
 		const { service, stripe } = serviceFixture();
 
-		await service.start([{ priceId: medium.priceId, quantity: 1 }], 'JP');
+		await service.start([{ priceId: medium.priceId, quantity: 1 }], 'NO');
 
-		expect(stripe.creations[0]?.destinationCountry).toBe('JP');
+		expect(stripe.creations[0]?.destinationCountry).toBe('NO');
 	});
 
 	it('rejects the United States before catalog, draft, or provider work', async () => {
@@ -659,6 +659,41 @@ describe('createStripeCheckoutGateway', () => {
 				}
 			},
 			options: { idempotencyKey: 'checkout-draft:draft_123' }
+		});
+	});
+
+	it('disables Stripe tax and tax-ID collection for Norwegian import orders', async () => {
+		let creation: Stripe.Checkout.SessionCreateParams | undefined;
+		const client: StripeCheckoutClient = {
+			checkout: {
+				sessions: {
+					async create(params) {
+						creation = structuredClone(params);
+						return {
+							id: 'cs_test_norway',
+							url: 'https://checkout.stripe.com/c/pay/cs_test_norway'
+						};
+					},
+					async expire(sessionId) {
+						return { id: sessionId };
+					}
+				}
+			}
+		};
+
+		await createStripeCheckoutGateway(client).createSession({
+			draftId: 'draft_norway',
+			destinationCountry: 'NO',
+			lines: [checkoutGatewayLine(medium, 1)],
+			shippingRateId: 'shr_paid_10_eur',
+			successUrl: 'https://shop.sveltesociety.dev/checkout/success',
+			cancelUrl: 'https://shop.sveltesociety.dev/checkout/cancel'
+		});
+
+		expect(creation).toMatchObject({
+			automatic_tax: { enabled: false },
+			tax_id_collection: { enabled: false },
+			shipping_address_collection: { allowed_countries: ['NO'] }
 		});
 	});
 

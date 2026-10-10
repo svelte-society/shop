@@ -67,7 +67,7 @@ describe('withdrawalMessage', () => {
 
 		expect(message.text).toContain(WITHDRAWAL_LEGAL_STATUS_COPY.eligible_instructions);
 		expect(WITHDRAWAL_LEGAL_STATUS_COPY.eligible_instructions).toBe(
-			"Your withdrawal is eligible for the EU change-of-mind process. Follow the return instructions below. Do not send the parcel to the seller's registered address unless the instructions say so."
+			"Your withdrawal is eligible for the change-of-mind process that applies in the EU and Norway. Follow the return instructions below. Do not send the parcel to the seller's registered address unless the instructions say so."
 		);
 		expect(message.text).toContain('Send to Return & Co <Dock 2>.');
 	});
@@ -87,7 +87,9 @@ describe('withdrawalMessage', () => {
 
 		expect(message.text).toContain(WITHDRAWAL_LEGAL_STATUS_COPY.support_handoff);
 		expect(message.text).toContain('merch@sveltesociety.dev');
-		expect(message.text).not.toContain('eligible for the EU change-of-mind process');
+		expect(message.text).not.toContain(
+			'eligible for the change-of-mind process that applies in the EU and Norway'
+		);
 	});
 
 	it.each(['receipt', 'eligible_instructions', 'ineligible_decision', 'support_handoff'] as const)(

@@ -4,6 +4,9 @@ Production-shaped SvelteKit storefront and fulfillment service for Svelte Societ
 The application uses SQLite as its system of record and is deployed as exactly one adapter-node
 process with a persistent `/data` volume.
 
+Supported delivery regions are Norway, Great Britain, the European Union except Slovenia, and
+selected destinations in Asia.
+
 ## Local checks
 
 ```sh
@@ -29,6 +32,6 @@ The example environment deliberately keeps `STOREFRONT_ENABLED=false` and
 - [Encrypted backup and restore](docs/operations/backup-restore.md)
 - [Policy and seller review gate](docs/operations/policy-review.md)
 
-Checkout remains blocked until the production configuration, qualified Swedish/EU legal review,
-accounting approval, and all documented launch gates are complete. The withdrawal route can be
-deployed and verified while both storefront and checkout remain off.
+Checkout remains blocked until the production configuration, qualified legal review for every
+supported jurisdiction, accounting approval, and all documented launch gates are complete. The
+withdrawal route can be deployed and verified while both storefront and checkout remain off.

@@ -568,7 +568,7 @@ describe('withdrawal production-shaped flow', () => {
 		).toEqual([{ alert_code: 'WITHDRAWAL_MESSAGE_UNSENT', alert_subject_id: record.reference }]);
 	});
 
-	it('executes every authorized MCP transition and preserves non-EU support handling', async () => {
+	it('executes every authorized MCP transition, including EEA eligibility, and preserves non-EU support handling', async () => {
 		const actionAt = new Date('2026-07-17T10:00:00.000Z');
 		const eligible = await createQueuedCase({
 			...partialInput,
@@ -595,7 +595,7 @@ describe('withdrawal production-shaped flow', () => {
 			expected_revision: 2,
 			decision: 'eligible_eu',
 			internal_order_reference: 'internal-eligible-order',
-			country_code: 'SE',
+			country_code: 'NO',
 			customer_instructions: 'Use the reviewed registered return address.'
 		});
 		await callMcpTool(server, 'record_withdrawal_return', {

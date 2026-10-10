@@ -71,6 +71,14 @@ describe('storefront home page', () => {
 		await expect
 			.element(page.getByRole('heading', { name: 'Your purchase supports' }))
 			.toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'Shipping to Norway, Great Britain, the EU except Slovenia, and selected destinations in Asia.',
+					{ exact: true }
+				)
+			)
+			.toBeVisible();
 
 		for (const item of [
 			'Community events',

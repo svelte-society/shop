@@ -85,7 +85,8 @@
 			<article>
 				<h3>Regions</h3>
 				<p>
-					Shipping across the EU, except Slovenia, Great Britain, and selected destinations in Asia.
+					Shipping to Norway, Great Britain, the EU except Slovenia, and selected destinations in
+					Asia.
 				</p>
 			</article>
 			<article>

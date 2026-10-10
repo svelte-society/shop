@@ -320,6 +320,34 @@ describe('WithdrawalWorkflowService', () => {
 		expect(raw).not.toContain('prepaid label');
 	});
 
+	it('treats Norway as EEA-eligible while retaining the compatible eligible_eu token', () => {
+		workflow.beginReview({
+			reference,
+			expectedStatus: 'submitted',
+			expectedRevision: 1,
+			now: actionAt
+		});
+
+		const result = workflow.recordEligibility({
+			reference,
+			expectedStatus: 'reviewing',
+			expectedRevision: 2,
+			decision: 'eligible_eu',
+			internalOrderReference: 'internal-order-42',
+			countryCode: ' no ',
+			customerInstructions: 'Use the reviewed return address.',
+			now: new Date('2026-07-17T10:05:00.000Z')
+		});
+
+		expect(result).toEqual({ reference, status: 'awaiting_return', revision: 3 });
+		expect(repository.getByReference(reference)).toMatchObject({
+			eligibility: 'eligible_eu'
+		});
+		expect(reader.inspectActive(reference).payload.reconciliation).toMatchObject({
+			countryCode: 'NO'
+		});
+	});
+
 	it.each([
 		{
 			decision: 'ineligible_non_eu' as const,
@@ -423,6 +451,12 @@ describe('WithdrawalWorkflowService', () => {
 			label: 'EU ineligible decision',
 			decision: 'ineligible_non_eu' as const,
 			countryCode: 'SE',
+			code: 'WITHDRAWAL_COUNTRY_INVALID'
+		},
+		{
+			label: 'EEA ineligible decision',
+			decision: 'ineligible_non_eu' as const,
+			countryCode: 'NO',
 			code: 'WITHDRAWAL_COUNTRY_INVALID'
 		},
 		{

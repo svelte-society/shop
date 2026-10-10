@@ -18,6 +18,7 @@ const TAX_RATE_ID_PATTERN = /^txr_[A-Za-z0-9_]+$/;
 const LINE_PAGE_LIMIT = 100;
 const MAX_CHECKOUT_LINES = 20;
 const MAX_CHECKOUT_UNITS = 20;
+const NORWAY_COUNTRY_CODE = 'NO';
 const SESSION_EXPANSIONS = [
 	'customer',
 	'customer.tax_ids',
@@ -292,11 +293,26 @@ function taxIdKey(taxId: { type: string; value: string }): string {
 	return `${taxId.type}\u0000${taxId.value}`;
 }
 
+function normalizeTaxExempt(value: unknown, allowUnassessed: boolean): TaxExempt {
+	if (allowUnassessed && value === null) return 'none';
+	if (!isExactNonEmptyString(value) || !TAX_EXEMPT_VALUES.has(value)) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	return value as TaxExempt;
+}
+
 function validateCustomer(session: UnknownRecord): {
 	customerId: string;
 	destinationCountry: string;
 	taxExempt: TaxExempt;
 } {
+	const sessionShipping = shippingIdentity(session);
+	const destinationCountry = sessionShipping.address.country;
+	if (!isSupportedDestination(destinationCountry)) {
+		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
+	}
+	const allowUnassessedTaxStatus = destinationCountry === NORWAY_COUNTRY_CODE;
+
 	const customer = session.customer;
 	if (
 		!isRecord(customer) ||
@@ -306,11 +322,11 @@ function validateCustomer(session: UnknownRecord): {
 		!isExactNonEmptyString(customer.email) ||
 		!isExactNonEmptyString(customer.phone) ||
 		!isRecord(customer.shipping) ||
-		!isExactNonEmptyString(customer.shipping.name) ||
-		!TAX_EXEMPT_VALUES.has(customer.tax_exempt as string)
+		!isExactNonEmptyString(customer.shipping.name)
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
+	const customerTaxExempt = normalizeTaxExempt(customer.tax_exempt, allowUnassessedTaxStatus);
 	const customerName = normalizeOptionalCustomerName(customer.name);
 
 	const customerDetails = session.customer_details;
@@ -318,11 +334,16 @@ function validateCustomer(session: UnknownRecord): {
 		!isRecord(customerDetails) ||
 		!isExactNonEmptyString(customerDetails.email) ||
 		!isExactNonEmptyString(customerDetails.phone) ||
-		!TAX_EXEMPT_VALUES.has(customerDetails.tax_exempt as string) ||
-		customerDetails.tax_exempt !== customer.tax_exempt ||
 		customerDetails.email !== customer.email ||
 		customerDetails.phone !== customer.phone
 	) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	const customerDetailsTaxExempt = normalizeTaxExempt(
+		customerDetails.tax_exempt,
+		allowUnassessedTaxStatus
+	);
+	if (customerDetailsTaxExempt !== customerTaxExempt) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
 	const customerDetailsName = normalizeOptionalCustomerName(customerDetails.name);
@@ -358,14 +379,13 @@ function validateCustomer(session: UnknownRecord): {
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
-	if (
-		customer.tax_exempt === 'reverse' &&
-		!sessionTaxIds.some((taxId) => taxId.type === 'eu_vat')
-	) {
+	if (destinationCountry === NORWAY_COUNTRY_CODE && sessionTaxIds.length !== 0) {
+		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
+	}
+	if (customerTaxExempt === 'reverse' && !sessionTaxIds.some((taxId) => taxId.type === 'eu_vat')) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
 
-	const sessionShipping = shippingIdentity(session);
 	const customerShippingAddress = normalizeShippingAddress(customer.shipping.address);
 	const customerShippingPhone = customer.shipping.phone;
 	if (
@@ -377,14 +397,10 @@ function validateCustomer(session: UnknownRecord): {
 	) {
 		fail('STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID');
 	}
-	const destinationCountry = sessionShipping.address.country;
-	if (!isSupportedDestination(destinationCountry)) {
-		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
-	}
 	return {
 		customerId: customer.id,
 		destinationCountry,
-		taxExempt: customer.tax_exempt as TaxExempt
+		taxExempt: customerTaxExempt
 	};
 }
 
@@ -625,8 +641,14 @@ function normalizePaidCheckout(
 		fail('STRIPE_PAID_CHECKOUT_DESTINATION_INVALID');
 	}
 
-	if (
-		!isRecord(session.automatic_tax) ||
+	if (!isRecord(session.automatic_tax)) {
+		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+	}
+	if (destinationCountry === NORWAY_COUNTRY_CODE) {
+		if (session.automatic_tax.enabled !== false || session.automatic_tax.status !== null) {
+			fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+		}
+	} else if (
 		session.automatic_tax.enabled !== true ||
 		session.automatic_tax.status !== 'complete'
 	) {
@@ -674,6 +696,9 @@ function normalizePaidCheckout(
 		[lineTax, session.shipping_cost.amount_tax],
 		'STRIPE_PAID_CHECKOUT_TAX_INVALID'
 	);
+	if (destinationCountry === NORWAY_COUNTRY_CODE && providerTax !== 0) {
+		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
+	}
 	if (taxExempt !== 'none' && providerTax !== 0) {
 		fail('STRIPE_PAID_CHECKOUT_TAX_INVALID');
 	}

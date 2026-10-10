@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	ASIA_DESTINATIONS,
 	EU_DESTINATIONS,
+	NON_EU_EEA_DESTINATIONS,
 	UK_DESTINATIONS,
 	SUPPORTED_DESTINATIONS,
 	isSupportedDestination
@@ -34,6 +35,7 @@ const expectedDestinations = [
 	'SK',
 	'ES',
 	'SE',
+	'NO',
 	'GB',
 	'AE',
 	'AF',
@@ -87,9 +89,11 @@ const expectedDestinations = [
 describe('Styria-supported destinations', () => {
 	it('exports the reviewed regional lists', () => {
 		expect(EU_DESTINATIONS).toEqual(expectedDestinations.slice(0, 26));
+		expect(NON_EU_EEA_DESTINATIONS).toEqual(['NO']);
 		expect(UK_DESTINATIONS).toEqual(['GB']);
-		expect(ASIA_DESTINATIONS).toEqual(expectedDestinations.slice(27));
+		expect(ASIA_DESTINATIONS).toEqual(expectedDestinations.slice(28));
 		expect(Object.isFrozen(EU_DESTINATIONS)).toBe(true);
+		expect(Object.isFrozen(NON_EU_EEA_DESTINATIONS)).toBe(true);
 		expect(Object.isFrozen(UK_DESTINATIONS)).toBe(true);
 		expect(Object.isFrozen(ASIA_DESTINATIONS)).toBe(true);
 	});
@@ -103,6 +107,7 @@ describe('Styria-supported destinations', () => {
 
 	it('recognizes only members of the source-controlled policy', () => {
 		expect(isSupportedDestination('SE')).toBe(true);
+		expect(isSupportedDestination('NO')).toBe(true);
 		expect(isSupportedDestination('JP')).toBe(true);
 		expect(isSupportedDestination('US')).toBe(false);
 		expect(isSupportedDestination('SI')).toBe(false);

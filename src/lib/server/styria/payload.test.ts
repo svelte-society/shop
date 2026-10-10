@@ -206,6 +206,18 @@ describe('buildStyriaPayload', () => {
 		expect(build({ order, fulfillment }).shipping_address.country).toBe('United Kingdom');
 	});
 
+	it('converts Norway using Styria’s country name', () => {
+		const fulfillment = fulfillmentFixture();
+		fulfillment.address.countryCode = 'NO';
+		fulfillment.address.city = 'Oslo';
+		fulfillment.address.postalCode = '0150';
+		fulfillment.address.state = 'Oslo';
+		const order = orderFixture();
+		order.destinationCountry = 'NO';
+
+		expect(build({ order, fulfillment }).shipping_address.country).toBe('Norway');
+	});
+
 	it('copies checkout design placements and binds the immutable design reference', () => {
 		const order = orderFixture();
 		const payload = build({ order });

@@ -10,6 +10,7 @@ type ExpiredCheckoutSession = Pick<Stripe.Checkout.Session, 'id'>;
 
 const CHECKOUT_SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]+$/;
 const STRIPE_CHECKOUT_HOSTNAME = 'checkout.stripe.com';
+const NORWAY_COUNTRY_CODE = 'NO';
 
 export type StripeCheckoutClient = {
 	checkout: {
@@ -56,6 +57,7 @@ export function createStripeCheckoutGateway(client: StripeCheckoutClient): Strip
 	return {
 		async createSession(input: CreateCheckoutInput) {
 			const metadata = checkoutMetadata(input.draftId, input.destinationCountry);
+			const collectTaxAtCheckout = input.destinationCountry !== NORWAY_COUNTRY_CODE;
 			const session = await client.checkout.sessions.create(
 				{
 					mode: 'payment',
@@ -74,8 +76,8 @@ export function createStripeCheckoutGateway(client: StripeCheckoutClient): Strip
 						metadata: { catalog_price_id: line.priceId }
 					})),
 					customer_creation: 'always',
-					automatic_tax: { enabled: true },
-					tax_id_collection: { enabled: true },
+					automatic_tax: { enabled: collectTaxAtCheckout },
+					tax_id_collection: { enabled: collectTaxAtCheckout },
 					phone_number_collection: { enabled: true },
 					invoice_creation: { enabled: true },
 					consent_collection: { terms_of_service: 'required' },

@@ -62,7 +62,7 @@ function shippingDocument(config: PolicyContent): PolicyDocument {
 			{
 				heading: 'Where we ship',
 				paragraphs: [
-					'We currently ship to the European Union except Slovenia, Great Britain, and the Asian countries available in the delivery-country picker. If a country is not available at checkout, we cannot ship there.',
+					'We currently ship to Norway, Great Britain, the European Union except Slovenia, and the Asian countries available in the delivery-country picker. If a country is not available at checkout, we cannot ship there.',
 					'Available destinations may change if a carrier route is paused.'
 				]
 			},
@@ -78,7 +78,7 @@ function shippingDocument(config: PolicyContent): PolicyDocument {
 				paragraphs: [
 					`European Union: ${sentence(config.deliveryEstimateEu)}`,
 					'Great Britain: 4–6 working days.',
-					`Supported Asian destinations: ${sentence(config.deliveryEstimateAsia)}`,
+					`Norway and supported Asian destinations: ${sentence(config.deliveryEstimateAsia)}`,
 					'These times are estimates, not guarantees. We send tracking when the carrier provides it, although tracking may not be available for every destination.'
 				]
 			},
@@ -86,7 +86,7 @@ function shippingDocument(config: PolicyContent): PolicyDocument {
 				heading: 'VAT and import charges',
 				paragraphs: [
 					'For EU orders, prices include VAT for your selected delivery country. The final amount is confirmed at checkout from your delivery details.',
-					'Orders outside the EU may be charged import VAT, customs duties, brokerage fees, or carrier charges after checkout. These charges are not included in your order total and are your responsibility. Check your local import rules before ordering.'
+					'We do not collect Norwegian VAT on orders to Norway. Orders outside the EU may be charged import VAT, customs duties, brokerage fees, or carrier charges after checkout. Any charges assessed after checkout are not included in your order total and are your responsibility. Check your local import rules before ordering.'
 				]
 			},
 			{
@@ -116,9 +116,9 @@ function returnsDocument(config: PolicyContent): PolicyDocument {
 				]
 			},
 			{
-				heading: 'EU change-of-mind returns',
+				heading: 'EU and Norway change-of-mind returns',
 				paragraphs: [
-					'If you are an eligible EU consumer, you normally have 14 days after receiving your order to tell us that you want to withdraw. If an order arrives in parts, the period starts when the final part arrives.',
+					'If you are an eligible consumer in the EU or Norway, you normally have 14 days after receiving your order to tell us that you want to withdraw. If an order arrives in parts, the period starts when the final part arrives.',
 					'After telling us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping.'
 				],
 				links: [
@@ -135,9 +135,9 @@ function returnsDocument(config: PolicyContent): PolicyDocument {
 				links: [{ label: 'Konsumentverket guidance on faulty goods', href: consumerComplaints }]
 			},
 			{
-				heading: 'Orders outside the EU',
+				heading: 'Orders outside the EU and Norway',
 				paragraphs: [
-					'We do not offer returns or exchanges for change of mind outside the EU. This does not affect rights that may apply to faulty, damaged, incorrect, or misdescribed goods, or other rights that cannot be waived where you live.'
+					'We do not offer returns or exchanges for change of mind outside the EU or Norway. This does not affect rights that may apply to faulty, damaged, incorrect, or misdescribed goods, or other rights that cannot be waived where you live.'
 				]
 			},
 			{
@@ -250,7 +250,7 @@ function termsDocument(config: PolicyContent): PolicyDocument {
 			{
 				heading: 'Prices, VAT, and shipping',
 				paragraphs: [
-					'All prices are in EUR and depend on your selected delivery country. EU prices include local VAT. Prices outside the EU do not include EU VAT, and import charges may apply after checkout.',
+					'All prices are in EUR and depend on your selected delivery country. EU prices include local VAT. Prices outside the EU do not include EU VAT. For Norway, we also collect no Norwegian VAT at checkout; import charges may apply after checkout.',
 					'Shipping for one item is shown in your cart. Shipping is free when you order two or more items. See Shipping for delivery times and information about charges outside the EU.'
 				],
 				links: [{ label: 'Read about shipping', href: '/shipping' }]
@@ -264,7 +264,7 @@ function termsDocument(config: PolicyContent): PolicyDocument {
 			{
 				heading: 'Delivery',
 				paragraphs: [
-					'We deliver to the European Union except Slovenia, Great Britain, and selected destinations across Asia. The delivery-country picker shows the countries currently available.',
+					'We deliver to Norway, Great Britain, the European Union except Slovenia, and selected destinations across Asia. The delivery-country picker shows the countries currently available.',
 					'After payment, we prepare your order for production. Delivery times are estimates, not guarantees. We send tracking when it becomes available.'
 				]
 			},
@@ -272,7 +272,7 @@ function termsDocument(config: PolicyContent): PolicyDocument {
 				heading: 'Returns and order problems',
 				paragraphs: [
 					`Email ${config.supportEmail} if your order is damaged, incorrect, or otherwise needs support. The Returns page explains change-of-mind returns, faulty items, postage, and refunds.`,
-					'Eligible EU consumers can notify us of withdrawal within the legal deadline. After notifying us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping. Contact us first for the complete return instructions. You may still notify us by any other clear statement.'
+					'Eligible consumers in the EU or Norway can notify us of withdrawal within the legal deadline. After notifying us, send the goods to the return address we provide in Sweden within 14 days. You pay the direct return postage, and we recommend tracked shipping. Contact us first for the complete return instructions. You may still notify us by any other clear statement.'
 				],
 				links: [
 					{ label: `Email ${config.supportEmail}`, href: `mailto:${config.supportEmail}` },

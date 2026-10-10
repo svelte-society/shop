@@ -50,10 +50,12 @@ Every mutation requires the exact current `expected_status` and `expected_revisi
    Record that internal reference and reviewed two-letter country with
    `record_withdrawal_eligibility`.
 3. Choose exactly one reviewed path:
-   - `eligible_eu`: requires customer-safe return instructions; the case moves to
-     `awaiting_return`.
-   - `ineligible_non_eu`: sends the reviewed non-EU decision while explicitly preserving
-     damaged/incorrect-item support; the case moves to `ineligible`.
+   - `eligible_eu`: this legacy persisted/API token covers supported EU countries and `NO`
+     (Norway). It requires customer-safe return instructions; the case moves to `awaiting_return`.
+   - `ineligible_non_eu`: use only for a destination outside that eligible set; never choose it for
+     `NO` (Norway). It sends the reviewed ineligible decision while explicitly preserving
+     damaged/incorrect-item support;
+     the case moves to `ineligible`.
    - `support_handling`: for damaged or incorrect-item support. It preserves the submitted notice
      and reconciliation while moving to `support_handling`; it is not a withdrawal denial or an
      automated fulfillment action.

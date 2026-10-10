@@ -70,6 +70,14 @@ describe('POST /preferences/destination', () => {
 		expect(sets[0]).toMatchObject({ name: 'shop_destination_v1', value: 'GB' });
 	});
 
+	it('stores Norway as a supported non-EU EEA destination', async () => {
+		const { response, sets } = await post('country=NO&returnTo=%2Fproducts');
+
+		expect(response.status).toBe(303);
+		expect(response.headers.get('location')).toBe('/products');
+		expect(sets[0]).toMatchObject({ name: 'shop_destination_v1', value: 'NO' });
+	});
+
 	it('uses the injected secure cookie setting', async () => {
 		const { response, sets } = await post('country=DE&returnTo=%2Fcart', {
 			secure: false

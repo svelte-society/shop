@@ -137,4 +137,27 @@ describe('CartSummary checkout action', () => {
 			)
 			.toBeVisible();
 	});
+
+	it('keeps Norway totals EU-VAT-exclusive and warns that import charges may apply', async () => {
+		const destination = pricingDestination('NO');
+		render(CartSummary, {
+			totalUnits: 1,
+			cartDisplayPrice: displayCartPrice(
+				[{ netUnitCents: 2_000, quantity: 1 }],
+				destination,
+				1_000
+			),
+			destination,
+			checkoutEnabled: true
+		});
+
+		await expect.element(page.getByText('EU VAT', { exact: true })).toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'Estimated for delivery to Norway. Checkout confirms the final total; import charges may apply.'
+				)
+			)
+			.toBeVisible();
+	});
 });

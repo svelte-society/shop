@@ -25,8 +25,9 @@ const ISO_3166_ALPHA_2 = new Set(
 		'VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'
 	).split(' ')
 );
-const EU_27 = new Set(
-	'AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE'.split(' ')
+// Persisted/API decision tokens retain their legacy `eligible_eu` naming for compatibility.
+const WITHDRAWAL_ELIGIBLE_COUNTRIES = new Set(
+	'AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE NO'.split(' ')
 );
 const MCP_PREVIEW_CONTEXT = 'svelte-society-withdrawal-mcp-preview-v1';
 const PREVIEW_LIFETIME_MILLISECONDS = 10 * 60_000;
@@ -145,8 +146,8 @@ function validateEligibility(input: RecordWithdrawalEligibilityInput): string {
 		throw new WithdrawalWorkflowError('WITHDRAWAL_COUNTRY_INVALID');
 	}
 	if (
-		(input.decision === 'eligible_eu' && !EU_27.has(countryCode)) ||
-		(input.decision === 'ineligible_non_eu' && EU_27.has(countryCode))
+		(input.decision === 'eligible_eu' && !WITHDRAWAL_ELIGIBLE_COUNTRIES.has(countryCode)) ||
+		(input.decision === 'ineligible_non_eu' && WITHDRAWAL_ELIGIBLE_COUNTRIES.has(countryCode))
 	) {
 		throw new WithdrawalWorkflowError('WITHDRAWAL_COUNTRY_INVALID');
 	}

@@ -102,6 +102,22 @@ describe('Stripe fulfillment details', () => {
 		]);
 	});
 
+	it('accepts a Norwegian fulfillment address from the source-controlled destination policy', async () => {
+		const session = sessionFixture();
+		session.customer.shipping.address.city = 'Oslo';
+		session.customer.shipping.address.state = 'Oslo';
+		session.customer.shipping.address.postal_code = '0150';
+		session.customer.shipping.address.country = 'NO';
+
+		await expect(
+			createStripeFulfillmentGateway(new ContractStripeClient(session)).retrieveFulfillmentDetails(
+				'cs_test_fulfillment'
+			)
+		).resolves.toMatchObject({
+			address: { city: 'Oslo', postalCode: '0150', countryCode: 'NO' }
+		});
+	});
+
 	it('uses the current Customer phone when the optional shipping phone is absent', async () => {
 		const session = sessionFixture();
 		session.customer.shipping.phone = null as unknown as string;

@@ -276,6 +276,40 @@ describe('checkout to Stripe webhook intake', () => {
 		});
 	});
 
+	it('records a paid Norwegian customer as a supported non-EU EEA destination', async () => {
+		const { order } = await intakePaidOrder('evt_test_norway_customer', {
+			quantity: 1,
+			country: 'NO',
+			automaticTaxEnabled: false,
+			shippingGrossAmount: 1000,
+			shippingTaxAmount: 0,
+			taxAmount: 0
+		});
+
+		expect(order).toMatchObject({
+			destinationCountry: 'NO',
+			amounts: { shipping: 1_000, shippingTax: 0, tax: 0, total: 3_000 },
+			paymentStatus: 'paid'
+		});
+	});
+
+	it('rejects a paid Norwegian order whose provider snapshot contains checkout tax', async () => {
+		const { event, service } = paidOrderAttempt('evt_test_norway_positive_tax', {
+			quantity: 1,
+			country: 'NO',
+			automaticTaxEnabled: false,
+			shippingGrossAmount: 1000,
+			shippingTaxAmount: 0,
+			taxAmount: 500
+		});
+
+		await expect(service.handle(JSON.stringify(event), 'sig_test')).rejects.toMatchObject({
+			code: 'STRIPE_PAID_CHECKOUT_TAX_INVALID',
+			retryable: false
+		});
+		expect(database.prepare('SELECT count(*) AS count FROM orders').get()).toEqual({ count: 0 });
+	});
+
 	it('records a reverse-charge order only with its verified EU VAT path', async () => {
 		const { order } = await intakePaidOrder('evt_test_reverse_charge', {
 			quantity: 1,

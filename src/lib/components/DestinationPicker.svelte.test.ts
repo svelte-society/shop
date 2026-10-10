@@ -21,6 +21,7 @@ const destination: PricingDestination = {
 const destinations: readonly DestinationOption[] = [
 	{ countryCode: 'DE', displayName: 'Germany', region: 'eu' },
 	{ countryCode: 'SE', displayName: 'Sweden', region: 'eu' },
+	{ countryCode: 'NO', displayName: 'Norway', region: 'non_eu_eea' },
 	{ countryCode: 'GB', displayName: 'United Kingdom', region: 'uk' },
 	{ countryCode: 'JP', displayName: 'Japan', region: 'asia' }
 ];
@@ -71,6 +72,8 @@ describe('DestinationPicker', () => {
 			page.getByText('We’ll show your local tax treatment before checkout.').query()
 		).toBeNull();
 		await expect.element(page.getByRole('group', { name: 'EU countries' })).toBeVisible();
+		await expect.element(page.getByRole('group', { name: 'EEA outside the EU' })).toBeVisible();
+		await expect.element(page.getByRole('radio', { name: 'Norway' })).toBeVisible();
 		await expect.element(page.getByRole('group', { name: 'United Kingdom' })).toBeVisible();
 		await expect.element(page.getByRole('radio', { name: 'United Kingdom' })).toBeVisible();
 		await expect.element(page.getByRole('group', { name: 'Asia countries' })).toBeVisible();

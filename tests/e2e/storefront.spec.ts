@@ -161,6 +161,31 @@ test('country picker keeps its actions visible while only the country list scrol
 	);
 });
 
+test('country picker selects Norway and persists its non-EU pricing treatment', async ({
+	page
+}) => {
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Choose delivery country, currently Sweden' }).click();
+	await expect(page.getByRole('group', { name: 'EEA outside the EU' })).toBeVisible();
+	await page.getByRole('radio', { name: 'Norway' }).click();
+	await page.getByRole('button', { name: 'Update country' }).click();
+
+	const norwayTrigger = page.getByRole('button', {
+		name: 'Choose delivery country, currently Norway'
+	});
+	await expect(norwayTrigger).toBeVisible();
+	await expect(norwayTrigger).toContainText('🇳🇴');
+	await expect(
+		page.getByText(
+			'€10.00 excluding EU VAT for one item. Free shipping when you pick two or more.',
+			{ exact: true }
+		)
+	).toBeVisible();
+
+	await page.reload();
+	await expect(norwayTrigger).toBeVisible();
+});
+
 test('mobile country dialog focuses its search field without undersizing it', async ({ page }) => {
 	await page.setViewportSize({ width: 320, height: 720 });
 	await page.goto('/');

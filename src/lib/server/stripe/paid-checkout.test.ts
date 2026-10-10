@@ -893,15 +893,16 @@ describe('Stripe paid Checkout normalization', () => {
 	});
 
 	it.each([
-		['SE', 500, 200, 2_500, 3_500],
-		['DE', 380, 160, 2_380, 3_380],
-		['FI', 510, 203, 2_510, 3_510],
-		['HU', 540, 213, 2_540, 3_540],
-		['JP', 0, 0, 2_000, 3_000]
+		['SE', 500, 200, 2_500, 3_500, true],
+		['DE', 380, 160, 2_380, 3_380, true],
+		['FI', 510, 203, 2_510, 3_510, true],
+		['HU', 540, 213, 2_540, 3_540, true],
+		['NO', 0, 0, 2_000, 3_000, false],
+		['JP', 0, 0, 2_000, 3_000, true]
 	] as const)(
 		'normalizes the v4 inclusive fixed-shipping %s pricing matrix',
-		async (country, merchandiseTax, shippingTax, retailUnitAmount, total) => {
-			const fixture = paidCheckoutProviderFixture({ country });
+		async (country, merchandiseTax, shippingTax, retailUnitAmount, total, automaticTaxEnabled) => {
+			const fixture = paidCheckoutProviderFixture({ country, automaticTaxEnabled });
 			const snapshot = await createStripeOrderGateway(
 				new ContractStripeClient(fixture)
 			).retrievePaidCheckout(fixture.session.id);
@@ -921,6 +922,102 @@ describe('Stripe paid Checkout normalization', () => {
 			});
 		}
 	);
+
+	it('rejects a Norwegian checkout if automatic tax was enabled', async () => {
+		const fixture = paidCheckoutProviderFixture({ country: 'NO' });
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_TAX_INVALID'
+		);
+	});
+
+	it('accepts Stripe unassessed tax status for a zero-tax Norwegian import order', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			country: 'NO',
+			automaticTaxEnabled: false
+		});
+		expandedCustomer(fixture).tax_exempt = 'none';
+
+		await expect(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			)
+		).resolves.toMatchObject({
+			destinationCountry: 'NO',
+			amounts: { tax: 0 }
+		});
+	});
+
+	it.each([
+		[
+			'expanded Customer',
+			(fixture: PaidCheckoutProviderFixture) => {
+				delete (expandedCustomer(fixture) as Partial<StripeFixtureCustomer>).tax_exempt;
+			}
+		],
+		[
+			'Session customer details',
+			(fixture: PaidCheckoutProviderFixture) => {
+				if (!fixture.session.customer_details) throw new Error();
+				delete (fixture.session.customer_details as { tax_exempt?: unknown }).tax_exempt;
+			}
+		]
+	])('rejects a missing Norwegian tax status on the %s', async (_label, mutate) => {
+		const fixture = paidCheckoutProviderFixture({
+			country: 'NO',
+			automaticTaxEnabled: false
+		});
+		mutate(fixture);
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
+	it('rejects tax IDs on a Norwegian checkout whose tax-ID collection is disabled', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			country: 'NO',
+			automaticTaxEnabled: false,
+			taxIds: [{ type: 'us_ein', value: '12-3456789' }]
+		});
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_CUSTOMER_INVALID'
+		);
+	});
+
+	it('rejects positive provider tax on a Norwegian import order', async () => {
+		const fixture = paidCheckoutProviderFixture({
+			country: 'NO',
+			automaticTaxEnabled: false,
+			lines: [
+				{
+					id: 'li_norway_tax',
+					priceId: 'price_tee_medium',
+					quantity: 1,
+					unitAmount: 2_000,
+					taxAmount: 500
+				}
+			],
+			shippingTaxAmount: 0
+		});
+
+		await expectStableCode(
+			createStripeOrderGateway(new ContractStripeClient(fixture)).retrievePaidCheckout(
+				fixture.session.id
+			),
+			'STRIPE_PAID_CHECKOUT_TAX_INVALID'
+		);
+	});
 
 	it('rejects version 3 metadata without a compatibility path', async () => {
 		const fixture = paidCheckoutProviderFixture();

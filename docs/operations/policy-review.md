@@ -82,6 +82,27 @@ refund outside this application, how fees/shipping/VAT are recorded, how double 
 prevented, and which PII-free reconciliation evidence is retained. That approval must not be
 inferred from a successful withdrawal case closure.
 
+## Norway launch gate
+
+Before Norway is available in production checkout:
+
+- [ ] Record Styria confirmation that it supports fulfillment to Norway for the deployed catalog
+      and shipping service.
+- [ ] Obtain qualified legal review of the Norway-facing policies, withdrawal flow, and customer
+      copy, plus qualified accountant approval of Norway VAT, customs, and VOEC treatment.
+- [ ] Approve a rest-of-world delivery estimate for Norway; do not reuse the EU estimate. The
+      legacy `DELIVERY_ESTIMATE_ASIA` setting supplies the estimate shown for Norway and supported
+      Asian destinations.
+- [ ] Verify the deployed Norway Checkout Session has Stripe automatic tax and tax-ID collection
+      disabled, and verify a completed test order records zero checkout tax. Norway operates in
+      import-at-delivery mode; the customer may instead be assessed import VAT, duty, brokerage,
+      or carrier fees after checkout.
+- [ ] Monitor VOEC-scope Norway sales against the NOK 50,000 rolling 12-month threshold.
+- [ ] Do not add a Norway Stripe Tax registration or otherwise begin collecting Norwegian VAT
+      under this implementation. Before any future VOEC registration or collection begins, obtain
+      renewed accountant approval and document and test the digital VOEC-number handoff through
+      Styria to the carrier/customs data flow.
+
 ## Required production values
 
 Before review and launch, verify the reviewed source-controlled values in
@@ -110,6 +131,17 @@ they are not a replacement for the approvals above.
 - IMY, [Legal bases for processing](https://www.imy.se/verksamhet/dataskydd/det-har-galler-enligt-gdpr/rattslig-grund/).
 - IMY, [Transfers of personal data to third countries](https://www.imy.se/verksamhet/dataskydd/det-har-galler-enligt-gdpr/overforing-till-tredje-land/).
 - IMY, [Right to erasure](https://www.imy.se/privatperson/dataskydd/dina-rattigheter/radering/).
+
+Norway source access date: 2026-08-20.
+
+- Styria, [Delivery](https://styriashirts.eu/delivery), for the published rest-of-world transit
+  estimate; Norway support still requires the explicit confirmation recorded in the launch gate.
+- Norwegian Government,
+  [Consumer rights and solving disputes](https://www.regjeringen.no/en/topics/consumers/consumer-rights-and-solving-disputes/id670315/),
+  for the 14-day cooling-off period on internet purchases.
+- Norwegian Tax Administration,
+  [VOEC guidance for online shops and marketplaces](https://www.skatteetaten.no/globalassets/bedrift-og-organisasjon/voec/sell-charge-and-ship-goods-to-norway.pdf),
+  for the registration threshold and digital VOEC-number shipping requirement.
 
 ## Approval completion checklist
 

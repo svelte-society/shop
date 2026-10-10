@@ -35,7 +35,7 @@ export function resolvePricingDestination(input: {
 	return { ...pricingDestination('SE'), source: 'fallback' };
 }
 
-const DESTINATION_REGION_ORDER = { eu: 0, uk: 1, asia: 2 } as const;
+const DESTINATION_REGION_ORDER = { eu: 0, non_eu_eea: 1, uk: 2, asia: 3 } as const;
 
 export function destinationOptions(): readonly DestinationOption[] {
 	return SUPPORTED_DESTINATIONS.map((countryCode) => {

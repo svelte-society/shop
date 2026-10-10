@@ -100,7 +100,7 @@ describe('ProductPurchase', () => {
 		await expect.element(page.getByText('Includes €3.80 VAT.')).toBeVisible();
 	});
 
-	it.each(['GB', 'JP'] as const)(
+	it.each(['NO', 'GB', 'JP'] as const)(
 		'explains that the destination-projected price for %s excludes EU VAT',
 		async (country) => {
 			const nonEuDestination = pricingDestination(country);
