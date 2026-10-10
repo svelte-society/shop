@@ -26,7 +26,7 @@ describe('shipping email', () => {
 			html:
 				'<p>Your Svelte Society merch has shipped.</p>' +
 				'<p>2 × Community Tee (M)</p>' +
-				'<p>Tracking: TRACK-2042</p>' +
+				'<p>Tracking: TRACK-2042 · <a href="https://www.17track.net/en#nums=TRACK-2042" rel="noopener noreferrer">Track via 17TRACK (external site)</a>.</p>' +
 				'<p>Thanks for being part of the Svelte community.</p>' +
 				'<p><a href="https://shop.sveltesociety.dev/withdraw">Withdraw from this purchase</a>.</p>' +
 				'<p>Questions? Email merch@sveltesociety.dev.</p>'
@@ -37,7 +37,7 @@ describe('shipping email', () => {
 		const unsafe = {
 			...input,
 			productSummary: '<script>Community & Tee</script>',
-			trackingNumber: 'TRACK-<2042>',
+			trackingNumber: 'TRACK-"&<2042>',
 			address: 'Currentgatan 9',
 			phone: '+46 70 123 45 67',
 			vatId: 'SE123456789001'
@@ -46,7 +46,8 @@ describe('shipping email', () => {
 		const message = shippingEmailMessage(unsafe, from, 'https://shop.sveltesociety.dev');
 
 		expect(message.html).toContain('&lt;script&gt;Community &amp; Tee&lt;/script&gt;');
-		expect(message.html).toContain('TRACK-&lt;2042&gt;');
+		expect(message.html).toContain('TRACK-&quot;&amp;&lt;2042&gt;');
+		expect(message.html).toContain('href="https://www.17track.net/en#nums=TRACK-%22%26%3C2042%3E"');
 		expect(JSON.stringify(message)).not.toContain('Currentgatan');
 		expect(JSON.stringify(message)).not.toContain('+46 70');
 		expect(JSON.stringify(message)).not.toContain('SE123456789001');

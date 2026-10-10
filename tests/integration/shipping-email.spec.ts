@@ -125,6 +125,9 @@ describe('shipping email integration', () => {
 		});
 		expect(messages.at(-1)?.html).toContain('1 × Community Tee (M)');
 		expect(messages.at(-1)?.html).toContain('Tracking: TRACK-JIT-2042');
+		expect(messages.at(-1)?.html).toContain(
+			'href="https://www.17track.net/en#nums=TRACK-JIT-2042"'
+		);
 		expectNoFixturePii(durableDatabaseDump(database));
 		expect(database.prepare('SELECT * FROM email_deliveries').all()).toEqual([
 			expect.objectContaining({

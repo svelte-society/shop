@@ -7,6 +7,8 @@ import type { EmailGateway, EmailSendInput } from './gateway';
 
 export const SHIPPING_EMAIL_SUBJECT = 'Your Svelte Society order is on the way';
 
+const UNIVERSAL_TRACKING_PAGE = 'https://www.17track.net/en';
+
 export type ShippingEmailInput = {
 	recipientEmail: string;
 	productSummary: string;
@@ -62,6 +64,13 @@ function escapeHtml(value: string): string {
 		.replaceAll("'", '&#39;');
 }
 
+function trackingUrl(trackingNumber: string): string {
+	const url = new URL(UNIVERSAL_TRACKING_PAGE);
+	// Keep the identifier out of the initial HTTP request made by basic email link scanners.
+	url.hash = new URLSearchParams({ nums: trackingNumber }).toString();
+	return url.href;
+}
+
 function validateMessageInput(input: ShippingEmailInput): void {
 	if (
 		!input ||
@@ -99,6 +108,7 @@ export function shippingEmailMessage(
 	}
 	const productSummary = escapeHtml(input.productSummary);
 	const trackingNumber = escapeHtml(input.trackingNumber);
+	const trackingHref = trackingUrl(input.trackingNumber);
 	const supportEmail = escapeHtml(input.supportEmail);
 	return {
 		to: input.recipientEmail,
@@ -109,7 +119,7 @@ export function shippingEmailMessage(
 		html:
 			'<p>Your Svelte Society merch has shipped.</p>' +
 			`<p>${productSummary}</p>` +
-			`<p>Tracking: ${trackingNumber}</p>` +
+			`<p>Tracking: ${trackingNumber} · <a href="${trackingHref}" rel="noopener noreferrer">Track via 17TRACK (external site)</a>.</p>` +
 			'<p>Thanks for being part of the Svelte community.</p>' +
 			`<p><a href="${withdrawalUrl}">Withdraw from this purchase</a>.</p>` +
 			`<p>Questions? Email ${supportEmail}.</p>`

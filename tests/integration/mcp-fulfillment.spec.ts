@@ -226,6 +226,9 @@ describe('Codex MCP fulfillment lifecycle', () => {
 			idempotencyKey: `shipping:${paidOrder.id}:TRACK-SOCIETY-2042`
 		});
 		expect(emailMessages.at(-1)?.html).toContain('Tracking: TRACK-SOCIETY-2042');
+		expect(emailMessages.at(-1)?.html).toContain(
+			'href="https://www.17track.net/en#nums=TRACK-SOCIETY-2042"'
+		);
 		expect(
 			database
 				.prepare(
