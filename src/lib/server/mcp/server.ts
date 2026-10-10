@@ -30,6 +30,8 @@ import { registerReconcileStyriaTool } from './tools/reconcile-styria';
 import { registerRecordSupportTool } from './tools/record-support';
 import { registerResendShippingTool, type ShippingEmailService } from './tools/resend-shipping';
 import { registerSubmitStyriaTool } from './tools/submit-styria';
+import { registerSuppressReviewAlertBacklogTool } from './tools/suppress-review-alert-backlog';
+import type { ReviewAlertBacklogSuppressionService } from '$lib/server/maintenance/review-alert-backlog.server';
 
 export type McpServices = Readonly<{
 	fulfillment?: Pick<FulfillmentRepository, 'listPending' | 'inspect' | 'recordSupportNote'>;
@@ -40,6 +42,7 @@ export type McpServices = Readonly<{
 	status?: FulfillmentStatusService;
 	shipping?: ShippingEmailService;
 	reviewAlertDiagnostics?: ReviewAlertDiagnosticsService;
+	reviewAlertBacklogSuppression?: ReviewAlertBacklogSuppressionService;
 	withdrawals?: ListWithdrawalCasesService & InspectWithdrawalCaseService;
 	withdrawalWorkflow?: WithdrawalCaseManagementService;
 	now?: () => Date;
@@ -64,6 +67,7 @@ export function createMcpServer(services: McpServices): McpServer<GenericSchema>
 		services.reviewAlertDiagnostics,
 		services.now ?? (() => new Date())
 	);
+	registerSuppressReviewAlertBacklogTool(server, services.reviewAlertBacklogSuppression);
 	registerInspectOrderTool(server, {
 		fulfillment: services.fulfillment,
 		stripe: services.stripe

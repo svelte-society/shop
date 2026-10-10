@@ -353,16 +353,24 @@ export class SqliteOutboxRepository implements OutboxRepository {
 			? ` AND kind ${filter.include ? 'IN' : 'NOT IN'} (${kinds?.map(() => '?').join(', ')})`
 			: '';
 		const findDue = this.database.prepare(`
-			SELECT * FROM outbox_jobs
+			SELECT * FROM outbox_jobs AS oj
 			WHERE completed_at IS NULL AND next_attempt_at <= ?
+			AND NOT EXISTS (
+				SELECT 1 FROM outbox_job_suppressions AS suppression
+				WHERE suppression.outbox_job_id = oj.id
+			)
 			${kindPredicate}
 			ORDER BY next_attempt_at, id
 			LIMIT ?
 		`);
 		const reserve = this.database.prepare(`
-			UPDATE outbox_jobs
+			UPDATE outbox_jobs AS oj
 			SET next_attempt_at = ?
 			WHERE id = ? AND completed_at IS NULL AND next_attempt_at <= ?
+			AND NOT EXISTS (
+				SELECT 1 FROM outbox_job_suppressions AS suppression
+				WHERE suppression.outbox_job_id = oj.id
+			)
 		`);
 		const claim = this.database.transaction(() => {
 			const rows = findDue.all(nowTimestamp, ...(kinds ?? []), limit) as OutboxRow[];

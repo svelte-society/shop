@@ -61,6 +61,21 @@ function alertKeys(): string[] {
 	).map((row) => row.idempotency_key);
 }
 
+function recordTransition(
+	orderId: string,
+	priorState: string | null,
+	nextState: string,
+	createdAt: string
+): void {
+	database
+		.prepare(
+			`INSERT INTO order_events (
+				order_id, actor, action, prior_state, next_state, result, error_code, created_at
+			) VALUES (?, 'codex-admin', 'test_transition', ?, ?, 'succeeded', NULL, ?)`
+		)
+		.run(orderId, priorState, nextState, createdAt);
+}
+
 beforeEach(() => {
 	database = openDatabase(':memory:');
 	migrate(database, migrationsDirectory);
@@ -172,6 +187,89 @@ describe('daily operational checks', () => {
 			'alert:STYRIA_PAYMENT_REQUIRED:refunded_in_styria:2026-07-17'
 		);
 		expect(alertKeys().join(' ')).not.toContain('active_submission');
+	});
+
+	it('alerts each pending or review incident once while allowing a later true state re-entry', async () => {
+		insertOrder({
+			id: 'pending_incident',
+			status: 'pending_review',
+			updatedAt: '2026-07-15T03:00:00.000Z'
+		});
+		recordTransition('pending_incident', null, 'pending_review', '2026-07-15T03:00:00.000Z');
+		insertOrder({
+			id: 'review_incident',
+			status: 'review_required',
+			updatedAt: '2026-07-16T03:00:00.000Z'
+		});
+		recordTransition(
+			'review_incident',
+			'submitting',
+			'review_required',
+			'2026-07-16T03:00:00.000Z'
+		);
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			backupsEnabled: false,
+			readiness: async () => ({
+				ready: true,
+				checks: {
+					configuration: 'ok',
+					database: 'ok',
+					migrations: 'ok',
+					volume: 'ok',
+					disk: 'ok'
+				}
+			})
+		});
+
+		await job.run(NOW);
+		database
+			.prepare(
+				`UPDATE outbox_jobs SET completed_at = ?
+				 WHERE alert_code IN ('ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED')`
+			)
+			.run('2026-07-17T03:05:00.000Z');
+		await job.run(new Date('2026-07-18T03:00:00.000Z'));
+
+		expect(alertKeys().filter((key) => key.includes('pending_incident'))).toHaveLength(1);
+		expect(alertKeys().filter((key) => key.includes('review_incident'))).toHaveLength(1);
+
+		// A same-state audit/update is still the same incident.
+		database
+			.prepare('UPDATE orders SET updated_at = ? WHERE id = ?')
+			.run('2026-07-18T04:00:00.000Z', 'review_incident');
+		recordTransition(
+			'review_incident',
+			'review_required',
+			'review_required',
+			'2026-07-18T04:00:00.000Z'
+		);
+		await job.run(new Date('2026-07-18T05:00:00.000Z'));
+		expect(alertKeys().filter((key) => key.includes('review_incident'))).toHaveLength(1);
+
+		// Leaving and re-entering review starts a new incident and permits one new alert.
+		database
+			.prepare('UPDATE orders SET fulfillment_status = ?, updated_at = ? WHERE id = ?')
+			.run('in_production', '2026-07-18T05:30:00.000Z', 'review_incident');
+		recordTransition(
+			'review_incident',
+			'review_required',
+			'in_production',
+			'2026-07-18T05:30:00.000Z'
+		);
+		database
+			.prepare('UPDATE orders SET fulfillment_status = ?, updated_at = ? WHERE id = ?')
+			.run('review_required', '2026-07-18T06:00:00.000Z', 'review_incident');
+		recordTransition(
+			'review_incident',
+			'in_production',
+			'review_required',
+			'2026-07-18T06:00:00.000Z'
+		);
+		await job.run(new Date('2026-07-18T07:00:00.000Z'));
+
+		expect(alertKeys().filter((key) => key.includes('review_incident'))).toHaveLength(2);
 	});
 
 	it('requires a completed run for the current 02:30 UTC backup cadence', async () => {

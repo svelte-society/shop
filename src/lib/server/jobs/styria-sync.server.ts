@@ -160,7 +160,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		throwIfAborted(signal);
 		const apply = this.dependencies.database.transaction(() => {
 			if (changed) this.dependencies.fulfillment.applyStyriaStatus(orderId, update, now);
-			if (next === 'review_required') {
+			if (next === 'review_required' && before.fulfillmentStatus !== 'review_required') {
 				this.enqueueAlert('STYRIA_REVIEW_REQUIRED', orderId, now);
 			}
 			if (trackingNumber !== null) {

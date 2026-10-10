@@ -79,6 +79,17 @@ beforeEach(() => {
 			alert_subject_id TEXT,
 			alert_observed_at TEXT
 		);
+		CREATE TABLE outbox_job_suppressions (
+			outbox_job_id INTEGER PRIMARY KEY REFERENCES outbox_jobs(id),
+			reason TEXT NOT NULL,
+			actor TEXT NOT NULL,
+			backup_id TEXT NOT NULL,
+			backup_filename TEXT NOT NULL,
+			backup_sha256 TEXT NOT NULL,
+			previous_next_attempt_at TEXT NOT NULL,
+			previous_last_error_code TEXT,
+			suppressed_at TEXT NOT NULL
+		);
 	`);
 	database
 		.prepare('INSERT INTO orders (id, fulfillment_status) VALUES (?, ?)')
@@ -167,6 +178,7 @@ describe('review alert outbox diagnostics', () => {
 				matched_order_count: 3,
 				outstanding_count: 3,
 				completed_count: 2,
+				suppressed_count: 0,
 				oldest_created_at: '2026-07-15T10:00:00.000Z',
 				newest_created_at: '2026-07-17T09:45:00.000Z',
 				oldest_outstanding_next_attempt_at: '2026-07-15T10:01:00.000Z',
@@ -187,7 +199,8 @@ describe('review alert outbox diagnostics', () => {
 				delivery_statuses: [
 					{ status: 'outstanding_due', alert_count: 1, unique_subject_count: 1 },
 					{ status: 'outstanding_scheduled', alert_count: 0, unique_subject_count: 0 },
-					{ status: 'completed', alert_count: 1, unique_subject_count: 1 }
+					{ status: 'completed', alert_count: 1, unique_subject_count: 1 },
+					{ status: 'suppressed', alert_count: 0, unique_subject_count: 0 }
 				],
 				current_order_statuses: [
 					{ status: 'pending_review', unique_subject_count: 1 },
@@ -207,7 +220,8 @@ describe('review alert outbox diagnostics', () => {
 				delivery_statuses: [
 					{ status: 'outstanding_due', alert_count: 1, unique_subject_count: 1 },
 					{ status: 'outstanding_scheduled', alert_count: 1, unique_subject_count: 1 },
-					{ status: 'completed', alert_count: 1, unique_subject_count: 1 }
+					{ status: 'completed', alert_count: 1, unique_subject_count: 1 },
+					{ status: 'suppressed', alert_count: 0, unique_subject_count: 0 }
 				],
 				current_order_statuses: [{ status: 'review_required', unique_subject_count: 2 }],
 				attempt_buckets: [
@@ -228,14 +242,16 @@ describe('review alert outbox diagnostics', () => {
 				alert_count: 1,
 				unique_subject_count: 1,
 				outstanding_count: 0,
-				completed_count: 1
+				completed_count: 1,
+				suppressed_count: 0
 			},
 			{
 				code: 'STYRIA_REVIEW_REQUIRED',
 				alert_count: 1,
 				unique_subject_count: 1,
 				outstanding_count: 1,
-				completed_count: 0
+				completed_count: 0,
+				suppressed_count: 0
 			}
 		]);
 		expect(ageBuckets.find(({ bucket }) => bucket === 'one_to_six_hours')?.by_code).toEqual([
@@ -244,7 +260,8 @@ describe('review alert outbox diagnostics', () => {
 				code: 'STYRIA_REVIEW_REQUIRED',
 				alert_count: 2,
 				outstanding_count: 1,
-				completed_count: 1
+				completed_count: 1,
+				suppressed_count: 0
 			})
 		]);
 
@@ -261,6 +278,46 @@ describe('review alert outbox diagnostics', () => {
 		]) {
 			expect(serialized).not.toContain(forbidden);
 		}
+	});
+
+	it('reports suppressed jobs separately and excludes them from active outstanding totals', async () => {
+		const row = database
+			.prepare(
+				`SELECT id FROM outbox_jobs
+				 WHERE alert_code = 'STYRIA_REVIEW_REQUIRED'
+				   AND alert_subject_id = 'private_order_beta'`
+			)
+			.get() as { id: number };
+		database
+			.prepare(
+				`INSERT INTO outbox_job_suppressions (
+					outbox_job_id, reason, actor, backup_id, backup_filename,
+					backup_sha256, previous_next_attempt_at,
+					previous_last_error_code, suppressed_at
+				) VALUES (?, 'REVIEW_ALERT_BACKLOG_CLEANUP', 'codex-admin',
+					'backup-private', 'backup-private.sqlite.ssbk', ?, ?, 'PRIVATE_DELIVERY_DETAIL', ?)`
+			)
+			.run(row.id, 'a'.repeat(64), '2026-07-17T09:50:00.000Z', now.toISOString());
+		database
+			.prepare('UPDATE outbox_jobs SET completed_at = ? WHERE id = ?')
+			.run(now.toISOString(), row.id);
+
+		const response = await callDiagnostics();
+		expect(response.result.structuredContent?.totals).toMatchObject({
+			alert_count: 5,
+			outstanding_count: 2,
+			completed_count: 2,
+			suppressed_count: 1
+		});
+		const byCode = response.result.structuredContent?.by_code as Array<{
+			code: string;
+			delivery_statuses: Array<{ status: string; alert_count: number }>;
+		}>;
+		expect(
+			byCode
+				.find(({ code }) => code === 'STYRIA_REVIEW_REQUIRED')
+				?.delivery_statuses.find(({ status }) => status === 'suppressed')
+		).toMatchObject({ alert_count: 1 });
 	});
 
 	it('advertises an exact local read-only contract and rejects arbitrary query input', async () => {

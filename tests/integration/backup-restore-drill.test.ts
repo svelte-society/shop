@@ -659,7 +659,7 @@ describe('production-shaped backup and restore drill', () => {
 		);
 		expect(repository.loadEncryptedByReference('WDR-PURGEDBACKUPDRILL12345')).toBeNull();
 		expect(database.prepare('SELECT COUNT(*) AS count FROM _migrations').get()).toEqual({
-			count: 9
+			count: 10
 		});
 
 		const readiness = await checkRuntimeReadiness({

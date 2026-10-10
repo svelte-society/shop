@@ -30,6 +30,9 @@ import { WithdrawalWorkflowService } from '$lib/server/withdrawals/workflow.serv
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { SqliteReviewAlertDiagnosticsService } from './tools/inspect-review-alert-outbox';
+import { backupEncryptionKeyIsValid } from '$lib/server/backups/format';
+import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
+import { SqliteReviewAlertBacklogSuppressionService } from '$lib/server/maintenance/review-alert-backlog.server';
 
 type RuntimeMcpDependencies = {
 	createStripeGateway?: (secretKey: string) => StripeFulfillmentGateway;
@@ -191,10 +194,20 @@ export function createRuntimeMcpServices(
 		brandName,
 		comment: 'Approved Svelte Society fulfillment'
 	};
+	const backupEncryptionKey = environment.BACKUP_ENCRYPTION_KEY_BASE64;
+	const reviewAlertBacklogSuppression = backupEncryptionKeyIsValid(backupEncryptionKey)
+		? new SqliteReviewAlertBacklogSuppressionService({
+				database,
+				leases: new SqliteLeaseRepository(database),
+				encryptionKeyBase64: backupEncryptionKey,
+				...(environment.TMPDIR ? { temporaryDirectory: environment.TMPDIR } : {})
+			})
+		: undefined;
 
 	return {
 		fulfillment,
 		reviewAlertDiagnostics: new SqliteReviewAlertDiagnosticsService(database),
+		reviewAlertBacklogSuppression,
 		stripe,
 		preparation: new FulfillmentPreparationService({ ...shared, approvals }),
 		submission: new FulfillmentSubmissionService({ ...shared, styria, alerts }),

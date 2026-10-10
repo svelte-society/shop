@@ -400,6 +400,7 @@ describe('fulfillment MCP protocol', () => {
 		expect(tools.map((tool) => tool.name)).toEqual([
 			'list_pending_orders',
 			'inspect_review_alert_outbox',
+			'suppress_review_alert_backlog',
 			'inspect_order',
 			'prepare_styria_submission',
 			'submit_styria_order',
@@ -426,6 +427,12 @@ describe('fulfillment MCP protocol', () => {
 				readOnlyHint: true,
 				destructiveHint: false,
 				idempotentHint: true,
+				openWorldHint: false
+			},
+			suppress_review_alert_backlog: {
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: false,
 				openWorldHint: false
 			},
 			inspect_order: {
@@ -596,6 +603,7 @@ describe('fulfillment MCP protocol', () => {
 		['list_pending_orders', { limit: 101 }],
 		['list_pending_orders', { limit: 1.5 }],
 		['inspect_review_alert_outbox', { sql: 'SELECT * FROM outbox_jobs' }],
+		['suppress_review_alert_backlog', { expected_outstanding_count: 1, confirmation: 'wrong' }],
 		['list_withdrawal_cases', { limit: 0 }],
 		['list_withdrawal_cases', { limit: 101 }],
 		['list_withdrawal_cases', { limit: 1.5 }],

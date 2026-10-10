@@ -141,6 +141,17 @@ const expectedColumns = {
 		column('alert_subject_id', 'TEXT', 0),
 		column('alert_observed_at', 'TEXT', 0)
 	],
+	outbox_job_suppressions: [
+		column('outbox_job_id', 'INTEGER', 0, null, 1),
+		column('reason', 'TEXT', 1),
+		column('actor', 'TEXT', 1),
+		column('backup_id', 'TEXT', 1),
+		column('backup_filename', 'TEXT', 1),
+		column('backup_sha256', 'TEXT', 1),
+		column('previous_next_attempt_at', 'TEXT', 1),
+		column('previous_last_error_code', 'TEXT', 0),
+		column('suppressed_at', 'TEXT', 1)
+	],
 	email_deliveries: [
 		column('id', 'INTEGER', 0, null, 1),
 		column('order_id', 'TEXT', 1),
@@ -251,6 +262,7 @@ const expectedForeignKeys = {
 	order_events: foreignKey('orders', 'order_id'),
 	submission_approvals: foreignKey('orders', 'order_id'),
 	outbox_jobs: foreignKey('orders', 'order_id'),
+	outbox_job_suppressions: foreignKey('outbox_jobs', 'outbox_job_id', 'CASCADE'),
 	email_deliveries: foreignKey('orders', 'order_id'),
 	support_notes: foreignKey('orders', 'order_id'),
 	job_leases: [],
@@ -469,7 +481,7 @@ afterEach(() => {
 });
 
 describe('initial schema metadata', () => {
-	it('contains exactly the 15 application tables with exact column shapes', () => {
+	it('contains exactly the 16 application tables with exact column shapes', () => {
 		const applicationTables = database
 			.prepare(
 				`SELECT name FROM sqlite_schema

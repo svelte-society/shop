@@ -9,6 +9,12 @@ export const BACKUP_CADENCE_GRACE_MS = 30 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 type SubjectRow = { id: unknown };
+type AlertCandidateRow = SubjectRow & { alert_needed: unknown };
+
+type AlertCandidate = {
+	id: string;
+	alertNeeded: boolean;
+};
 
 export interface OperationalChecksJob {
 	run(
@@ -51,6 +57,19 @@ function subjectIds(rows: SubjectRow[]): string[] {
 	});
 }
 
+function alertCandidates(rows: AlertCandidateRow[]): AlertCandidate[] {
+	return rows.map((row) => {
+		if (
+			typeof row.id !== 'string' ||
+			!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(row.id) ||
+			(row.alert_needed !== 0 && row.alert_needed !== 1)
+		) {
+			fail('OPERATIONAL_CHECK_ROW_INVALID');
+		}
+		return { id: row.id, alertNeeded: row.alert_needed === 1 };
+	});
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
 	if (!signal?.aborted) return;
 	throw signal.reason instanceof Error ? signal.reason : new Error('OPERATIONAL_CHECK_ABORTED');
@@ -89,35 +108,88 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 		throwIfAborted(signal);
 		const pendingCutoff = new Date(now.getTime() - PENDING_REVIEW_AGE_MS).toISOString();
 		const submittingCutoff = new Date(now.getTime() - SUBMITTING_AGE_MS).toISOString();
-		const pendingReview = subjectIds(
+		// Completed and suppressed rows remain in the outbox as the durable marker for a state
+		// incident. A later true state re-entry has a newer audit timestamp and may alert once again.
+		const pendingReview = alertCandidates(
 			this.dependencies.database
 				.prepare(
-					`SELECT id FROM orders
-					 WHERE payment_status = 'paid'
-					 AND fulfillment_status = 'pending_review'
-					 AND updated_at < ?
-					 ORDER BY updated_at, id`
+					`SELECT o.id,
+						NOT EXISTS (
+							SELECT 1 FROM outbox_jobs AS oj
+							WHERE oj.kind = 'operational-alert'
+							  AND oj.alert_code = 'ORDER_PENDING_REVIEW'
+							  AND oj.alert_subject_id = o.id
+							  AND oj.alert_observed_at >= COALESCE(
+								(
+									SELECT oe.created_at FROM order_events AS oe
+									WHERE oe.order_id = o.id
+									  AND oe.next_state = 'pending_review'
+									  AND (oe.prior_state IS NULL OR oe.prior_state <> oe.next_state)
+									ORDER BY oe.id DESC LIMIT 1
+								),
+								o.updated_at
+							  )
+						) AS alert_needed
+					 FROM orders AS o
+					 WHERE o.payment_status = 'paid'
+					 AND o.fulfillment_status = 'pending_review'
+					 AND o.updated_at < ?
+					 ORDER BY o.updated_at, o.id`
 				)
-				.all(pendingCutoff) as SubjectRow[]
+				.all(pendingCutoff) as AlertCandidateRow[]
 		);
-		const reviewRequired = subjectIds(
+		const reviewRequired = alertCandidates(
 			this.dependencies.database
 				.prepare(
-					`SELECT id FROM orders
-					 WHERE fulfillment_status = 'review_required'
-					 ORDER BY updated_at, id`
+					`SELECT o.id,
+						NOT EXISTS (
+							SELECT 1 FROM outbox_jobs AS oj
+							WHERE oj.kind = 'operational-alert'
+							  AND oj.alert_code = 'STYRIA_REVIEW_REQUIRED'
+							  AND oj.alert_subject_id = o.id
+							  AND oj.alert_observed_at >= COALESCE(
+								(
+									SELECT oe.created_at FROM order_events AS oe
+									WHERE oe.order_id = o.id
+									  AND oe.next_state = 'review_required'
+									  AND (oe.prior_state IS NULL OR oe.prior_state <> oe.next_state)
+									ORDER BY oe.id DESC LIMIT 1
+								),
+								o.updated_at
+							  )
+						) AS alert_needed
+					 FROM orders AS o
+					 WHERE o.fulfillment_status = 'review_required'
+					 ORDER BY o.updated_at, o.id`
 				)
-				.all() as SubjectRow[]
+				.all() as AlertCandidateRow[]
 		);
-		const submitting = subjectIds(
+		const submitting = alertCandidates(
 			this.dependencies.database
 				.prepare(
-					`SELECT id FROM orders
-					 WHERE fulfillment_status = 'submitting'
-					 AND updated_at < ?
-					 ORDER BY updated_at, id`
+					`SELECT o.id,
+						NOT EXISTS (
+							SELECT 1 FROM outbox_jobs AS oj
+							WHERE oj.kind = 'operational-alert'
+							  AND oj.alert_code = 'STYRIA_REVIEW_REQUIRED'
+							  AND oj.alert_subject_id = o.id
+							  AND oj.alert_observed_at >= COALESCE(
+								(
+									SELECT oe.created_at FROM order_events AS oe
+									WHERE oe.order_id = o.id
+									  AND oe.next_state = 'submitting'
+									  AND (oe.prior_state IS NULL OR oe.prior_state <> oe.next_state)
+									ORDER BY oe.id DESC LIMIT 1
+								),
+								o.updated_at
+							  )
+						) AS alert_needed
+					 FROM orders AS o
+					 WHERE o.fulfillment_status = 'submitting'
+					 AND o.updated_at < ?
+					 ORDER BY o.updated_at, o.id`
 				)
-				.all(submittingCutoff) as SubjectRow[]
+				.all(submittingCutoff) as AlertCandidateRow[]
 		);
 		const vendorPaymentRequired = subjectIds(
 			this.dependencies.database
@@ -129,15 +201,23 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 				)
 				.all() as SubjectRow[]
 		);
-		const nonPaidActiveFulfillment = subjectIds(
+		const nonPaidActiveFulfillment = alertCandidates(
 			this.dependencies.database
 				.prepare(
-					`SELECT id FROM orders
-					 WHERE payment_status <> 'paid'
-					 AND fulfillment_status IN ('submitting', 'awaiting_vendor_payment', 'in_production')
-					 ORDER BY updated_at, id`
+					`SELECT o.id,
+						NOT EXISTS (
+							SELECT 1 FROM outbox_jobs AS oj
+							WHERE oj.kind = 'operational-alert'
+							  AND oj.alert_code = 'STYRIA_REVIEW_REQUIRED'
+							  AND oj.alert_subject_id = o.id
+							  AND oj.alert_observed_at >= o.updated_at
+						) AS alert_needed
+					 FROM orders AS o
+					 WHERE o.payment_status <> 'paid'
+					 AND o.fulfillment_status IN ('submitting', 'awaiting_vendor_payment', 'in_production')
+					 ORDER BY o.updated_at, o.id`
 				)
-				.all() as SubjectRow[]
+				.all() as AlertCandidateRow[]
 		);
 		const shippingUnsent = subjectIds(
 			this.dependencies.database
@@ -154,25 +234,33 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 				.all() as SubjectRow[]
 		);
 
-		for (const subjectId of pendingReview) {
+		for (const candidate of pendingReview) {
 			throwIfAborted(signal);
-			this.dependencies.alerts.enqueueAlert('ORDER_PENDING_REVIEW', subjectId, now);
+			if (candidate.alertNeeded) {
+				this.dependencies.alerts.enqueueAlert('ORDER_PENDING_REVIEW', candidate.id, now);
+			}
 		}
-		for (const subjectId of reviewRequired) {
+		for (const candidate of reviewRequired) {
 			throwIfAborted(signal);
-			this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', subjectId, now);
+			if (candidate.alertNeeded) {
+				this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', candidate.id, now);
+			}
 		}
-		for (const subjectId of submitting) {
+		for (const candidate of submitting) {
 			throwIfAborted(signal);
-			this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', subjectId, now);
+			if (candidate.alertNeeded) {
+				this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', candidate.id, now);
+			}
 		}
 		for (const subjectId of vendorPaymentRequired) {
 			throwIfAborted(signal);
 			this.dependencies.alerts.enqueueAlert('STYRIA_PAYMENT_REQUIRED', subjectId, now);
 		}
-		for (const subjectId of nonPaidActiveFulfillment) {
+		for (const candidate of nonPaidActiveFulfillment) {
 			throwIfAborted(signal);
-			this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', subjectId, now);
+			if (candidate.alertNeeded) {
+				this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', candidate.id, now);
+			}
 		}
 		for (const subjectId of shippingUnsent) {
 			throwIfAborted(signal);

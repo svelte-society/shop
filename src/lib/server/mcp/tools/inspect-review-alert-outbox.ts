@@ -13,7 +13,12 @@ import {
 } from '../result';
 
 const reviewAlertCodes = ['ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED'] as const;
-const deliveryStatuses = ['outstanding_due', 'outstanding_scheduled', 'completed'] as const;
+const deliveryStatuses = [
+	'outstanding_due',
+	'outstanding_scheduled',
+	'completed',
+	'suppressed'
+] as const;
 const attemptBuckets = ['0', '1', '2_to_3', '4_plus'] as const;
 const createdAgeBuckets = [
 	'future',
@@ -68,6 +73,7 @@ export type ReviewAlertDiagnostics = {
 	matchedOrderCount: number;
 	outstandingCount: number;
 	completedCount: number;
+	suppressedCount: number;
 	oldestCreatedAt: Date | null;
 	newestCreatedAt: Date | null;
 	oldestOutstandingNextAttemptAt: Date | null;
@@ -86,6 +92,7 @@ export type ReviewAlertDiagnostics = {
 			uniqueSubjectCount: number;
 			outstandingCount: number;
 			completedCount: number;
+			suppressedCount: number;
 		}>;
 	}>;
 };
@@ -138,14 +145,19 @@ type CreatedAgeBucketRow = {
 	unique_subject_count: unknown;
 	outstanding_count: unknown;
 	completed_count: unknown;
+	suppressed_count: unknown;
 };
 
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
-const REVIEW_ALERT_KEY_PREDICATE = `(idempotency_key GLOB 'alert:ORDER_PENDING_REVIEW:*'
-	OR idempotency_key GLOB 'alert:STYRIA_REVIEW_REQUIRED:*')`;
-const QUALIFIED_REVIEW_ALERT_KEY_PREDICATE = `(oj.idempotency_key GLOB 'alert:ORDER_PENDING_REVIEW:*'
-	OR oj.idempotency_key GLOB 'alert:STYRIA_REVIEW_REQUIRED:*')`;
+const REVIEW_ALERT_KEY_PREDICATE = `((alert_code = 'ORDER_PENDING_REVIEW'
+	AND idempotency_key GLOB 'alert:ORDER_PENDING_REVIEW:*')
+	OR (alert_code = 'STYRIA_REVIEW_REQUIRED'
+		AND idempotency_key GLOB 'alert:STYRIA_REVIEW_REQUIRED:*'))`;
+const QUALIFIED_REVIEW_ALERT_KEY_PREDICATE = `((oj.alert_code = 'ORDER_PENDING_REVIEW'
+	AND oj.idempotency_key GLOB 'alert:ORDER_PENDING_REVIEW:*')
+	OR (oj.alert_code = 'STYRIA_REVIEW_REQUIRED'
+		AND oj.idempotency_key GLOB 'alert:STYRIA_REVIEW_REQUIRED:*'))`;
 
 class ReviewAlertDiagnosticsError extends Error {
 	constructor(readonly code: 'ALERT_OUTBOX_TIME_INVALID' | 'ALERT_OUTBOX_ROW_INVALID') {
@@ -227,12 +239,16 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 							AS matched_order_count,
 						MIN(oj.alert_observed_at) AS oldest_created_at,
 						MAX(oj.alert_observed_at) AS newest_created_at,
-						MIN(CASE WHEN oj.completed_at IS NULL THEN oj.next_attempt_at END)
+						MIN(CASE WHEN oj.completed_at IS NULL AND suppression.outbox_job_id IS NULL
+							THEN oj.next_attempt_at END)
 							AS oldest_outstanding_next_attempt_at,
-						MAX(CASE WHEN oj.completed_at IS NULL THEN oj.next_attempt_at END)
+						MAX(CASE WHEN oj.completed_at IS NULL AND suppression.outbox_job_id IS NULL
+							THEN oj.next_attempt_at END)
 							AS newest_outstanding_next_attempt_at
 					 FROM outbox_jobs AS oj
 					 LEFT JOIN orders AS o ON o.id = oj.alert_subject_id
+					 LEFT JOIN outbox_job_suppressions AS suppression
+						ON suppression.outbox_job_id = oj.id
 					 WHERE oj.kind = 'operational-alert'
 					   AND ${QUALIFIED_REVIEW_ALERT_KEY_PREDICATE}
 					   AND oj.alert_code IN ('ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED')
@@ -241,19 +257,22 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 				.all() as CodeSummaryRow[],
 			deliveryStatuses: this.database
 				.prepare(
-					`SELECT alert_code,
+					`SELECT oj.alert_code,
 						CASE
-							WHEN completed_at IS NOT NULL THEN 'completed'
-							WHEN next_attempt_at <= ? THEN 'outstanding_due'
+							WHEN suppression.outbox_job_id IS NOT NULL THEN 'suppressed'
+							WHEN oj.completed_at IS NOT NULL THEN 'completed'
+							WHEN oj.next_attempt_at <= ? THEN 'outstanding_due'
 							ELSE 'outstanding_scheduled'
 						END AS status,
 						COUNT(*) AS alert_count,
-						COUNT(DISTINCT alert_subject_id) AS unique_subject_count
-					 FROM outbox_jobs
-					 WHERE kind = 'operational-alert'
-					   AND ${REVIEW_ALERT_KEY_PREDICATE}
-					   AND alert_code IN ('ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED')
-					 GROUP BY alert_code, status`
+						COUNT(DISTINCT oj.alert_subject_id) AS unique_subject_count
+					 FROM outbox_jobs AS oj
+					 LEFT JOIN outbox_job_suppressions AS suppression
+						ON suppression.outbox_job_id = oj.id
+					 WHERE oj.kind = 'operational-alert'
+					   AND ${QUALIFIED_REVIEW_ALERT_KEY_PREDICATE}
+					   AND oj.alert_code IN ('ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED')
+					 GROUP BY oj.alert_code, status`
 				)
 				.all(nowTimestamp) as DeliveryStatusRow[],
 			currentOrderStatuses: this.database
@@ -312,23 +331,29 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 				.prepare(
 					`SELECT
 						CASE
-							WHEN alert_observed_at > ? THEN 'future'
-							WHEN alert_observed_at > ? THEN 'under_1_hour'
-							WHEN alert_observed_at > ? THEN 'one_to_six_hours'
-							WHEN alert_observed_at > ? THEN 'six_to_twenty_four_hours'
-							WHEN alert_observed_at > ? THEN 'one_to_seven_days'
+							WHEN oj.alert_observed_at > ? THEN 'future'
+							WHEN oj.alert_observed_at > ? THEN 'under_1_hour'
+							WHEN oj.alert_observed_at > ? THEN 'one_to_six_hours'
+							WHEN oj.alert_observed_at > ? THEN 'six_to_twenty_four_hours'
+							WHEN oj.alert_observed_at > ? THEN 'one_to_seven_days'
 							ELSE 'older_than_seven_days'
 						END AS bucket,
-						alert_code,
+						oj.alert_code,
 						COUNT(*) AS alert_count,
-						COUNT(DISTINCT alert_subject_id) AS unique_subject_count,
-						SUM(completed_at IS NULL) AS outstanding_count,
-						SUM(completed_at IS NOT NULL) AS completed_count
-					 FROM outbox_jobs
-					 WHERE kind = 'operational-alert'
-					   AND ${REVIEW_ALERT_KEY_PREDICATE}
-					   AND alert_code IN ('ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED')
-					 GROUP BY bucket, alert_code`
+						COUNT(DISTINCT oj.alert_subject_id) AS unique_subject_count,
+						SUM(oj.completed_at IS NULL AND suppression.outbox_job_id IS NULL)
+							AS outstanding_count,
+						SUM(oj.completed_at IS NOT NULL AND suppression.outbox_job_id IS NULL)
+							AS completed_count,
+						SUM(suppression.outbox_job_id IS NOT NULL)
+							AS suppressed_count
+					 FROM outbox_jobs AS oj
+					 LEFT JOIN outbox_job_suppressions AS suppression
+						ON suppression.outbox_job_id = oj.id
+					 WHERE oj.kind = 'operational-alert'
+					   AND ${QUALIFIED_REVIEW_ALERT_KEY_PREDICATE}
+					   AND oj.alert_code IN ('ORDER_PENDING_REVIEW', 'STYRIA_REVIEW_REQUIRED')
+					 GROUP BY bucket, oj.alert_code`
 				)
 				.all(
 					nowTimestamp,
@@ -470,7 +495,8 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 			const alertCount = validCount(row.alert_count);
 			const outstandingCount = validCount(row.outstanding_count);
 			const completedCount = validCount(row.completed_count);
-			if (outstandingCount + completedCount !== alertCount) {
+			const suppressedCount = validCount(row.suppressed_count);
+			if (outstandingCount + completedCount + suppressedCount !== alertCount) {
 				throw new ReviewAlertDiagnosticsError('ALERT_OUTBOX_ROW_INVALID');
 			}
 			return {
@@ -479,7 +505,8 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 				alertCount,
 				uniqueSubjectCount: validCount(row.unique_subject_count),
 				outstandingCount,
-				completedCount
+				completedCount,
+				suppressedCount
 			};
 		});
 		const createdAgeDistribution = createdAgeBuckets.map((bucket) => ({
@@ -495,7 +522,8 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 						alertCount: 0,
 						uniqueSubjectCount: 0,
 						outstandingCount: 0,
-						completedCount: 0
+						completedCount: 0,
+						suppressedCount: 0
 					}
 				);
 			})
@@ -518,6 +546,12 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 				(code.deliveryStatuses.find((status) => status.status === 'completed')?.alertCount ?? 0),
 			0
 		);
+		const suppressedCount = codeDiagnostics.reduce(
+			(sum, code) =>
+				sum +
+				(code.deliveryStatuses.find((status) => status.status === 'suppressed')?.alertCount ?? 0),
+			0
+		);
 
 		return {
 			asOf: new Date(now),
@@ -525,8 +559,9 @@ export class SqliteReviewAlertDiagnosticsService implements ReviewAlertDiagnosti
 			uniqueSubjectCount:
 				overlap.bothCodes + overlap.orderPendingReviewOnly + overlap.styriaReviewRequiredOnly,
 			matchedOrderCount,
-			outstandingCount: alertCount - completedCount,
+			outstandingCount: alertCount - completedCount - suppressedCount,
 			completedCount,
+			suppressedCount,
 			oldestCreatedAt: extremum(
 				codeDiagnostics.map((code) => code.oldestCreatedAt),
 				'oldest'
@@ -583,7 +618,8 @@ const ageCodeSchema = v.strictObject({
 	alert_count: countSchema,
 	unique_subject_count: countSchema,
 	outstanding_count: countSchema,
-	completed_count: countSchema
+	completed_count: countSchema,
+	suppressed_count: countSchema
 });
 const inputSchema = safeToolSchema(v.strictObject({}));
 const outputSchema = v.strictObject({
@@ -596,6 +632,7 @@ const outputSchema = v.strictObject({
 			matched_order_count: countSchema,
 			outstanding_count: countSchema,
 			completed_count: countSchema,
+			suppressed_count: countSchema,
 			oldest_created_at: nullableTimestampSchema,
 			newest_created_at: nullableTimestampSchema,
 			oldest_outstanding_next_attempt_at: nullableTimestampSchema,
@@ -635,6 +672,7 @@ function publicDiagnostics(diagnostics: ReviewAlertDiagnostics) {
 			matched_order_count: diagnostics.matchedOrderCount,
 			outstanding_count: diagnostics.outstandingCount,
 			completed_count: diagnostics.completedCount,
+			suppressed_count: diagnostics.suppressedCount,
 			oldest_created_at: timestamp(diagnostics.oldestCreatedAt),
 			newest_created_at: timestamp(diagnostics.newestCreatedAt),
 			oldest_outstanding_next_attempt_at: timestamp(diagnostics.oldestOutstandingNextAttemptAt),
@@ -675,7 +713,8 @@ function publicDiagnostics(diagnostics: ReviewAlertDiagnostics) {
 				alert_count: code.alertCount,
 				unique_subject_count: code.uniqueSubjectCount,
 				outstanding_count: code.outstandingCount,
-				completed_count: code.completedCount
+				completed_count: code.completedCount,
+				suppressed_count: code.suppressedCount
 			}))
 		}))
 	};

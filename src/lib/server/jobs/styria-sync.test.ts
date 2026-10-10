@@ -173,6 +173,17 @@ describe('SqliteStyriaSyncJob', () => {
 				database.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'").all()
 			)
 		).not.toContain('unknown-private-provider-status');
+
+		await job.run(new Date('2026-07-17T13:00:00.000Z'));
+		expect(
+			database
+				.prepare(
+					`SELECT COUNT(*) AS count FROM outbox_jobs
+					 WHERE kind = 'operational-alert'
+					 AND alert_code = 'STYRIA_REVIEW_REQUIRED'`
+				)
+				.get()
+		).toEqual({ count: 1 });
 	});
 
 	it('polls only non-terminal orders, maps current states, and retains state when Styria is unavailable', async () => {

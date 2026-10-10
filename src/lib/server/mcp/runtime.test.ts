@@ -17,6 +17,7 @@ import { createMcpResponder } from './transport.server';
 const migrationsDirectory = fileURLToPath(new URL('../../../../migrations', import.meta.url));
 const TOKEN = 'runtime-test-token';
 const withdrawalDataKey = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+const backupEncryptionKey = Buffer.alloc(32, 7).toString('base64');
 const environment = {
 	PRODUCTION_ORIGIN: 'https://shop.runtime.test',
 	STRIPE_SECRET_KEY: 'sk_test_runtime',
@@ -25,7 +26,8 @@ const environment = {
 	STYRIA_BASE_URL: 'https://styria.runtime.test',
 	STYRIA_TIMEOUT_MS: '4321',
 	RESEND_API_KEY: 'resend-runtime-secret',
-	WITHDRAWAL_DATA_KEY: withdrawalDataKey.toString('base64')
+	WITHDRAWAL_DATA_KEY: withdrawalDataKey.toString('base64'),
+	BACKUP_ENCRYPTION_KEY_BASE64: backupEncryptionKey
 };
 
 type JsonRpcResponse = {
@@ -211,6 +213,28 @@ describe('runtime MCP composition', () => {
 		for (const database of databases.splice(0)) database.close();
 	});
 
+	it('wires backlog suppression only when the backup encryption key is valid', () => {
+		const database = new Database(':memory:');
+		databases.push(database);
+		migrate(database, migrationsDirectory);
+		const dependencies = {
+			createStripeGateway: () => stripeGateway(),
+			createStyriaGateway: () => styriaGateway(),
+			createEmailGateway: () => emailGateway()
+		};
+
+		expect(
+			createRuntimeMcpServices(database, environment, dependencies).reviewAlertBacklogSuppression
+		).toBeDefined();
+		expect(
+			createRuntimeMcpServices(
+				database,
+				{ ...environment, BACKUP_ENCRYPTION_KEY_BASE64: 'invalid' },
+				dependencies
+			).reviewAlertBacklogSuppression
+		).toBeUndefined();
+	});
+
 	it('composes once after authentication and serves core tools from the current database', async () => {
 		const database = new Database(':memory:');
 		databases.push(database);
@@ -253,6 +277,7 @@ describe('runtime MCP composition', () => {
 		expect(compose).toHaveBeenCalledOnce();
 		expect(composed?.fulfillment).toBeDefined();
 		expect(composed?.reviewAlertDiagnostics).toBeDefined();
+		expect(composed?.reviewAlertBacklogSuppression).toBeDefined();
 		expect(composed?.stripe).toBeDefined();
 		expect(composed?.preparation).toBeDefined();
 		expect(composed?.submission).toBeDefined();
