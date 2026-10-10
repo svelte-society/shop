@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { mapStyriaStatus } from '$lib/domain/fulfillment';
 import type { FulfillmentStatus, OrderEvent, OrderWithLines } from '$lib/domain/orders';
 import { RepositoryError } from '$lib/domain/orders';
-import type { FulfillmentRepository } from '$lib/server/fulfillment/repository.server';
+import {
+	isReviewReconciliationAllowed,
+	type FulfillmentRepository
+} from '$lib/server/fulfillment/repository.server';
 import { StyriaError, type StyriaGateway } from '$lib/server/styria/gateway';
 import type { StyriaOrder, StyriaOrderPayload } from '$lib/server/styria/types';
 import { StyriaReconciliationService, type ReconciliationDependencies } from './reconcile.server';
@@ -126,11 +129,21 @@ class MemoryFulfillment {
 		orderId: string,
 		styriaOrderId: string,
 		status: string,
-		at: Date
+		at: Date,
+		expectedStatus?: 'submitting' | 'review_required'
 	): FulfillmentStatus {
 		this.calls.push('recordSubmitted');
 		if (this.recordFailures-- > 0) throw new RepositoryError('STYRIA_SUBMISSION_RECORD_FAILED');
 		if (orderId !== this.order.id) throw new RepositoryError('ORDER_NOT_FOUND');
+		if (expectedStatus !== undefined && this.order.fulfillmentStatus !== expectedStatus) {
+			throw new RepositoryError('STYRIA_RECONCILIATION_NOT_ALLOWED');
+		}
+		if (
+			this.order.fulfillmentStatus === 'review_required' &&
+			(expectedStatus !== 'review_required' || !isReviewReconciliationAllowed(this.order))
+		) {
+			throw new RepositoryError('STYRIA_RECONCILIATION_NOT_ALLOWED');
+		}
 		this.order.fulfillmentStatus = mapStyriaStatus({
 			status,
 			deleted: false,
@@ -140,7 +153,8 @@ class MemoryFulfillment {
 		this.order.styriaStatus = status;
 		this.order.submittedAt = new Date(at);
 		this.order.updatedAt = new Date(at);
-		this.order.lastErrorCode = null;
+		this.order.lastErrorCode =
+			this.order.fulfillmentStatus === 'review_required' ? 'STYRIA_STATUS_REVIEW_REQUIRED' : null;
 		return this.order.fulfillmentStatus;
 	}
 
@@ -160,10 +174,12 @@ class FakeStyria implements StyriaGateway {
 	readonly calls: Array<{ externalId: string; createdAfter: Date }> = [];
 	matches: StyriaOrder[] = [];
 	error: unknown = null;
+	beforeReturn: (() => void) | null = null;
 
 	async searchByExternalId(externalId: string, createdAfter: Date): Promise<StyriaOrder[]> {
 		this.calls.push({ externalId, createdAfter: new Date(createdAfter) });
 		if (this.error) throw this.error;
+		this.beforeReturn?.();
 		return structuredClone(this.matches);
 	}
 
@@ -295,6 +311,80 @@ describe('Styria submission reconciliation', () => {
 				styriaOrderId: 'styria-2042',
 				styriaStatus: 'received',
 				lastErrorCode: null
+			})
+		);
+	});
+
+	it('records one consistent provider match while preserving review for an exceptional status', async () => {
+		const state = setup();
+		state.styria.matches = [remoteOrder({ status: 'internal order query' })];
+
+		await expect(state.service.reconcile('order_reconcile', now)).resolves.toEqual({
+			outcome: 'reconciled',
+			matches: 1,
+			fulfillmentStatus: 'review_required'
+		});
+
+		expect(state.fulfillment.calls).toEqual(['inspect', 'recordSubmitted']);
+		expect(state.fulfillment.order).toEqual(
+			expect.objectContaining({
+				fulfillmentStatus: 'review_required',
+				styriaOrderId: 'styria-2042',
+				styriaStatus: 'internal order query',
+				lastErrorCode: 'STYRIA_STATUS_REVIEW_REQUIRED'
+			})
+		);
+	});
+
+	it.each([
+		['is no longer paid', { paymentStatus: 'refunded' as const }],
+		['has a non-reconciliation review reason', { lastErrorCode: 'STYRIA_STATUS_REVIEW_REQUIRED' }]
+	])('fails closed before provider search when a review order %s', async (_label, update) => {
+		const state = setup();
+		Object.assign(state.fulfillment.order, update);
+
+		await expect(state.service.reconcile('order_reconcile', now)).rejects.toMatchObject({
+			name: 'ReconciliationError',
+			code: 'STYRIA_RECONCILIATION_NOT_ALLOWED',
+			message: 'STYRIA_RECONCILIATION_NOT_ALLOWED'
+		});
+
+		expect(state.fulfillment.calls).toEqual(['inspect']);
+		expect(state.styria.calls).toEqual([]);
+	});
+
+	it('allows retrying a review order after a prior reconciliation record failure', async () => {
+		const state = setup();
+		state.fulfillment.order.lastErrorCode = 'STYRIA_RECONCILIATION_RECORD_FAILED';
+		state.styria.matches = [remoteOrder()];
+
+		await expect(state.service.reconcile('order_reconcile', now)).resolves.toEqual({
+			outcome: 'reconciled',
+			matches: 1,
+			fulfillmentStatus: 'awaiting_vendor_payment'
+		});
+
+		expect(state.fulfillment.calls).toEqual(['inspect', 'recordSubmitted']);
+	});
+
+	it('does not record a provider match after the review state changes during lookup', async () => {
+		const state = setup();
+		state.styria.matches = [remoteOrder({ status: 'internal order query' })];
+		state.styria.beforeReturn = () => {
+			state.fulfillment.order.fulfillmentStatus = 'pending_review';
+			state.fulfillment.order.lastErrorCode = null;
+		};
+
+		await expect(state.service.reconcile('order_reconcile', now)).rejects.toMatchObject({
+			name: 'ReconciliationError',
+			code: 'STYRIA_RECONCILIATION_RECORD_FAILED'
+		});
+
+		expect(state.fulfillment.order).toEqual(
+			expect.objectContaining({
+				fulfillmentStatus: 'pending_review',
+				styriaOrderId: null,
+				styriaStatus: null
 			})
 		);
 	});

@@ -719,6 +719,158 @@ describe('provider-result mutations', () => {
 		]);
 	});
 
+	it('records a reconciled provider identity while preserving an exceptional review state', () => {
+		seedOrder(database, {
+			status: 'review_required',
+			lastErrorCode: 'STYRIA_CREATE_AMBIGUOUS'
+		});
+
+		repository.recordSubmitted(
+			'order_one',
+			'styria-123',
+			'internal order query',
+			now,
+			'review_required'
+		);
+
+		expect(orderState(database)).toEqual(
+			expect.objectContaining({
+				payment_status: 'paid',
+				fulfillment_status: 'review_required',
+				styria_order_id: 'styria-123',
+				styria_status: 'internal order query',
+				submitted_at: now.toISOString(),
+				last_error_code: 'STYRIA_STATUS_REVIEW_REQUIRED'
+			})
+		);
+		expect(events(database)).toEqual([
+			{
+				actor: 'codex-admin',
+				action: 'styria_submission_recorded',
+				prior_state: 'review_required',
+				next_state: 'review_required',
+				result: 'failed',
+				error_code: 'STYRIA_STATUS_REVIEW_REQUIRED',
+				created_at: now.toISOString()
+			}
+		]);
+		expect(JSON.stringify(events(database))).not.toContain('styria-123');
+		expect(JSON.stringify(events(database))).not.toContain('internal order query');
+	});
+
+	it.each([
+		{
+			label: 'a non-review order would remain in the same state',
+			seed: {
+				status: 'awaiting_vendor_payment' as const,
+				styriaOrderId: 'styria-123',
+				styriaStatus: 'received'
+			},
+			providerStatus: 'received',
+			expectedError: 'FULFILLMENT_TRANSITION_INVALID'
+		},
+		{
+			label: 'the review order already has a provider identity',
+			seed: {
+				status: 'review_required' as const,
+				styriaOrderId: 'styria-123',
+				styriaStatus: 'internal order query',
+				lastErrorCode: 'STYRIA_CREATE_AMBIGUOUS'
+			},
+			providerStatus: 'internal order query',
+			expectedError: 'STYRIA_RECONCILIATION_NOT_ALLOWED'
+		}
+	])(
+		'rejects a same-state provider record when $label',
+		({ seed, providerStatus, expectedError }) => {
+			seedOrder(database, seed);
+
+			expect(() =>
+				repository.recordSubmitted(
+					'order_one',
+					'styria-123',
+					providerStatus,
+					now,
+					seed.status === 'review_required' ? 'review_required' : undefined
+				)
+			).toThrowError(expectedError);
+
+			expect(orderState(database)).toEqual(
+				expect.objectContaining({
+					fulfillment_status: seed.status,
+					styria_order_id: 'styria-123',
+					styria_status: seed.styriaStatus,
+					updated_at: '2026-07-16T08:00:00.000Z'
+				})
+			);
+			expect(events(database)).toEqual([]);
+		}
+	);
+
+	it.each([
+		{
+			label: 'payment is no longer paid',
+			paymentStatus: 'refunded' as const,
+			lastErrorCode: 'STYRIA_CREATE_AMBIGUOUS',
+			styriaOrderId: null
+		},
+		{
+			label: 'review reason is no longer reconciliation-safe',
+			paymentStatus: 'paid' as const,
+			lastErrorCode: 'STYRIA_STATUS_REVIEW_REQUIRED',
+			styriaOrderId: null
+		},
+		{
+			label: 'the order already has a provider identity',
+			paymentStatus: 'paid' as const,
+			lastErrorCode: 'STYRIA_CREATE_AMBIGUOUS',
+			styriaOrderId: 'styria-existing'
+		}
+	])(
+		'rejects review reconciliation when $label',
+		({ paymentStatus, lastErrorCode, styriaOrderId }) => {
+			seedOrder(database, {
+				status: 'review_required',
+				paymentStatus,
+				lastErrorCode,
+				styriaOrderId
+			});
+
+			expect(() =>
+				repository.recordSubmitted('order_one', 'styria-123', 'received', now, 'review_required')
+			).toThrowError('STYRIA_RECONCILIATION_NOT_ALLOWED');
+
+			expect(orderState(database)).toEqual(
+				expect.objectContaining({
+					payment_status: paymentStatus,
+					fulfillment_status: 'review_required',
+					styria_order_id: styriaOrderId,
+					styria_status: null,
+					submitted_at: null,
+					last_error_code: lastErrorCode
+				})
+			);
+			expect(events(database)).toEqual([]);
+		}
+	);
+
+	it('allows review reconciliation retry after a prior record failure', () => {
+		seedOrder(database, {
+			status: 'review_required',
+			lastErrorCode: 'STYRIA_RECONCILIATION_RECORD_FAILED'
+		});
+
+		repository.recordSubmitted('order_one', 'styria-123', 'received', now, 'review_required');
+
+		expect(orderState(database)).toEqual(
+			expect.objectContaining({
+				fulfillment_status: 'awaiting_vendor_payment',
+				styria_order_id: 'styria-123',
+				last_error_code: null
+			})
+		);
+	});
+
 	it('preserves the provider ID but requires review when an automatic order is refunded in flight', () => {
 		seedOrder(database, { status: 'submitting', paymentStatus: 'partially_refunded' });
 		const automaticRepository = new SqliteFulfillmentRepository(database, 'system-auto');
@@ -753,7 +905,7 @@ describe('provider-result mutations', () => {
 		});
 
 		repository.recordSubmitted('order_legacy', 'styria-legacy', 'received', now);
-		repository.recordSubmitted('order_repair', 'styria-repair', 'received', now);
+		repository.recordSubmitted('order_repair', 'styria-repair', 'received', now, 'review_required');
 
 		expect(orderState(database, 'order_legacy').fulfillment_status).toBe('awaiting_vendor_payment');
 		expect(orderState(database, 'order_repair').fulfillment_status).toBe('awaiting_vendor_payment');

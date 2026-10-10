@@ -5,6 +5,7 @@ import type {
 	FulfillmentRepository,
 	OrderWithLinesAndEvents
 } from '$lib/server/fulfillment/repository.server';
+import { isReviewReconciliationAllowed } from '$lib/server/fulfillment/repository.server';
 import type { StyriaGateway } from '$lib/server/styria/gateway';
 import {
 	buildStyriaLineDescription,
@@ -225,6 +226,9 @@ export class StyriaReconciliationService implements ReconciliationService {
 		if (order.fulfillmentStatus !== 'review_required' && order.fulfillmentStatus !== 'submitting') {
 			fail('STYRIA_RECONCILIATION_NOT_ALLOWED');
 		}
+		if (order.fulfillmentStatus === 'review_required' && !isReviewReconciliationAllowed(order)) {
+			fail('STYRIA_RECONCILIATION_NOT_ALLOWED');
+		}
 
 		const evidence = this.evidenceOrRequireReview(order, now);
 		let providerMatches: StyriaOrder[];
@@ -253,7 +257,8 @@ export class StyriaReconciliationService implements ReconciliationService {
 					orderId,
 					matches[0].id,
 					matches[0].status,
-					now
+					now,
+					order.fulfillmentStatus
 				);
 			} catch {
 				if (order.fulfillmentStatus === 'submitting') {

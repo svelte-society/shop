@@ -16,6 +16,10 @@ import type { FulfillmentActor } from './approvals.server';
 const SUPPORT_ACTOR = 'codex-admin';
 const REVIEW_ERROR_CODE = 'STYRIA_STATUS_REVIEW_REQUIRED';
 const AUTOMATIC_PAYMENT_REVIEW_ERROR_CODE = 'AUTOMATIC_SUBMISSION_PAYMENT_NOT_PAID';
+const RECONCILABLE_REVIEW_ERROR_CODES = new Set([
+	'STYRIA_CREATE_AMBIGUOUS',
+	'STYRIA_RECONCILIATION_RECORD_FAILED'
+]);
 
 const fulfillmentStatuses = new Set<FulfillmentStatus>([
 	'pending_review',
@@ -80,7 +84,13 @@ export interface FulfillmentRepository {
 	listPending(limit: number): OrderSummary[];
 	inspect(orderId: string): OrderWithLinesAndEvents | null;
 	beginSubmission(orderId: string, approvalId: string, payloadHash: string, now: Date): void;
-	recordSubmitted(orderId: string, styriaOrderId: string, styriaStatus: string, now: Date): void;
+	recordSubmitted(
+		orderId: string,
+		styriaOrderId: string,
+		styriaStatus: string,
+		now: Date,
+		expectedStatus?: 'submitting' | 'review_required'
+	): void;
 	requireReview(orderId: string, errorCode: string, now: Date): void;
 	applyStyriaStatus(orderId: string, update: StyriaStatusUpdate, now: Date): void;
 	recordSupportNote(input: NewSupportNote): void;
@@ -150,6 +160,18 @@ function dateFromIso(value: unknown, invalidCode: string): Date {
 
 function requireCurrentTimestamp(order: Order, timestamp: string): void {
 	if (timestamp < order.updatedAt.toISOString()) fail('ORDER_TIMESTAMP_REGRESSION');
+}
+
+export function isReviewReconciliationAllowed(
+	order: Pick<Order, 'fulfillmentStatus' | 'paymentStatus' | 'lastErrorCode' | 'styriaOrderId'>
+): boolean {
+	return (
+		order.fulfillmentStatus === 'review_required' &&
+		order.paymentStatus === 'paid' &&
+		order.styriaOrderId === null &&
+		order.lastErrorCode !== null &&
+		RECONCILABLE_REVIEW_ERROR_CODES.has(order.lastErrorCode)
+	);
 }
 
 function toSummary(order: Order): OrderSummary {
@@ -309,7 +331,13 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 		}
 	}
 
-	recordSubmitted(orderId: string, styriaOrderId: string, styriaStatus: string, now: Date): void {
+	recordSubmitted(
+		orderId: string,
+		styriaOrderId: string,
+		styriaStatus: string,
+		now: Date,
+		expectedStatus?: 'submitting' | 'review_required'
+	): void {
 		if (
 			!isExactString(orderId, 200) ||
 			!isExactString(styriaOrderId, 200) ||
@@ -336,6 +364,16 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 		const record = this.database.transaction(() => {
 			const order = this.orders.findById(orderId);
 			if (!order) fail('ORDER_NOT_FOUND');
+			if (expectedStatus !== undefined && order.fulfillmentStatus !== expectedStatus) {
+				fail('STYRIA_RECONCILIATION_NOT_ALLOWED');
+			}
+			const reviewReconciliationAllowed = isReviewReconciliationAllowed(order);
+			if (
+				order.fulfillmentStatus === 'review_required' &&
+				(expectedStatus !== 'review_required' || !reviewReconciliationAllowed)
+			) {
+				fail('STYRIA_RECONCILIATION_NOT_ALLOWED');
+			}
 			const automaticPaymentInvalid =
 				this.actor === 'system-auto' && order.paymentStatus !== 'paid';
 			const next = automaticPaymentInvalid ? 'review_required' : providerNext;
@@ -344,7 +382,11 @@ export class SqliteFulfillmentRepository implements FulfillmentRepository {
 				: next === 'review_required'
 					? REVIEW_ERROR_CODE
 					: null;
-			assertTransition(order.fulfillmentStatus, next);
+			const isReviewIdentityAttachment =
+				reviewReconciliationAllowed && next === 'review_required' && order.styriaOrderId === null;
+			if (!isReviewIdentityAttachment) {
+				assertTransition(order.fulfillmentStatus, next);
+			}
 			requireCurrentTimestamp(order, timestamp);
 			if (order.styriaOrderId !== null && order.styriaOrderId !== styriaOrderId) {
 				fail('STYRIA_ORDER_ID_CONFLICT');
