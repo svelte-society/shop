@@ -40,6 +40,12 @@ function normalizedId(value: unknown): string | null {
 	return null;
 }
 
+function normalizedStatus(value: unknown): string | null {
+	if (typeof value !== 'string') return null;
+	const normalized = value.trim();
+	return isExactString(normalized, 100) ? normalized : null;
+}
+
 function normalizedPositiveInteger(value: unknown): number | null {
 	if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
 	if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) {
@@ -144,11 +150,12 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 	const id = normalizedId(value.id);
 	const externalId = optionalString(value.external_id, 200);
 	const deleted = normalizedBoolean(value.deleted);
+	const status = normalizedStatus(value.status);
 	if (
 		id === null ||
 		externalId === undefined ||
 		!isTimestamp(value.created_at) ||
-		!isExactString(value.status, 100) ||
+		status === null ||
 		deleted === null ||
 		!isRecord(value.shipping_address) ||
 		!isExactString(value.shipping_address.country, 200) ||
@@ -197,7 +204,7 @@ function normalizeOrder(value: unknown): StyriaOrder | null {
 		id,
 		external_id: externalId,
 		created_at: value.created_at,
-		status: value.status,
+		status,
 		deleted,
 		shipping_address: { country: value.shipping_address.country },
 		shipping: {

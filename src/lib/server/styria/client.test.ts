@@ -227,6 +227,18 @@ describe('Styria detail/create adapter', () => {
 
 		await expect(client.get('1042')).resolves.toEqual(expected);
 	});
+
+	it.each([
+		['trailing newline', 'in progress\n'],
+		['surrounding whitespace', ' \t in progress\r\n ']
+	])('normalizes a status with %s', async (_label, status) => {
+		const expected = styriaOrderFixture({ status: 'in progress' });
+		const fetch: typeof globalThis.fetch = async () =>
+			successJson({ order: { ...liveProviderOrderFixture(expected), status } });
+		const client = createStyriaClient({ ...credentials, fetch });
+
+		await expect(client.get(expected.id)).resolves.toEqual(expected);
+	});
 });
 
 describe('Styria client failures', () => {
@@ -247,7 +259,19 @@ describe('Styria client failures', () => {
 	it.each([
 		['non-JSON success', new Response('not-json', { status: 200 })],
 		['malformed detail', successJson({ id: '1042', external_id: 'cs_test_target' })],
-		['malformed list item', successJson([styriaOrderFixture(), { status: 'received' }])]
+		['malformed list item', successJson([styriaOrderFixture(), { status: 'received' }])],
+		[
+			'status with an embedded newline',
+			successJson({ order: { ...liveProviderOrderFixture(), status: 'in\nprogress' } })
+		],
+		[
+			'malformed empty status',
+			successJson({ order: { ...liveProviderOrderFixture(), status: ' \r\n\t ' } })
+		],
+		[
+			'malformed overlong status',
+			successJson({ order: { ...liveProviderOrderFixture(), status: ` ${'x'.repeat(101)}\n` } })
+		]
 	])('rejects a %s with one stable response code', async (_label, response) => {
 		const fetch: typeof globalThis.fetch = async () => response;
 		const client = createStyriaClient({ ...credentials, fetch });
