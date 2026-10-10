@@ -108,6 +108,7 @@ start_container() {
 		--env STOREFRONT_ENABLED=false
 		--env CHECKOUT_ENABLED=false
 		--env "MCP_ENABLED=$mcp"
+		--env STYRIA_AUTO_SUBMIT_ENABLED=false
 		--env "MCP_BEARER_TOKEN=$MCP_BEARER_TOKEN"
 		--env PRODUCTION_ORIGIN=https://shop.sveltesociety.dev
 		--env ORIGIN=https://shop.sveltesociety.dev
