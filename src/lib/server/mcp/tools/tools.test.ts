@@ -399,6 +399,7 @@ describe('fulfillment MCP protocol', () => {
 
 		expect(tools.map((tool) => tool.name)).toEqual([
 			'list_pending_orders',
+			'inspect_review_alert_outbox',
 			'inspect_order',
 			'prepare_styria_submission',
 			'submit_styria_order',
@@ -416,6 +417,12 @@ describe('fulfillment MCP protocol', () => {
 		]);
 		expect(Object.fromEntries(tools.map(({ name, annotations }) => [name, annotations]))).toEqual({
 			list_pending_orders: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			inspect_review_alert_outbox: {
 				readOnlyHint: true,
 				destructiveHint: false,
 				idempotentHint: true,
@@ -588,6 +595,7 @@ describe('fulfillment MCP protocol', () => {
 		['list_pending_orders', { limit: 0 }],
 		['list_pending_orders', { limit: 101 }],
 		['list_pending_orders', { limit: 1.5 }],
+		['inspect_review_alert_outbox', { sql: 'SELECT * FROM outbox_jobs' }],
 		['list_withdrawal_cases', { limit: 0 }],
 		['list_withdrawal_cases', { limit: 101 }],
 		['list_withdrawal_cases', { limit: 1.5 }],

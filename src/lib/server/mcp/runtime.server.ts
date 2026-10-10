@@ -29,6 +29,7 @@ import { SqliteWithdrawalRepository } from '$lib/server/withdrawals/repository.s
 import { WithdrawalWorkflowService } from '$lib/server/withdrawals/workflow.server';
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
+import { SqliteReviewAlertDiagnosticsService } from './tools/inspect-review-alert-outbox';
 
 type RuntimeMcpDependencies = {
 	createStripeGateway?: (secretKey: string) => StripeFulfillmentGateway;
@@ -193,6 +194,7 @@ export function createRuntimeMcpServices(
 
 	return {
 		fulfillment,
+		reviewAlertDiagnostics: new SqliteReviewAlertDiagnosticsService(database),
 		stripe,
 		preparation: new FulfillmentPreparationService({ ...shared, approvals }),
 		submission: new FulfillmentSubmissionService({ ...shared, styria, alerts }),

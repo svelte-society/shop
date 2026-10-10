@@ -252,6 +252,7 @@ describe('runtime MCP composition', () => {
 		expect(initialized.status).toBe(200);
 		expect(compose).toHaveBeenCalledOnce();
 		expect(composed?.fulfillment).toBeDefined();
+		expect(composed?.reviewAlertDiagnostics).toBeDefined();
 		expect(composed?.stripe).toBeDefined();
 		expect(composed?.preparation).toBeDefined();
 		expect(composed?.submission).toBeDefined();

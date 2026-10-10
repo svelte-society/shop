@@ -98,12 +98,32 @@ describe('Codex MCP fulfillment lifecycle', () => {
 		);
 		const tools = listedTools.message.result.tools as Array<{
 			name: string;
-			annotations: { readOnlyHint: boolean };
+			annotations: Record<string, boolean>;
 		}>;
 		expect(tools.map((tool) => tool.name)).toContain('list_pending_orders');
+		expect(tools.find((tool) => tool.name === 'inspect_review_alert_outbox')?.annotations).toEqual({
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: false
+		});
 		expect(
 			tools.find((tool) => tool.name === 'prepare_styria_submission')?.annotations
 		).toMatchObject({ readOnlyHint: false });
+
+		const reviewAlerts = await client.call('inspect_review_alert_outbox', {});
+		expect(reviewAlerts.message.result).toMatchObject({
+			structuredContent: {
+				totals: {
+					alert_count: 0,
+					unique_subject_count: 0,
+					outstanding_count: 0,
+					completed_count: 0
+				},
+				subject_overlap: { both_codes: 0 }
+			}
+		});
+		expectNoFixturePii(reviewAlerts.message.result);
 
 		const pending = await client.call('list_pending_orders', { limit: 10 });
 		expect(pending.message.result).toMatchObject({

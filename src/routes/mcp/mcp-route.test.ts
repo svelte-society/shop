@@ -181,6 +181,7 @@ describe('/mcp TMCP Streamable HTTP protocol', () => {
 		expect(listed.id).toBe(11);
 		expect((listed.result.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
 			'list_pending_orders',
+			'inspect_review_alert_outbox',
 			'inspect_order',
 			'prepare_styria_submission',
 			'submit_styria_order',
