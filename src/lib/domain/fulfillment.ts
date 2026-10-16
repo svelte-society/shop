@@ -34,6 +34,7 @@ const IN_PRODUCTION_STATUSES = new Set([
 ]);
 
 const REVIEW_STATUSES = new Set(['refunded', 'internal order query']);
+const SHIPPED_STATUS = 'shipped';
 
 export function assertTransition(from: FulfillmentStatus, to: FulfillmentStatus): void {
 	if (!ALLOWED[from]?.includes(to)) throw new RepositoryError('FULFILLMENT_TRANSITION_INVALID');
@@ -47,9 +48,11 @@ export function mapStyriaStatus(input: {
 	const status = typeof input?.status === 'string' ? input.status.trim().toLowerCase() : '';
 	const isReceived = status === 'received';
 	const isInProduction = IN_PRODUCTION_STATUSES.has(status);
-	if (input?.deleted === true || REVIEW_STATUSES.has(status) || (!isReceived && !isInProduction)) {
+	if (input?.deleted === true || REVIEW_STATUSES.has(status)) {
 		return 'review_required';
 	}
+	if (status === SHIPPED_STATUS) return 'shipped';
+	if (!isReceived && !isInProduction) return 'review_required';
 	if (typeof input?.trackingNumber === 'string' && input.trackingNumber.trim().length > 0) {
 		return 'shipped';
 	}

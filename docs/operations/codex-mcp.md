@@ -74,23 +74,28 @@ approval record.
    production checkout disabled.
 3. Set `MCP_ENABLED=true` and redeploy.
 4. From Codex, verify `initialize` identifies `svelte-society-shop`, then verify
-   `tools/list` exposes the core fulfillment tools and `inspect_review_alert_outbox`.
+   `tools/list` exposes the core fulfillment tools, `inspect_review_alert_outbox`, and
+   `inspect_shipping_email_delivery`.
 5. Call `inspect_review_alert_outbox`. Confirm it returns only aggregate counts, timestamps,
    delivery/attempt buckets, current fulfillment-status counts, and subject-overlap counts for
    `ORDER_PENDING_REVIEW` and `STYRIA_REVIEW_REQUIRED`. It must not return subject/order IDs,
    idempotency keys, delivery errors, message content, contact data, or secrets. `completed` rows
    are delivery history; `outstanding_due` and `outstanding_scheduled` rows are the current outbox
    backlog. The created-age buckets distinguish old backlog from newly generated recurring alerts.
-6. Call `list_pending_orders`, then `inspect_order` without shipping details.
+6. Call `inspect_shipping_email_delivery` for a test order. Confirm it reports only whether tracking
+   exists, the automatic-email state, job retry and provider-attempt counts, timestamps/stable error code,
+   and whether the email provider accepted the request. It must not return the tracking number, recipient,
+   idempotency key, or provider delivery ID. Provider acceptance is not proof of recipient inbox delivery.
+7. Call `list_pending_orders`, then `inspect_order` without shipping details.
    Confirm neither result contains an authorization value, customer address, or
    phone number.
-7. Call `prepare_styria_submission` for a test order. Confirm Codex prompts for
+8. Call `prepare_styria_submission` for a test order. Confirm Codex prompts for
    the write and returns a ten-minute approval only after approval is granted.
    Do not submit a production Styria order during this smoke test.
-8. Send an invalid bearer from a controlled client. Confirm `401 Unauthorized`,
+9. Send an invalid bearer from a controlled client. Confirm `401 Unauthorized`,
    `WWW-Authenticate: Bearer`, an empty response body, and no token echo in the
    response or application logs.
-9. Search the verification-period logs for authorization headers and both test
+10. Search the verification-period logs for authorization headers and both test
    token values. Redaction passes only when neither supplied nor configured
    bearer appears.
 

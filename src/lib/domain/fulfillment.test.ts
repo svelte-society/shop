@@ -77,6 +77,13 @@ describe('Styria status mapping', () => {
 		).toBe('shipped');
 	});
 
+	it.each(['shipped', ' SHIPPED '])(
+		'maps the normalized %j provider state to shipped without requiring tracking',
+		(status) => {
+			expect(mapStyriaStatus({ status, deleted: false, trackingNumber: null })).toBe('shipped');
+		}
+	);
+
 	it.each([
 		{ status: 'received', deleted: true, trackingNumber: null },
 		{ status: 'refunded', deleted: false, trackingNumber: null },
@@ -88,6 +95,7 @@ describe('Styria status mapping', () => {
 	it.each([
 		{ status: 'provider surprise', deleted: false, trackingNumber: 'TRACK-123' },
 		{ status: 'received', deleted: true, trackingNumber: 'TRACK-123' },
+		{ status: 'shipped', deleted: true, trackingNumber: 'TRACK-123' },
 		{ status: 'refunded', deleted: false, trackingNumber: 'TRACK-123' },
 		{ status: 'internal order query', deleted: false, trackingNumber: 'TRACK-123' }
 	])('makes review safety precedence override tracking for %#', (input) => {

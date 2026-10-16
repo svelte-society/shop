@@ -42,6 +42,12 @@ The public page contains two internal inconsistencies: `brand` in the property t
 
 The signed sandbox smoke subsequently confirmed that account responses return `designs` and `mockups` as arrays of `{ title, src }` records. The adapter accepts those response arrays and normalizes them to placement-to-URL records. Empty mockup arrays remain valid for legacy orders.
 
+On 2026-10-16, a production order detail response returned the undocumented exact status `shipped`
+alongside its tracking reference. The adapter treats this account-specific status as terminal shipped even
+when the tracking reference is absent from a particular response. Explicit deletion, refund, and internal
+order-query signals continue to take precedence and require manual review; every other undocumented status
+also remains review-required.
+
 ## Non-production signed smoke record
 
 Signed list, detail, create, and unpaid-order deletion requests have now been exercised against the account sandbox. Do not record credentials, customer details, or raw returned order data here.

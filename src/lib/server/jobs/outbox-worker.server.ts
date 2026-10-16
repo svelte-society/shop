@@ -185,18 +185,23 @@ export class PaidOrderAlertOutboxWorker implements OutboxWorker {
 					return 'completed';
 				} catch (error) {
 					const attempt = job.attemptCount + 1;
-					this.dependencies.outbox.reschedule(
-						job.id,
-						attempt,
-						nextOutboxAttempt(now, attempt),
-						stableErrorCode(error, job)
-					);
-					if (job.kind === 'shipping-email' && attempt === 6 && job.orderId !== null) {
-						try {
-							this.dependencies.alerts?.enqueueAlert('SHIPPING_EMAIL_UNSENT', job.orderId, now);
-						} catch {
-							// The shipping job remains durable and hourly even if escalation persistence fails.
-						}
+					const reschedule = () =>
+						this.dependencies.outbox.reschedule(
+							job.id,
+							attempt,
+							nextOutboxAttempt(now, attempt),
+							stableErrorCode(error, job)
+						);
+					const alerts = this.dependencies.alerts;
+					const orderId = job.orderId;
+					if (job.kind === 'shipping-email' && attempt === 6 && orderId !== null && alerts) {
+						const rescheduleAndEscalate = this.dependencies.database.transaction(() => {
+							reschedule();
+							alerts.enqueueAlert('SHIPPING_EMAIL_UNSENT', orderId, now);
+						});
+						rescheduleAndEscalate.immediate();
+					} else {
+						reschedule();
 					}
 					return 'rescheduled';
 				}

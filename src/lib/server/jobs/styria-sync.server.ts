@@ -50,8 +50,8 @@ function exactString(value: unknown): value is string {
 	return typeof value === 'string' && value.length > 0 && value === value.trim();
 }
 
-function isTerminal(status: unknown): boolean {
-	return status === 'shipped' || status === 'cancelled';
+function canSkipProvider(status: unknown, trackingNumber: string | null): boolean {
+	return status === 'cancelled' || (status === 'shipped' && trackingNumber !== null);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -79,6 +79,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 				WHERE o.styria_order_id IS NOT NULL
 				AND (
 					o.fulfillment_status NOT IN ('shipped', 'cancelled')
+					OR (o.fulfillment_status = 'shipped' AND o.tracking_number IS NULL)
 					OR (
 						o.tracking_number IS NOT NULL
 						AND NOT EXISTS (
@@ -105,7 +106,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 			) {
 				fail('STYRIA_SYNC_ROW_INVALID');
 			}
-			if (isTerminal(candidate.fulfillment_status)) {
+			if (canSkipProvider(candidate.fulfillment_status, candidate.tracking_number)) {
 				if (this.recordHandled(candidate.id, candidate.tracking_number, now)) {
 					shippingQueued += 1;
 				}
@@ -165,9 +166,6 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 			}
 			if (trackingNumber !== null) {
 				shippingQueued = this.dependencies.outbox.ensureShipping(orderId, trackingNumber, now);
-				if (!this.shippingDelivered(orderId, trackingNumber)) {
-					this.enqueueAlert('SHIPPING_EMAIL_UNSENT', orderId, now);
-				}
 			}
 			this.markChecked(orderId, now);
 		});
@@ -190,9 +188,6 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		const record = this.dependencies.database.transaction(() => {
 			if (trackingNumber !== null) {
 				shippingQueued = this.dependencies.outbox.ensureShipping(orderId, trackingNumber, now);
-				if (!this.shippingDelivered(orderId, trackingNumber)) {
-					this.enqueueAlert('SHIPPING_EMAIL_UNSENT', orderId, now);
-				}
 			}
 			this.markChecked(orderId, now);
 		});
@@ -200,22 +195,7 @@ export class SqliteStyriaSyncJob implements StyriaSyncJob {
 		return shippingQueued;
 	}
 
-	private shippingDelivered(orderId: string, trackingNumber: string): boolean {
-		return Boolean(
-			this.dependencies.database
-				.prepare(
-					`SELECT 1 FROM email_deliveries
-					 WHERE idempotency_key = ? AND completed_at IS NOT NULL LIMIT 1`
-				)
-				.get(`shipping:${orderId}:${trackingNumber}`)
-		);
-	}
-
-	private enqueueAlert(
-		code: 'STYRIA_REVIEW_REQUIRED' | 'SHIPPING_EMAIL_UNSENT',
-		orderId: string,
-		now: Date
-	): void {
+	private enqueueAlert(code: 'STYRIA_REVIEW_REQUIRED', orderId: string, now: Date): void {
 		try {
 			this.dependencies.alerts?.enqueueAlert(code, orderId, now);
 		} catch {

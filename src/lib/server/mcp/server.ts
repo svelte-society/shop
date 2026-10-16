@@ -16,6 +16,10 @@ import {
 	registerInspectReviewAlertOutboxTool,
 	type ReviewAlertDiagnosticsService
 } from './tools/inspect-review-alert-outbox';
+import {
+	registerInspectShippingEmailDeliveryTool,
+	type ShippingEmailDiagnosticsService
+} from './tools/inspect-shipping-email-delivery';
 import { registerListPendingTool } from './tools/list-pending';
 import {
 	registerListWithdrawalsTool,
@@ -41,6 +45,7 @@ export type McpServices = Readonly<{
 	reconciliation?: ReconciliationService;
 	status?: FulfillmentStatusService;
 	shipping?: ShippingEmailService;
+	shippingEmailDiagnostics?: ShippingEmailDiagnosticsService;
 	reviewAlertDiagnostics?: ReviewAlertDiagnosticsService;
 	reviewAlertBacklogSuppression?: ReviewAlertBacklogSuppressionService;
 	withdrawals?: ListWithdrawalCasesService & InspectWithdrawalCaseService;
@@ -67,6 +72,7 @@ export function createMcpServer(services: McpServices): McpServer<GenericSchema>
 		services.reviewAlertDiagnostics,
 		services.now ?? (() => new Date())
 	);
+	registerInspectShippingEmailDeliveryTool(server, services.shippingEmailDiagnostics);
 	registerSuppressReviewAlertBacklogTool(server, services.reviewAlertBacklogSuppression);
 	registerInspectOrderTool(server, {
 		fulfillment: services.fulfillment,

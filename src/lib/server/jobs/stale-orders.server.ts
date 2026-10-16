@@ -222,14 +222,20 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 		const shippingUnsent = subjectIds(
 			this.dependencies.database
 				.prepare(
-					`SELECT o.id FROM orders o
-					 WHERE o.tracking_number IS NOT NULL
+					`SELECT o.id FROM outbox_jobs AS shipping
+					 JOIN orders AS o ON o.id = shipping.order_id
+					 WHERE shipping.kind = 'shipping-email'
+					 AND shipping.completed_at IS NULL
+					 AND shipping.attempt_count >= 6
+					 AND o.tracking_number IS NOT NULL
+					 AND shipping.idempotency_key =
+						'shipping:' || o.id || ':' || o.tracking_number
 					 AND NOT EXISTS (
 						SELECT 1 FROM email_deliveries ed
-						WHERE ed.idempotency_key = 'shipping:' || o.id || ':' || o.tracking_number
+						WHERE ed.idempotency_key = shipping.idempotency_key
 						AND ed.completed_at IS NOT NULL
 					 )
-					 ORDER BY o.updated_at, o.id`
+					 ORDER BY shipping.next_attempt_at, o.id`
 				)
 				.all() as SubjectRow[]
 		);
@@ -262,10 +268,9 @@ export class SqliteOperationalChecksJob implements OperationalChecksJob {
 				this.dependencies.alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', candidate.id, now);
 			}
 		}
-		for (const subjectId of shippingUnsent) {
-			throwIfAborted(signal);
-			this.dependencies.alerts.enqueueAlert('SHIPPING_EMAIL_UNSENT', subjectId, now);
-		}
+		// The outbox worker owns the one-time alert on the sixth failed attempt. The schema has no
+		// stable shipping-job creation timestamp to associate a daily recovery alert with one
+		// tracking incident, so this check reports failures without generating repeat email alerts.
 
 		let backupMissed = false;
 		let retryAt: Date | null = null;

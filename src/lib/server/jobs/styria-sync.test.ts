@@ -135,7 +135,7 @@ afterEach(() => {
 });
 
 describe('SqliteStyriaSyncJob', () => {
-	it('alerts review-required transitions and tracked-but-unsent delivery without provider retry data', async () => {
+	it('alerts review-required transitions without treating a newly queued shipping email as failed', async () => {
 		insertOrder(database, { id: 'review_transition', fulfillmentStatus: 'in_production' });
 		const outbox = new SqliteOutboxRepository(database);
 		const job = new SqliteStyriaSyncJob({
@@ -158,11 +158,13 @@ describe('SqliteStyriaSyncJob', () => {
 		).toEqual([
 			{
 				idempotency_key: 'alert:STYRIA_REVIEW_REQUIRED:review_transition:2026-07-17T12'
-			},
-			{
-				idempotency_key: 'alert:SHIPPING_EMAIL_UNSENT:review_transition:2026-07-17T12'
 			}
 		]);
+		expect(
+			database
+				.prepare("SELECT idempotency_key FROM outbox_jobs WHERE kind = 'shipping-email'")
+				.all()
+		).toEqual([{ idempotency_key: 'shipping:review_transition:TRACK-PRIVATE' }]);
 		expect(
 			JSON.stringify(
 				database.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'").all()
@@ -357,7 +359,7 @@ describe('SqliteStyriaSyncJob', () => {
 			fulfillmentStatus: 'in_production',
 			styriaStatus: 'printing'
 		});
-		const get = vi.fn(async (id: string) => providerOrder(id, 'printing', 'TRACK-2042'));
+		const get = vi.fn(async (id: string) => providerOrder(id, 'shipped', 'TRACK-2042'));
 		const job = new SqliteStyriaSyncJob({
 			database,
 			styria: gateway(get),
@@ -397,6 +399,125 @@ describe('SqliteStyriaSyncJob', () => {
 		expect(database.prepare('SELECT COUNT(*) AS count FROM outbox_jobs').get()).toEqual({
 			count: 1
 		});
+	});
+
+	it('recovers the shipped-with-tracking incident from review without duplicate jobs or alerts', async () => {
+		insertOrder(database, {
+			id: 'shipping_incident',
+			fulfillmentStatus: 'review_required',
+			styriaStatus: 'shipped',
+			trackingNumber: 'TRACK-INCIDENT'
+		});
+		database
+			.prepare('UPDATE orders SET last_error_code = ? WHERE id = ?')
+			.run('STYRIA_STATUS_REVIEW_REQUIRED', 'shipping_incident');
+		const get = vi.fn(async (id: string) => providerOrder(id, 'shipped', 'TRACK-INCIDENT'));
+		const outbox = new SqliteOutboxRepository(database);
+		const alerts = new SqliteAlertService(outbox);
+		const incidentTime = new Date(now.getTime() - 60 * 60_000);
+		outbox.ensureShipping('shipping_incident', 'TRACK-INCIDENT', incidentTime);
+		alerts.enqueueAlert('SHIPPING_EMAIL_UNSENT', 'shipping_incident', incidentTime);
+		alerts.enqueueAlert('STYRIA_REVIEW_REQUIRED', 'shipping_incident', incidentTime);
+		const job = new SqliteStyriaSyncJob({
+			database,
+			styria: gateway(get),
+			fulfillment: new SqliteFulfillmentRepository(database),
+			outbox,
+			alerts
+		});
+
+		await expect(job.run(now)).resolves.toEqual({ checked: 1, updated: 1, shippingQueued: 0 });
+		expect(
+			database
+				.prepare(
+					`SELECT fulfillment_status, styria_status, tracking_number, shipped_at, last_error_code
+					 FROM orders WHERE id = 'shipping_incident'`
+				)
+				.get()
+		).toEqual({
+			fulfillment_status: 'shipped',
+			styria_status: 'shipped',
+			tracking_number: 'TRACK-INCIDENT',
+			shipped_at: now.toISOString(),
+			last_error_code: null
+		});
+		expect(
+			database
+				.prepare(
+					`SELECT kind, idempotency_key, order_id FROM outbox_jobs
+					 WHERE kind = 'shipping-email'`
+				)
+				.all()
+		).toEqual([
+			{
+				kind: 'shipping-email',
+				idempotency_key: 'shipping:shipping_incident:TRACK-INCIDENT',
+				order_id: 'shipping_incident'
+			}
+		]);
+		expect(
+			database
+				.prepare("SELECT alert_code FROM outbox_jobs WHERE kind = 'operational-alert' ORDER BY id")
+				.all()
+		).toEqual([{ alert_code: 'SHIPPING_EMAIL_UNSENT' }, { alert_code: 'STYRIA_REVIEW_REQUIRED' }]);
+
+		await expect(job.run(new Date(now.getTime() + 60 * 60_000))).resolves.toEqual({
+			checked: 1,
+			updated: 0,
+			shippingQueued: 0
+		});
+		expect(get).toHaveBeenCalledOnce();
+		expect(
+			database
+				.prepare("SELECT COUNT(*) AS count FROM outbox_jobs WHERE kind = 'shipping-email'")
+				.get()
+		).toEqual({ count: 1 });
+		expect(
+			database
+				.prepare("SELECT alert_code FROM outbox_jobs WHERE kind = 'operational-alert' ORDER BY id")
+				.all()
+		).toEqual([{ alert_code: 'SHIPPING_EMAIL_UNSENT' }, { alert_code: 'STYRIA_REVIEW_REQUIRED' }]);
+	});
+
+	it('keeps polling a shipped order until Styria supplies tracking', async () => {
+		insertOrder(database, {
+			id: 'tracking_later',
+			fulfillmentStatus: 'in_production',
+			styriaStatus: 'printing'
+		});
+		const get = vi
+			.fn<StyriaGateway['get']>()
+			.mockResolvedValueOnce(providerOrder('styria_tracking_later', 'shipped'))
+			.mockResolvedValueOnce(providerOrder('styria_tracking_later', 'shipped', 'TRACK-LATER'));
+		const job = new SqliteStyriaSyncJob({
+			database,
+			styria: gateway(get),
+			fulfillment: new SqliteFulfillmentRepository(database),
+			outbox: new SqliteOutboxRepository(database)
+		});
+
+		await expect(job.run(now)).resolves.toEqual({ checked: 1, updated: 1, shippingQueued: 0 });
+		expect(
+			database
+				.prepare(
+					`SELECT fulfillment_status, tracking_number FROM orders
+					 WHERE id = 'tracking_later'`
+				)
+				.get()
+		).toEqual({ fulfillment_status: 'shipped', tracking_number: null });
+
+		const nextHour = new Date(now.getTime() + 60 * 60_000);
+		await expect(job.run(nextHour)).resolves.toEqual({
+			checked: 1,
+			updated: 1,
+			shippingQueued: 1
+		});
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(
+			database
+				.prepare("SELECT idempotency_key FROM outbox_jobs WHERE kind = 'shipping-email'")
+				.all()
+		).toEqual([{ idempotency_key: 'shipping:tracking_later:TRACK-LATER' }]);
 	});
 
 	it('rolls back the status update when the matching shipping enqueue fails', async () => {

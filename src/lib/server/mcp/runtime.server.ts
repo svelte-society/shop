@@ -30,6 +30,7 @@ import { WithdrawalWorkflowService } from '$lib/server/withdrawals/workflow.serv
 import type { McpServices } from './server';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
 import { SqliteReviewAlertDiagnosticsService } from './tools/inspect-review-alert-outbox';
+import { SqliteShippingEmailDiagnosticsService } from './tools/inspect-shipping-email-delivery';
 import { backupEncryptionKeyIsValid } from '$lib/server/backups/format';
 import { SqliteLeaseRepository } from '$lib/server/jobs/leases.server';
 import { SqliteReviewAlertBacklogSuppressionService } from '$lib/server/maintenance/review-alert-backlog.server';
@@ -207,6 +208,7 @@ export function createRuntimeMcpServices(
 	return {
 		fulfillment,
 		reviewAlertDiagnostics: new SqliteReviewAlertDiagnosticsService(database),
+		shippingEmailDiagnostics: new SqliteShippingEmailDiagnosticsService(database),
 		reviewAlertBacklogSuppression,
 		stripe,
 		preparation: new FulfillmentPreparationService({ ...shared, approvals }),

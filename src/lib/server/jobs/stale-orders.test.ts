@@ -111,7 +111,7 @@ describe('daily operational checks', () => {
 		expect(alertKeys().join(' ')).not.toContain('recent');
 	});
 
-	it('alerts review-required state and tracked orders without completed delivery', async () => {
+	it('alerts review-required state without treating an unattempted shipping email as failed', async () => {
 		insertOrder({ id: 'needs_review', status: 'review_required', updatedAt: NOW.toISOString() });
 		insertOrder({
 			id: 'mail_pending',
@@ -129,16 +129,44 @@ describe('daily operational checks', () => {
 			})
 		});
 
-		await job.run(NOW);
+		await expect(job.run(NOW)).resolves.toMatchObject({ shippingUnsent: 0 });
 
 		expect(alertKeys()).toEqual([
 			'alert:STYRIA_REVIEW_REQUIRED:needs_review:2026-07-17T03',
-			'alert:SHIPPING_EMAIL_UNSENT:mail_pending:2026-07-17T03',
 			'alert:BACKUP_MISSED:daily-backup:2026-07-17'
 		]);
 		expect(JSON.stringify(database.prepare('SELECT * FROM outbox_jobs').all())).not.toContain(
 			'private-tracking-value'
 		);
+	});
+
+	it('reports shipping jobs after six failures without emitting another alert', async () => {
+		insertOrder({
+			id: 'mail_failed',
+			status: 'shipped',
+			updatedAt: NOW.toISOString(),
+			trackingNumber: 'private-tracking-value'
+		});
+		database
+			.prepare(
+				`INSERT INTO outbox_jobs (
+					kind, idempotency_key, order_id, attempt_count,
+					next_attempt_at, completed_at, last_error_code
+				) VALUES ('shipping-email', ?, 'mail_failed', 6, ?, NULL, 'EMAIL_PROVIDER_UNAVAILABLE')`
+			)
+			.run('shipping:mail_failed:private-tracking-value', NOW.toISOString());
+		const job = new SqliteOperationalChecksJob({
+			database,
+			alerts: new SqliteAlertService(new SqliteOutboxRepository(database)),
+			backupsEnabled: false,
+			readiness: async () => ({
+				ready: true,
+				checks: { configuration: 'ok', database: 'ok', migrations: 'ok', volume: 'ok', disk: 'ok' }
+			})
+		});
+
+		await expect(job.run(NOW)).resolves.toMatchObject({ shippingUnsent: 1 });
+		expect(alertKeys()).toEqual([]);
 	});
 
 	it('alerts stuck submissions and reminds operators to pay prepared Styria orders', async () => {

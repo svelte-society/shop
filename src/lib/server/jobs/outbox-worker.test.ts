@@ -9,6 +9,7 @@ import { EmailGatewayError } from '$lib/server/email/gateway';
 import type { ShippingEmailSender } from '$lib/server/email/shipping-email';
 import type { StripeFulfillmentGateway } from '$lib/server/stripe/gateway';
 import { SqliteAlertService } from '$lib/server/monitoring/alerts.server';
+import { SqliteShippingEmailDiagnosticsService } from '$lib/server/mcp/tools/inspect-shipping-email-delivery';
 import { PaidOrderAlertOutboxWorker } from './outbox-worker.server';
 
 const migrationsDirectory = resolve('migrations');
@@ -933,5 +934,113 @@ describe('shipping email outbox', () => {
 				database.prepare("SELECT * FROM outbox_jobs WHERE kind = 'operational-alert'").all()
 			)
 		).not.toContain('PRIVATE-TRACKING-6');
+	});
+
+	it('atomically retries sixth-attempt escalation after alert persistence fails', async () => {
+		insertOrder(database, {
+			id: 'order_escalation_retry',
+			quantities: [1],
+			fulfillmentStatus: 'shipped',
+			trackingNumber: 'PRIVATE-TRACKING-RETRY'
+		});
+		outbox.enqueue({
+			kind: 'shipping-email',
+			idempotencyKey: 'shipping:order_escalation_retry:PRIVATE-TRACKING-RETRY',
+			orderId: 'order_escalation_retry',
+			nextAttemptAt: now
+		});
+		database
+			.prepare('UPDATE outbox_jobs SET attempt_count = 5 WHERE kind = ?')
+			.run('shipping-email');
+		database
+			.prepare(
+				`INSERT INTO email_deliveries (
+					order_id, kind, tracking_reference, idempotency_key,
+					provider_delivery_id, attempt_count, completed_at
+				) VALUES (?, 'shipping', ?, ?, NULL, 5, NULL)`
+			)
+			.run(
+				'order_escalation_retry',
+				'PRIVATE-TRACKING-RETRY',
+				'shipping:order_escalation_retry:PRIVATE-TRACKING-RETRY'
+			);
+		const sender: ShippingEmailSender = {
+			send: vi.fn(async () => {
+				throw new EmailGatewayError('EMAIL_UNAVAILABLE');
+			})
+		};
+		const sqliteAlerts = new SqliteAlertService(outbox);
+		const enqueueAlert = vi.fn<SqliteAlertService['enqueueAlert']>(
+			(code, subjectId, observedAt) => {
+				sqliteAlerts.enqueueAlert(code, subjectId, observedAt);
+				throw new Error('simulated alert persistence failure');
+			}
+		);
+		const worker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender }),
+			alerts: { enqueueAlert }
+		});
+
+		await expect(worker.drain(now)).rejects.toMatchObject({
+			code: 'OUTBOX_JOB_SETTLEMENT_FAILED'
+		});
+		expect(enqueueAlert).toHaveBeenCalledOnce();
+		expect(
+			database
+				.prepare(
+					`SELECT attempt_count, next_attempt_at, completed_at, last_error_code
+					FROM outbox_jobs WHERE kind = 'shipping-email'`
+				)
+				.get()
+		).toEqual({
+			attempt_count: 5,
+			next_attempt_at: '2026-07-16T08:35:00.000Z',
+			completed_at: null,
+			last_error_code: null
+		});
+		expect(
+			database
+				.prepare("SELECT COUNT(*) AS count FROM outbox_jobs WHERE kind = 'operational-alert'")
+				.get()
+		).toEqual({ count: 0 });
+
+		const retryAt = new Date('2026-07-16T08:35:00.000Z');
+		const recoveredWorker = new PaidOrderAlertOutboxWorker({
+			database,
+			outbox,
+			email: createResendEmailGateway({ apiKey: 'unused', fetch: vi.fn() }),
+			alertEmail,
+			shipping: shippingDependencies({ sender }),
+			alerts: sqliteAlerts
+		});
+
+		await expect(recoveredWorker.drain(retryAt)).resolves.toEqual({
+			completed: 0,
+			rescheduled: 1
+		});
+		expect(sender.send).toHaveBeenCalledTimes(2);
+		expect(
+			database
+				.prepare('SELECT kind, attempt_count, next_attempt_at FROM outbox_jobs ORDER BY id')
+				.all()
+		).toEqual([
+			{
+				kind: 'shipping-email',
+				attempt_count: 6,
+				next_attempt_at: '2026-07-16T09:35:00.000Z'
+			},
+			{ kind: 'operational-alert', attempt_count: 0, next_attempt_at: retryAt.toISOString() }
+		]);
+		expect(
+			new SqliteShippingEmailDiagnosticsService(database).inspect('order_escalation_retry')
+		).toMatchObject({
+			state: 'retrying',
+			deliveryAttemptCount: 7,
+			outboxJob: { attemptCount: 6, lastErrorCode: 'EMAIL_UNAVAILABLE' }
+		});
 	});
 });
